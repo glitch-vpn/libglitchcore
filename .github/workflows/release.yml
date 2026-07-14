@@ -17,6 +17,9 @@ jobs:
       - name: Build FFI libraries
         run: make build
 
+      - name: Take ownership of build_output
+        run: sudo chown -R "$(id -u):$(id -g)" build_output
+
       - name: Include license files
         run: cp LICENSE THIRD_PARTY_NOTICES.md build_output/
 
