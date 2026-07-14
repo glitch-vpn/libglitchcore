@@ -1,0 +1,15 @@
+tmp
+*build*
+/build_output/
+/.cache/
+!buildmode_service.go
+!buildmode_default.go
+
+# Local planning notes and agent docs.
+/CLAUDE.md
+/PLAN_*.md
+/TZ_*.md
+/CoreEvolutionMemories_*.md
+
+# Local smoke harness; the live suite needs a real VPN server.
+/internal/smoke/

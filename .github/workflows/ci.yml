@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  gofmt:
+    name: gofmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+      - run: |
+          files=$(gofmt -l .)
+          if [ -n "$files" ]; then
+            echo "gofmt needed on:" && echo "$files" && exit 1
+          fi
+
+  check:
+    name: ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: full (xray+awg+mihomo)
+            tags: ''
+            forbidden: ''
+          - name: xray+awg (no_mihomo)
+            tags: 'no_mihomo'
+            forbidden: 'github.com/metacubex/mihomo|github.com/metacubex/sing'
+          - name: mihomo-only
+            tags: 'no_xray no_awg'
+            forbidden: 'github.com/xtls/xray-core|github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
+          # The one GPL-free composition: no mihomo/sing (either fork) at all.
+          - name: awg-only (no_mihomo no_xray)
+            tags: 'no_mihomo no_xray'
+            forbidden: 'github.com/metacubex/mihomo|github.com/metacubex/sing|github.com/sagernet/sing|github.com/xtls/xray-core|github.com/xjasonlyu/tun2socks'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+
+      # Dart SDK headers are needed to vet the root FFI shell (dart_api_dl.h).
+      - uses: dart-lang/setup-dart@v1
+        with:
+          sdk: '3.4.3'
+
+      - name: Vet
+        run: |
+          DART_SDK=$(dirname "$(dirname "$(which dart)")")
+          CGO_CFLAGS="-I$DART_SDK/include" go vet -tags="${{ matrix.tags }} with_gvisor" ./ ./internal/...
+
+      - name: Test
+        run: CGO_ENABLED=0 go test -tags="${{ matrix.tags }} with_gvisor" ./internal/...
+
+      - name: License guard (excluded engines stay out of the link)
+        if: matrix.forbidden != ''
+        run: |
+          count=$(CGO_ENABLED=0 go list -tags="${{ matrix.tags }} with_gvisor" -deps ./internal/core/ ./internal/pinger/ | grep -cE "${{ matrix.forbidden }}" || true)
+          echo "forbidden packages linked: $count"
+          [ "$count" = "0" ]
