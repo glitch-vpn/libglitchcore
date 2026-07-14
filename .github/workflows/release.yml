@@ -8,8 +8,28 @@ jobs:
   build:
     name: Build all platforms
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@v4
+
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Pull toolchain image
+        run: |
+          repo=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          img=ghcr.io/$repo/libglitchcore-builder
+          tag=$(sha256sum Dockerfile | cut -c1-12)
+          if docker pull "$img:$tag"; then
+            docker tag "$img:$tag" "libglitchcore_builder:$tag"
+          else
+            echo "no cached image for $tag; make will build it"
+          fi
 
       - name: Run tests
         run: make test

@@ -1,4 +1,5 @@
 tmp
+
 *build*
 /build_output/
 /.cache/
@@ -13,3 +14,5 @@ tmp
 
 # Local smoke harness; the live suite needs a real VPN server.
 /internal/smoke/
+
+!.github/workflows/build-image.yml

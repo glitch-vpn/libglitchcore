@@ -19,7 +19,9 @@
 # GNU Make uses Git's sh on Windows. Paths differ by side: host targets mount
 # $(CURDIR); container targets use the fixed /app mount point.
 
-IMAGE          := libglitchcore_builder
+IMAGE_NAME     := libglitchcore_builder
+IMAGE_TAG      := $(or $(shell sha256sum "$(CURDIR)/Dockerfile" 2>/dev/null | cut -c1-12),latest)
+IMAGE          := $(IMAGE_NAME):$(IMAGE_TAG)
 WINTUN_VERSION := 0.14.1
 
 # Engine composition (comma/space separated subset of: xray awg mihomo).
@@ -43,8 +45,14 @@ help:
 	@echo "  make image                     rebuild the Docker toolchain image"
 	@echo "  make clean                     remove build_output"
 
+# Build only when an image matching the current Dockerfile tag is absent (CI
+# pulls it from GHCR first; local dev reuses it until the Dockerfile changes).
 image:
-	docker build -t $(IMAGE) -f "$(CURDIR)/Dockerfile" "$(CURDIR)"
+	@if [ -z "$(FORCE_IMAGE)" ] && docker image inspect $(IMAGE) >/dev/null 2>&1; then
+	  echo "[image] $(IMAGE) present; FORCE_IMAGE=1 to rebuild"
+	else
+	  docker build -t $(IMAGE) -f "$(CURDIR)/Dockerfile" "$(CURDIR)"
+	fi
 
 build: image
 	mkdir -p "$(CURDIR)/build_output"
