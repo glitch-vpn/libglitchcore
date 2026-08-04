@@ -17,12 +17,14 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 	"github.com/metacubex/mihomo/common/observable"
 	mihomoCfg "github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub/executor"
 	"github.com/metacubex/mihomo/listener"
 	mihomoLog "github.com/metacubex/mihomo/log"
+	mihomoTunnel "github.com/metacubex/mihomo/tunnel"
 	"github.com/metacubex/mihomo/tunnel/statistic"
 )
 
@@ -199,14 +201,21 @@ func (x *CoreController) HandleMihomoStart(rawconfig string, tunFd int, o engine
 		x.emitStatus(EngineAlreadyRunning, "[mihomo] Already running")
 		x.startStats(time.Second)
 		x.emitStatus(EngineConnected, "[mihomo] Connected (already running)")
+		x.reemitSessionState()
 		return glitchCoreResultSuccess
 	}
 
 	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
 	go func() {
+		mark := x.sessionGen.Load()
 		if err := x.mihomoStart(rawconfig, tunFd, o); err != nil {
 			log.Printf("[mihomo] start failed: %v", err)
+			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
+			return
+		}
+		if x.abortStaleSession(mark) {
+			log.Println("[mihomo] stopped during startup; not publishing connected state")
 			return
 		}
 		x.startStats(time.Second)
@@ -311,20 +320,76 @@ func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) 
 
 	x.isMihomoRunning.Store(true)
 	startMihomoConnInspector()
+	var tunnelDial tunnelDialFunc
 	if livenessPort > 0 {
 		// Only the explicit proxy inbound is auth-gated; pass creds only then.
 		user, pass := "", ""
 		if proxyPort > 0 {
 			user, pass = o.proxyUser, o.proxyPass
 		}
+		socksURL := loopbackSocksURL(fmt.Sprintf("127.0.0.1:%d", livenessPort), user, pass)
+		tunnelDial = socksTunnelDial(socksURL)
 		x.startLiveness(livenessParams{
 			engine:   "mihomo",
 			interval: livenessInterval(o.livenessSec),
-			probe:    socksProber(loopbackSocksURL(fmt.Sprintf("127.0.0.1:%d", livenessPort), user, pass), o.probeURL),
+			probe:    socksProber(socksURL, o.probeURL),
 		})
 	}
+	x.initMihomoServerState(mihomoConfigLinks(rawconfig), o)
+	x.configureIPResolve(ipResolveConfig{
+		enabled: o.resolveIP,
+		urlV4:   o.ipEchoV4,
+		urlV6:   o.ipEchoV6,
+		skipV6:  o.dns.DisableIPv6,
+		dial:    tunnelDial,
+	})
 	log.Println("[mihomo] started")
 	return nil
+}
+
+// url-test/fallback groups are followed via Now(); load-balance dispatches
+// per connection, so its Selected stays nil.
+func (x *CoreController) initMihomoServerState(links []string, o engineOpts) {
+	servers := serverinfo.FromLinks(links)
+	names := mihomoconfig.ProxyNames(links)
+	if len(servers) == 0 || len(servers) != len(names) {
+		return
+	}
+	sel := serverinfo.Selection{Engine: "mihomo", Total: len(servers), Servers: servers}
+	if len(servers) == 1 {
+		s := servers[0]
+		sel.Selected = &s
+		x.setServerSelection(&sel)
+		return
+	}
+	strat, ok := mihomoconfig.NormalizeStrategy(o.strategy)
+	if !ok {
+		strat = o.strategy
+	}
+	sel.Strategy = strat
+	x.setServerSelection(&sel)
+	if strat != "url-test" && strat != "fallback" {
+		return
+	}
+	nameIdx := make(map[string]int, len(names))
+	for i, n := range names {
+		nameIdx[n] = i
+	}
+	x.startSelectionWatch(sel, func() int {
+		p, ok := mihomoTunnel.Proxies()[mihomoconfig.GroupTag]
+		if !ok || p == nil {
+			return -1
+		}
+		g, ok := p.Adapter().(interface{ Now() string })
+		if !ok {
+			return -1
+		}
+		idx, ok := nameIdx[g.Now()]
+		if !ok {
+			return -1
+		}
+		return idx
+	})
 }
 
 // Safe under coreMutex - no controller re-entry.
@@ -348,6 +413,7 @@ func (x *CoreController) HandleMihomoStop() int32 {
 
 	x.stopStats()
 	x.stopLiveness()
+	x.clearSessionState()
 	x.emitStatus(EngineDisconnecting, "[mihomo] Disconnecting")
 	go func() {
 		if err := x.mihomoStop(); err != nil {

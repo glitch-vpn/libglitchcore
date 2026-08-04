@@ -45,9 +45,13 @@ const (
 const (
 	StatsEvent = 300
 	StatsError = 301
-	LogEvent   = 400
-	LogError   = 401
-	ConnEvent  = 402
+	// JSON serverinfo.Selection; re-emitted on change and on client reattach.
+	ServerEvent = 302
+	// JSON externalIPState: the addresses observed through the tunnel.
+	IPEvent   = 303
+	LogEvent  = 400
+	LogError  = 401
+	ConnEvent = 402
 
 	EngineConnecting             = 500
 	EngineConnected              = 501
@@ -80,10 +84,34 @@ type CoreController struct {
 	// atomic.Value holding []string: proxy outbound tags, stats summed over them.
 	xrayOutboundTags atomic.Value
 	// atomic.Int32 holding a liveness.State.
-	linkState    atomic.Int32
-	linkProbeMs  atomic.Int64
+	linkState   atomic.Int32
+	linkProbeMs atomic.Int64
+	// loopsMu guards the quit/done pointers of the session loops (liveness,
+	// selection watch). Held only across the pointer swap - never while
+	// waiting on done, or a loop that needs coreMutex would deadlock a stop.
+	loopsMu      sync.Mutex
 	livenessQuit chan struct{}
 	livenessDone chan struct{}
+	// statsTransMu serializes whole start/stop transitions; statsMu still
+	// guards the fields and is what the loop itself takes.
+	statsTransMu sync.Mutex
+	// sessionGen invalidates a start that raced a stop: the stop bumps it, and
+	// the start's tail tears down anything it armed too late.
+	sessionGen atomic.Int64
+
+	// Last ServerEvent/IPEvent payloads, replayed to reattaching clients
+	// (atomic.Value of string; "" = none).
+	serverSelJSON atomic.Value
+	ipStateJSON   atomic.Value
+	// atomic.Value of ipResolveConfig; ipGen invalidates in-flight fetches
+	// across engine restarts.
+	ipResolve    atomic.Value
+	ipGen        atomic.Int64
+	ipFetchMu    sync.Mutex
+	ipFetchBusy  bool
+	ipFetchAgain bool
+	selWatchQuit chan struct{}
+	selWatchDone chan struct{}
 
 	xrayState
 	awgState

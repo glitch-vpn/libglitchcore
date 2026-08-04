@@ -56,15 +56,22 @@ func (x *CoreController) HandleXrayStart(rawconfig string, tunFd int, dnsServer 
 		x.emitStatus(EngineAlreadyRunning, "[Xray] Already running")
 		x.startStats(time.Second)
 		x.emitStatus(EngineConnected, "[Xray] Connected (already running)")
+		x.reemitSessionState()
 		return glitchCoreResultSuccess
 	}
 
 	x.emitStatus(EngineConnecting, "[Xray] Connecting")
 
 	go func() {
+		mark := x.sessionGen.Load()
 		if err := x.xrayStart(rawconfig, tunFd, dnsServer, logLevel, o); err != nil {
 			log.Printf("[Xray] Failed to start Xray: %v", err)
+			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to start: %v", err))
+			return
+		}
+		if x.abortStaleSession(mark) {
+			log.Println("[Xray] stopped during startup; not publishing connected state")
 			return
 		}
 		x.startStats(time.Second)
@@ -86,6 +93,7 @@ func (x *CoreController) HandleXrayStop() int32 {
 	x.stopStats()
 	x.stopHealthCheck()
 	x.stopLiveness()
+	x.clearSessionState()
 	x.emitStatus(EngineDisconnecting, "[Xray] Disconnecting")
 
 	go func() {
@@ -226,6 +234,14 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 			interval: livenessInterval(o.livenessSec),
 			probe:    socksProber(loopbackSocksURL(endpoint, o.proxyUser, o.proxyPass), o.probeURL),
 		})
+		x.initXrayServerState(res, links, o)
+		x.configureIPResolve(ipResolveConfig{
+			enabled: o.resolveIP,
+			urlV4:   o.ipEchoV4,
+			urlV6:   o.ipEchoV6,
+			skipV6:  o.dns.DisableIPv6,
+			dial:    socksTunnelDial(loopbackSocksURL(endpoint, o.proxyUser, o.proxyPass)),
+		})
 		log.Printf("[Xray] Proxy mode: SOCKS5 at %s (no TUN)", endpoint)
 		return nil
 	}
@@ -338,6 +354,14 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		engine:   "xray",
 		interval: livenessInterval(o.livenessSec),
 		probe:    socksProber(proxyURL, o.probeURL),
+	})
+	x.initXrayServerState(res, links, o)
+	x.configureIPResolve(ipResolveConfig{
+		enabled: o.resolveIP,
+		urlV4:   o.ipEchoV4,
+		urlV6:   o.ipEchoV6,
+		skipV6:  o.dns.DisableIPv6,
+		dial:    socksTunnelDial(proxyURL),
 	})
 
 	return nil

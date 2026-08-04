@@ -164,3 +164,8 @@ func serviceStopStats() error {
 	_, err := callService("stop_stats", nil)
 	return err
 }
+
+func serviceReplaySession() error {
+	_, err := callService("replay_session", nil)
+	return err
+}

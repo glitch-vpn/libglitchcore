@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -51,18 +52,20 @@ func NormalizeToINI(input string) (string, error) {
 	if i := strings.IndexByte(payload, '#'); i >= 0 {
 		payload = payload[:i]
 	}
-	ini, err := decodeBase64Flexible(strings.TrimSpace(payload))
+	ini, err := DecodeBase64Flexible(payload)
 	if err != nil {
 		return "", fmt.Errorf("awg link: %w", err)
 	}
 	return ini, nil
 }
 
-func decodeBase64Flexible(s string) (string, error) {
+// DecodeBase64Flexible tries every base64 alphabet/padding combination share
+// links appear with in the wild.
+func DecodeBase64Flexible(s string) (string, error) {
 	for _, enc := range []*base64.Encoding{
 		base64.RawURLEncoding, base64.URLEncoding, base64.RawStdEncoding, base64.StdEncoding,
 	} {
-		if b, err := enc.DecodeString(s); err == nil {
+		if b, err := enc.DecodeString(strings.TrimSpace(s)); err == nil {
 			return string(b), nil
 		}
 	}
@@ -340,16 +343,35 @@ func LastHandshakeUnix(dump string) int64 {
 }
 
 func EndpointHost(cfg string) string {
-	lines := strings.Split(cfg, "\n")
-	for _, l := range lines {
+	val := endpointValue(cfg)
+	if colon := strings.LastIndex(val, ":"); colon >= 0 {
+		return val[:colon]
+	}
+	return val
+}
+
+// Port 0 when absent/invalid; bracketed IPv6 loses the brackets.
+func EndpointHostPort(cfg string) (string, int) {
+	val := endpointValue(cfg)
+	if val == "" {
+		return "", 0
+	}
+	if h, p, err := net.SplitHostPort(val); err == nil {
+		port, _ := strconv.Atoi(p)
+		if port < 0 || port > 65535 {
+			port = 0
+		}
+		return h, port
+	}
+	return strings.Trim(val, "[]"), 0
+}
+
+func endpointValue(cfg string) string {
+	for _, l := range strings.Split(cfg, "\n") {
 		line := strings.TrimSpace(l)
 		if strings.HasPrefix(strings.ToLower(line), "endpoint") {
 			if idx := strings.Index(line, "="); idx >= 0 {
-				val := strings.TrimSpace(line[idx+1:])
-				if colon := strings.LastIndex(val, ":"); colon >= 0 {
-					return val[:colon]
-				}
-				return val
+				return strings.TrimSpace(line[idx+1:])
 			}
 		}
 	}

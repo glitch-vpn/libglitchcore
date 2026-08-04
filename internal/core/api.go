@@ -53,7 +53,31 @@ func VersionsJSON() string {
 
 func Capabilities() string { return coreCapabilities() }
 
-func SetStatusSink(fn func(code int32, message string)) { setStatusSink(fn) }
+func SetStatusSink(fn func(code int32, message string)) {
+	setStatusSink(fn)
+	if fn == nil {
+		return
+	}
+	// A fresh isolate over a live tunnel (hot restart, app relaunch) restores
+	// its session view without a connect() round-trip. Deferred: the sink is
+	// registered inside a leaf FFI call.
+	x := globalController
+	if x == nil {
+		return
+	}
+	go func() {
+		if x.replaySession() {
+			return
+		}
+		if useServiceIPC {
+			// The session and its cached state live in the service process;
+			// the replay arrives through the event pipe.
+			if err := serviceReplaySession(); err != nil {
+				log.Printf("[IPC] replay session failed: %v", err)
+			}
+		}
+	}()
+}
 
 func Initialize() {
 	if globalController != nil {

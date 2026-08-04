@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"math/rand"
+	"net"
 	"runtime"
 	"strings"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/liveness"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/pinger"
+	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 )
 
 type awgEngine struct{}
@@ -105,6 +107,7 @@ func (x *CoreController) HandleAwgStart(rawConfig string, tunFd int, o engineOpt
 		x.emitStatus(EngineAlreadyRunning, "[AWG] Already running")
 		x.startStats(time.Second)
 		x.emitStatus(EngineConnected, "[AWG] Connected (already running)")
+		x.reemitSessionState()
 		return glitchCoreResultSuccess
 	}
 
@@ -113,14 +116,28 @@ func (x *CoreController) HandleAwgStart(rawConfig string, tunFd int, o engineOpt
 	const ifaceName = "GlitchVPN"
 
 	go func() {
-		chosen := x.pickAwgConfig(rawConfig, o)
+		mark := x.sessionGen.Load()
+		chosen, idx, links := x.pickAwgConfig(rawConfig, o)
 		// awg (L3) takes only a plain resolver; empty -> INI DNS field.
 		if err := x.awgStart(ifaceName, tunFd, chosen, o.dns.FirstPlainServer()); err != nil {
 			log.Printf("[AWG] Failed to start AWG: %v", err)
+			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[AWG] Failed to start: %v", err))
 			return
 		}
+		if x.abortStaleSession(mark) {
+			log.Println("[AWG] stopped during startup; not arming session state")
+			return
+		}
 		x.startAwgLiveness(o)
+		x.initAwgServerState(links, idx, o)
+		x.configureAwgIPResolve(o)
+		// A stop landing inside the arming above leaves loops behind; the
+		// desktop prober would then report the physical NIC as the tunnel.
+		if x.abortStaleSession(mark) {
+			log.Println("[AWG] stopped while arming; session state torn down")
+			return
+		}
 		x.emitStatus(LogEvent, logfmt.BuildJSON("info", "AWG", "AWG started"))
 		x.startStats(time.Second)
 		x.emitStatus(EngineConnected, "[AWG] Connected")
@@ -130,13 +147,13 @@ func (x *CoreController) HandleAwgStart(rawConfig string, tunFd int, o engineOpt
 }
 
 // Multilink: probe each awg:// link, pick by strategy; fall back to first if none alive.
-func (x *CoreController) pickAwgConfig(raw string, o engineOpts) string {
+func (x *CoreController) pickAwgConfig(raw string, o engineOpts) (string, int, []string) {
 	links := splitEngineLinks(raw)
 	if len(links) == 0 {
-		return raw
+		return raw, 0, nil
 	}
 	if len(links) == 1 {
-		return links[0]
+		return links[0], 0, links
 	}
 
 	res := pinger.Measure(pinger.Request{Links: links, ProbeURL: o.probeURL})
@@ -151,7 +168,41 @@ func (x *CoreController) pickAwgConfig(raw string, o engineOpts) string {
 	log.Printf("[AWG] multilink: %d links, strategy=%q -> picked #%d (%s)", len(links), o.strategy, idx, delay)
 	x.emitStatus(LogEvent, logfmt.BuildJSON("info", "AWG",
 		fmt.Sprintf("multilink: picked server %d of %d (%s)", idx+1, len(links), delay)))
-	return links[idx]
+	return links[idx], idx, links
+}
+
+// awg is pick-a-winner: the selection is final for the session.
+func (x *CoreController) initAwgServerState(links []string, idx int, o engineOpts) {
+	servers := serverinfo.FromLinks(links)
+	if len(servers) == 0 || idx < 0 || idx >= len(servers) {
+		return
+	}
+	sel := serverinfo.Selection{Engine: "awg", Total: len(servers), Servers: servers}
+	if len(servers) > 1 {
+		strat := strings.ToLower(strings.TrimSpace(o.strategy))
+		if strat == "" {
+			strat = "leastping"
+		}
+		sel.Strategy = strat
+	}
+	s := servers[idx]
+	sel.Selected = &s
+	x.setServerSelection(&sel)
+}
+
+// Desktop reaches the tunnel via the OS default route; on Android our package
+// is excluded from the VPN, so there is no HTTP path.
+func (x *CoreController) configureAwgIPResolve(o engineOpts) {
+	cfg := ipResolveConfig{
+		enabled: o.resolveIP,
+		urlV4:   o.ipEchoV4,
+		urlV6:   o.ipEchoV6,
+		skipV6:  o.dns.DisableIPv6,
+	}
+	if runtime.GOOS != "android" {
+		cfg.dial = (&net.Dialer{Timeout: livenessProbeTimeout}).DialContext
+	}
+	x.configureIPResolve(cfg)
 }
 
 func pickAwgWinner(res []pinger.Result, strategy string) int {
@@ -202,6 +253,7 @@ func (x *CoreController) HandleAwgStop() int32 {
 
 	x.stopStats()
 	x.stopLiveness()
+	x.clearSessionState()
 	x.emitStatus(EngineDisconnecting, "[AWG] Disconnecting")
 
 	go func() {

@@ -7,12 +7,12 @@ tmp
 !buildmode_default.go
 
 # Local planning notes and agent docs.
-/CLAUDE.md
 /PLAN_*.md
 /TZ_*.md
 /CoreEvolutionMemories_*.md
 
-# Local smoke harness; the live suite needs a real VPN server.
-/internal/smoke/
+# The live links the smoke suite reads (GLITCH_LIVE_LINKS_FILE) stay out of
+# the repo; the suite itself is hermetic and committed.
+*links*.txt
 
 !.github/workflows/build-image.yml

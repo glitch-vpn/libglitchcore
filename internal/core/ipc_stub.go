@@ -23,3 +23,5 @@ func serviceSetMemoryLimit(bytes int64) error { return nil }
 func serviceListenStats(interval time.Duration) error { return nil }
 
 func serviceStopStats() error { return nil }
+
+func serviceReplaySession() error { return nil }

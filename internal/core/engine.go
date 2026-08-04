@@ -60,6 +60,10 @@ type engineOpts struct {
 	fingerprint     string
 	proxyUser       string // both empty = open inbound
 	proxyPass       string
+	// External-IP resolution (IPEvent); on unless explicitly disabled.
+	resolveIP bool
+	ipEchoV4  string // "" = default echo service
+	ipEchoV6  string
 }
 
 func optsFromRequest(req EngineStartRequest) engineOpts {
@@ -67,6 +71,10 @@ func optsFromRequest(req EngineStartRequest) engineOpts {
 	sniffing := true
 	if v, ok := o["sniffing"]; ok && strings.TrimSpace(v) != "" {
 		sniffing = boolOpt(v)
+	}
+	resolveIP := true
+	if v, ok := o["resolveExternalIp"]; ok && strings.TrimSpace(v) != "" {
+		resolveIP = boolOpt(v)
 	}
 	return engineOpts{
 		routing:         routingFromOpts(o),
@@ -81,6 +89,9 @@ func optsFromRequest(req EngineStartRequest) engineOpts {
 		fingerprint:     strings.TrimSpace(o["fingerprint"]),
 		proxyUser:       o["proxyUser"],
 		proxyPass:       o["proxyPass"],
+		resolveIP:       resolveIP,
+		ipEchoV4:        probeURLOpt(o["ipv4EchoUrl"]),
+		ipEchoV6:        probeURLOpt(o["ipv6EchoUrl"]),
 	}
 }
 
@@ -175,6 +186,35 @@ func lowerCSV(s string) []string {
 	return out
 }
 
+func (x *CoreController) localEngineRunning(e Engine) bool {
+	return e.IsRunning(x) == glitchCoreResultSuccess
+}
+
+func (x *CoreController) anyLocalEngineRunning() bool {
+	return x.localRunningEngineID() != ""
+}
+
+// Casing the engines use in their own lifecycle messages; clients may match it.
+func engineDisplayName(id string) string {
+	switch id {
+	case "xray":
+		return "Xray"
+	case "awg":
+		return "AWG"
+	default:
+		return id
+	}
+}
+
+func (x *CoreController) localRunningEngineID() string {
+	for id, e := range engineRegistry {
+		if x.localEngineRunning(e) {
+			return id
+		}
+	}
+	return ""
+}
+
 // Forwards to the Windows service when useServiceIPC is set; proxy mode stays in-process.
 func (x *CoreController) engineStart(id string, req EngineStartRequest) int32 {
 	e, ok := engineRegistry[id]
@@ -195,13 +235,15 @@ func (x *CoreController) engineStart(id string, req EngineStartRequest) int32 {
 	return e.Start(x, req)
 }
 
+// Stops whichever process actually runs the engine: an in-process (proxy-mode)
+// session must never translate into a stop of the service's session.
 func (x *CoreController) engineStop(id string) int32 {
 	e, ok := engineRegistry[id]
 	if !ok {
 		log.Printf("[Engine] stop rejected: unknown engine %q", id)
 		return glitchCoreResultError
 	}
-	if useServiceIPC {
+	if useServiceIPC && !x.localEngineRunning(e) {
 		if err := serviceEngineStop(id); err != nil {
 			log.Printf("[Engine] service stop failed for %q: %v", id, err)
 			return glitchCoreResultError
@@ -216,6 +258,9 @@ func (x *CoreController) engineIsRunning(id string) int32 {
 	if !ok {
 		return glitchCoreResultError
 	}
+	if x.localEngineRunning(e) {
+		return glitchCoreResultSuccess
+	}
 	if useServiceIPC {
 		running, err := serviceEngineStatus(id)
 		if err != nil {
@@ -225,9 +270,8 @@ func (x *CoreController) engineIsRunning(id string) int32 {
 		if running {
 			return glitchCoreResultSuccess
 		}
-		return glitchCoreResultError
 	}
-	return e.IsRunning(x)
+	return glitchCoreResultError
 }
 
 func (x *CoreController) activeEngineID() string {
@@ -249,9 +293,11 @@ func coreCapabilities() string {
 	payload := struct {
 		Engines  []string          `json:"engines"`
 		Versions map[string]string `json:"versions"`
+		Features []string          `json:"features"`
 	}{
 		Engines:  ids,
 		Versions: engineVersions(),
+		Features: []string{"serverEvent", "ipEvent"},
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {

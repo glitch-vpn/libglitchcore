@@ -39,6 +39,20 @@ Besides engine start/stop the FFI has:
 * `MeasurePings`: url-test latency for a list of share links; no engine has to
   be running;
 * a tunnel liveness probe, reported together with the periodic traffic stats;
+* a server event (code 302): the connected server's identity
+  (name/host/port/protocol) plus the whole pool - a single link reports
+  itself, a multi-link pool reports the balancer's current pick, re-emitted
+  when it changes (xray leastping via the observatory, mihomo
+  url-test/fallback via the group's `Now()`, awg at pick time);
+* an external-IP event (code 303): the exit IPv4/IPv6 fetched through the
+  tunnel (family-pinned echo services, ipify by default; overridable via the
+  `ipv4EchoUrl`/`ipv6EchoUrl` opts, `resolveExternalIp=0` disables) after
+  link-up and on server change. awg on Android has no in-tunnel HTTP path and
+  reports `unsupported`;
+* session replay: registering a status port (or, in service mode, a
+  `replay_session` pipe command) over a live engine re-emits the connected
+  status, the server event, the IP event and restarts stats, so a restarted
+  client restores its state without reconnecting;
 * an opt-in connection inspector: one event per routed connection with host,
   port, matched rule and chosen outbound;
 * per-process routing on desktop;

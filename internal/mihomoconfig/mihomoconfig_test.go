@@ -198,8 +198,8 @@ func TestBuildConfig_ValidatesViaMihomoParser(t *testing.T) {
 				t.Fatalf("Proxies = %d, want >= %d", len(cfg.Proxies), tc.proxies)
 			}
 			if tc.group {
-				if _, ok := cfg.Proxies[groupTag]; !ok {
-					t.Fatalf("expected url-test group %q in proxies", groupTag)
+				if _, ok := cfg.Proxies[GroupTag]; !ok {
+					t.Fatalf("expected url-test group %q in proxies", GroupTag)
 				}
 			}
 			if len(cfg.Rules) == 0 {
@@ -284,7 +284,7 @@ Endpoint = 144.31.233.161:585`
 	}
 	// vless link carries no fragment -> proxy-0; awg:// carries #wg -> "wg";
 	// both sit under the url-test group.
-	for _, tag := range []string{"proxy-0", "wg", groupTag} {
+	for _, tag := range []string{"proxy-0", "wg", GroupTag} {
 		if _, ok := cfg.Proxies[tag]; !ok {
 			t.Fatalf("missing %q in proxies (have %d)", tag, len(cfg.Proxies))
 		}

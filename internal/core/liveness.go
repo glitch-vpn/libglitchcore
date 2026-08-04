@@ -54,8 +54,9 @@ func (x *CoreController) startLiveness(p livenessParams) {
 
 	quit := make(chan struct{})
 	done := make(chan struct{})
-	x.livenessQuit = quit
-	x.livenessDone = done
+	x.loopsMu.Lock()
+	x.livenessQuit, x.livenessDone = quit, done
+	x.loopsMu.Unlock()
 	log.Printf("[liveness] started for %s (interval %s)", p.engine, p.interval)
 
 	go func() {
@@ -82,6 +83,8 @@ func (x *CoreController) startLiveness(p livenessParams) {
 					x.linkProbeMs.Store(elapsed.Milliseconds())
 					if _, changed := tr.ObserveSuccess(); changed {
 						log.Printf("[liveness] %s: internet through tunnel is up (%dms)", p.engine, elapsed.Milliseconds())
+						// The exit IP may (re)appear or change on recovery.
+						x.triggerIPResolve("link-up")
 					}
 				}
 			} else {
@@ -96,6 +99,9 @@ func (x *CoreController) startLiveness(p livenessParams) {
 					log.Printf("[liveness] %s: passive sample failed: %v", p.engine, err)
 				} else if st, changed := tr.ObserveWG(sample); changed {
 					log.Printf("[liveness] %s: internet through tunnel is %s (passive wg)", p.engine, st)
+					if st == liveness.StateUp {
+						x.triggerIPResolve("link-up (passive)")
+					}
 				}
 			}
 			if s := tr.State(); s != liveness.StateUnknown {
@@ -111,15 +117,21 @@ func (x *CoreController) startLiveness(p livenessParams) {
 	}()
 }
 
+// Pointers swap out under the lock, close and wait happen outside it: the
+// passive sampler takes coreMutex, so holding a lock across the wait would
+// deadlock a stop, and a second concurrent stop must find nil rather than
+// double-close quit.
 func (x *CoreController) stopLiveness() {
-	if x.livenessQuit == nil {
+	x.loopsMu.Lock()
+	quit, done := x.livenessQuit, x.livenessDone
+	x.livenessQuit, x.livenessDone = nil, nil
+	x.loopsMu.Unlock()
+	if quit == nil {
 		return
 	}
-	close(x.livenessQuit)
-	x.livenessQuit = nil
-	if x.livenessDone != nil {
-		<-x.livenessDone
-		x.livenessDone = nil
+	close(quit)
+	if done != nil {
+		<-done
 	}
 	x.linkState.Store(int32(liveness.StateUnknown))
 	x.linkProbeMs.Store(-1)
@@ -163,31 +175,52 @@ func loopbackSocksURL(hostPort, user, pass string) string {
 	return u.String()
 }
 
-// socksProber probes through the loopback SOCKS (the same path as user traffic
-// after tun2socks) so it works on Android, where our own sockets bypass the VPN.
+// socksContextDialer dials TCP through the loopback SOCKS inbound (the same
+// path as user traffic after tun2socks), so connections traverse the tunnel
+// even on Android, where our own sockets bypass the VPN.
+func socksContextDialer(socksURL string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
+	u, err := url.Parse(socksURL)
+	if err != nil {
+		return nil, fmt.Errorf("socks url: %w", err)
+	}
+	var auth *xproxy.Auth
+	if u.User != nil {
+		pass, _ := u.User.Password()
+		auth = &xproxy.Auth{User: u.User.Username(), Password: pass}
+	}
+	d, err := xproxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{Timeout: livenessProbeTimeout})
+	if err != nil {
+		return nil, fmt.Errorf("socks dialer: %w", err)
+	}
+	cd, ok := d.(xproxy.ContextDialer)
+	if !ok {
+		return nil, fmt.Errorf("socks dialer has no DialContext")
+	}
+	return cd.DialContext, nil
+}
+
+// Built per call - the inbound may not be accepting yet when the session is
+// configured.
+func socksTunnelDial(socksURL string) tunnelDialFunc {
+	return func(ctx context.Context, network, addr string) (net.Conn, error) {
+		d, err := socksContextDialer(socksURL)
+		if err != nil {
+			return nil, err
+		}
+		return d(ctx, network, addr)
+	}
+}
+
 func socksProber(socksURL, probeURL string) func(ctx context.Context) (time.Duration, error) {
 	if probeURL == "" {
 		probeURL = defaultLivenessProbeURL
 	}
 	return func(ctx context.Context) (time.Duration, error) {
-		u, err := url.Parse(socksURL)
+		d, err := socksContextDialer(socksURL)
 		if err != nil {
-			return 0, fmt.Errorf("socks url: %w", err)
+			return 0, err
 		}
-		var auth *xproxy.Auth
-		if u.User != nil {
-			pass, _ := u.User.Password()
-			auth = &xproxy.Auth{User: u.User.Username(), Password: pass}
-		}
-		d, err := xproxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{Timeout: livenessProbeTimeout})
-		if err != nil {
-			return 0, fmt.Errorf("socks dialer: %w", err)
-		}
-		cd, ok := d.(xproxy.ContextDialer)
-		if !ok {
-			return 0, fmt.Errorf("socks dialer has no DialContext")
-		}
-		return probeOnce(ctx, probeURL, cd.DialContext)
+		return probeOnce(ctx, probeURL, d)
 	}
 }
 

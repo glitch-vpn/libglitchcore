@@ -29,9 +29,16 @@ func goRuntimeMemBytes() uint64 {
 	return total - released
 }
 
+// The whole stop-then-register transition is serialized: two concurrent
+// callers (a replay racing a connect, or two service clients) would otherwise
+// both pass the stop and orphan the first loop with an unreachable quit.
 func (x *CoreController) startStats(interval time.Duration) {
-	x.stopStats()
-	if useServiceIPC {
+	x.statsTransMu.Lock()
+	defer x.statsTransMu.Unlock()
+	x.stopStatsLocked()
+	// Stats follow the session's process: local for an in-process (proxy-mode)
+	// engine, the service's loop otherwise.
+	if useServiceIPC && !x.anyLocalEngineRunning() {
 		if err := serviceListenStats(interval); err != nil {
 			log.Printf("[IPC] listen stats failed: %v", err)
 		}
@@ -98,7 +105,13 @@ func (x *CoreController) startStats(interval time.Duration) {
 }
 
 func (x *CoreController) stopStats() {
-	if useServiceIPC {
+	x.statsTransMu.Lock()
+	defer x.statsTransMu.Unlock()
+	x.stopStatsLocked()
+}
+
+func (x *CoreController) stopStatsLocked() {
+	if useServiceIPC && !x.anyLocalEngineRunning() {
 		if err := serviceStopStats(); err != nil {
 			log.Printf("[IPC] stop stats failed: %v", err)
 		}

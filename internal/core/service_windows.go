@@ -416,6 +416,9 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 	case "stop_stats":
 		globalController.stopStats()
 		return pipeResponse{OK: true}
+	case "replay_session":
+		globalController.replaySession()
+		return pipeResponse{OK: true}
 	default:
 		return pipeResponse{OK: false, Error: fmt.Sprintf("unknown action: %s", cmd.Action)}
 	}

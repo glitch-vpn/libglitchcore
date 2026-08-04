@@ -19,7 +19,8 @@ import (
 )
 
 const (
-	groupTag = "vpn"
+	// Balancer proxy group; the selection watcher looks it up in tunnel.Proxies().
+	GroupTag = "vpn"
 	// Matches the xray observatory default probe URL.
 	probeURL = "https://www.gstatic.com/generate_204"
 
@@ -126,21 +127,20 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		applyTun(raw, in.Tun)
 	}
 
-	var names []string
-	used := map[string]bool{}
+	names := ProxyNames(links)
+	ni := 0
 	for i, link := range links {
 		trimmed := strings.TrimSpace(link)
 		if trimmed == "" {
 			continue
 		}
-		name := uniqueName(linkName(trimmed, i), used)
-		proxy, err := proxyFromLink(trimmed, name)
+		proxy, err := proxyFromLink(trimmed, names[ni])
+		ni++
 		if err != nil {
 			return nil, fmt.Errorf("link %d: %w", i, err)
 		}
 		applyProxyFingerprint(proxy, opts.Fingerprint)
 		raw.Proxy = append(raw.Proxy, proxy)
-		names = append(names, name)
 	}
 	if len(names) == 0 {
 		return nil, fmt.Errorf("no links provided")
@@ -153,7 +153,7 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 			return nil, err
 		}
 		raw.ProxyGroup = []map[string]any{group}
-		target = groupTag
+		target = GroupTag
 	}
 
 	rules := buildRules(prof, target)
@@ -241,29 +241,47 @@ func matcherRules(matchers []string, target string) []string {
 // this before calling the core.
 var Strategies = []string{"url-test", "fallback", "load-balance", "load-balance-hash"}
 
+// NormalizeStrategy resolves the aliases callers may pass ("" = default,
+// round-robin/consistent-hashing for the load-balance variants) to one of
+// [Strategies]; ok is false for anything else.
+func NormalizeStrategy(strategy string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(strategy)) {
+	case "", "url-test":
+		return "url-test", true
+	case "fallback":
+		return "fallback", true
+	case "load-balance", "round-robin":
+		return "load-balance", true
+	case "load-balance-hash", "consistent-hashing":
+		return "load-balance-hash", true
+	default:
+		return "", false
+	}
+}
+
 func balancerGroup(names []string, strategy, probe string) (map[string]any, error) {
 	if strings.TrimSpace(probe) == "" {
 		probe = probeURL
 	}
 	g := map[string]any{
-		"name":     groupTag,
+		"name":     GroupTag,
 		"proxies":  names,
 		"url":      probe,
 		"interval": 300,
 	}
-	switch strings.ToLower(strings.TrimSpace(strategy)) {
-	case "", "url-test":
-		g["type"] = "url-test"
-	case "fallback":
-		g["type"] = "fallback"
-	case "load-balance", "round-robin":
+	normalized, ok := NormalizeStrategy(strategy)
+	if !ok {
+		return nil, fmt.Errorf("unknown mihomo balancer strategy %q", strategy)
+	}
+	switch normalized {
+	case "load-balance":
 		g["type"] = "load-balance"
 		g["strategy"] = "round-robin"
-	case "load-balance-hash", "consistent-hashing":
+	case "load-balance-hash":
 		g["type"] = "load-balance"
 		g["strategy"] = "consistent-hashing"
 	default:
-		return nil, fmt.Errorf("unknown mihomo balancer strategy %q", strategy)
+		g["type"] = normalized
 	}
 	return g, nil
 }
@@ -358,6 +376,21 @@ func proxyFromLink(link, name string) (map[string]any, error) {
 	}
 }
 
+// Must match BuildConfig's naming exactly - callers map the group's Now()
+// back to a link index through it.
+func ProxyNames(links []string) []string {
+	var names []string
+	used := map[string]bool{}
+	for i, link := range links {
+		trimmed := strings.TrimSpace(link)
+		if trimmed == "" {
+			continue
+		}
+		names = append(names, uniqueName(linkName(trimmed, i), used))
+	}
+	return names
+}
+
 func linkName(link string, idx int) string {
 	var frag string
 	if strings.HasPrefix(strings.ToLower(link), awgconfig.LinkScheme) {
@@ -372,8 +405,11 @@ func linkName(link string, idx int) string {
 }
 
 // Commas would break rule lines; spaces/pipes/emoji are fine as proxy names.
+// '+' means space in v2rayN-style remarks (url.Parse leaves it undecoded).
 func sanitizeName(s string) string {
-	return strings.TrimSpace(strings.ReplaceAll(s, ",", " "))
+	s = strings.ReplaceAll(s, ",", " ")
+	s = strings.ReplaceAll(s, "+", " ")
+	return strings.TrimSpace(s)
 }
 
 // mihomo requires unique proxy names.
