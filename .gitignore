@@ -16,3 +16,4 @@ tmp
 *links*.txt
 
 !.github/workflows/build-image.yml
+.claude/settings.json
