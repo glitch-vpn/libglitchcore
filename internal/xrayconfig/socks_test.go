@@ -303,7 +303,7 @@ func TestApplySniffing(t *testing.T) {
 		t.Fatalf("BuildConfig: %v", err)
 	}
 	full := res.Config
-	ApplyDNS(full, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}})
+	ApplyDNS(full, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, RoutingProfile{})
 	if _, _, err := ApplyLocalSocksInbound(full); err != nil {
 		t.Fatalf("ApplyLocalSocksInbound: %v", err)
 	}

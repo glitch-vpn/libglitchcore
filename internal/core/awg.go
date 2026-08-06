@@ -26,7 +26,7 @@ type awgEngine struct{}
 func (awgEngine) ID() string { return "awg" }
 
 func (awgEngine) Start(x *CoreController, req EngineStartRequest) int32 {
-	return x.HandleAwgStart(req.Config, req.TunFD, optsFromRequest(req))
+	return x.HandleAwgStart(req)
 }
 
 func (awgEngine) Stop(x *CoreController) int32 { return x.HandleAwgStop() }
@@ -91,7 +91,7 @@ func (x *CoreController) awgPassiveSampler() func() (liveness.WGSample, error) {
 	}
 }
 
-func (x *CoreController) HandleAwgStart(rawConfig string, tunFd int, o engineOpts) int32 {
+func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 	// IPC routing lives in engineStart; this handler always runs locally.
 	if x == nil {
 		return glitchCoreResultError
@@ -111,15 +111,23 @@ func (x *CoreController) HandleAwgStart(rawConfig string, tunFd int, o engineOpt
 		return glitchCoreResultSuccess
 	}
 
+	// After the guards: a malformed request must not tear down the live
+	// session they protect (EngineError clears client session state).
+	o, err := optsFromRequest(req)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[AWG] invalid opts: %v", err))
+		return glitchCoreResultError
+	}
+
 	x.emitStatus(EngineConnecting, "[AWG] Connecting")
 
 	const ifaceName = "GlitchVPN"
 
 	go func() {
 		mark := x.sessionGen.Load()
-		chosen, idx, links := x.pickAwgConfig(rawConfig, o)
+		chosen, idx, links := x.pickAwgConfig(req.Config, o)
 		// awg (L3) takes only a plain resolver; empty -> INI DNS field.
-		if err := x.awgStart(ifaceName, tunFd, chosen, o.dns.FirstPlainServer()); err != nil {
+		if err := x.awgStart(ifaceName, req.TunFD, chosen, o.dns.FirstPlainServer()); err != nil {
 			log.Printf("[AWG] Failed to start AWG: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[AWG] Failed to start: %v", err))

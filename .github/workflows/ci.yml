@@ -20,6 +20,22 @@ jobs:
             echo "gofmt needed on:" && echo "$files" && exit 1
           fi
 
+  # The service composition runs the engine inside the Windows service process;
+  # dispatchCommand-level tests (geo assets crossing the IPC request) only
+  # compile with the service+windows tags, so they need a Windows runner.
+  service-windows:
+    name: service (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.4'
+      - name: Test
+        run: go test -tags="service integration with_gvisor" ./internal/core/
+        env:
+          CGO_ENABLED: '0'
+
   check:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest

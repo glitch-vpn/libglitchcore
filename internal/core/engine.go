@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,15 +59,19 @@ type engineOpts struct {
 	muxConcurrency  int
 	xudpConcurrency int
 	fingerprint     string
-	proxyUser       string // both empty = open inbound
-	proxyPass       string
+	// Caller-supplied dir with geoip.dat/geosite.dat, applied in the process
+	// that runs the engine (crosses the service IPC inside the request).
+	// "" = the Initialize-time default. awg ignores (no rule engine).
+	geoAssetsDir string
+	proxyUser    string // both empty = open inbound
+	proxyPass    string
 	// External-IP resolution (IPEvent); on unless explicitly disabled.
 	resolveIP bool
 	ipEchoV4  string // "" = default echo service
 	ipEchoV6  string
 }
 
-func optsFromRequest(req EngineStartRequest) engineOpts {
+func optsFromRequest(req EngineStartRequest) (engineOpts, error) {
 	o := req.Opts
 	sniffing := true
 	if v, ok := o["sniffing"]; ok && strings.TrimSpace(v) != "" {
@@ -76,8 +81,12 @@ func optsFromRequest(req EngineStartRequest) engineOpts {
 	if v, ok := o["resolveExternalIp"]; ok && strings.TrimSpace(v) != "" {
 		resolveIP = boolOpt(v)
 	}
+	prof, err := routingFromOpts(o)
+	if err != nil {
+		return engineOpts{}, err
+	}
 	return engineOpts{
-		routing:         routingFromOpts(o),
+		routing:         prof,
 		dns:             dnsFromRequest(req),
 		strategy:        o["balancerStrategy"],
 		proxyPort:       proxyPortFromOpts(o),
@@ -87,12 +96,13 @@ func optsFromRequest(req EngineStartRequest) engineOpts {
 		muxConcurrency:  intOpt(o["muxConcurrency"]),
 		xudpConcurrency: intOpt(o["xudpConcurrency"]),
 		fingerprint:     strings.TrimSpace(o["fingerprint"]),
+		geoAssetsDir:    geoAssetsDirOpt(o["geoAssetsDir"]),
 		proxyUser:       o["proxyUser"],
 		proxyPass:       o["proxyPass"],
 		resolveIP:       resolveIP,
 		ipEchoV4:        probeURLOpt(o["ipv4EchoUrl"]),
 		ipEchoV6:        probeURLOpt(o["ipv6EchoUrl"]),
-	}
+	}, nil
 }
 
 func intOpt(s string) int {
@@ -101,6 +111,20 @@ func intOpt(s string) int {
 		return 0
 	}
 	return n
+}
+
+// geoAssetsDirOpt rejects relative paths - the engine may run in a service
+// process whose working directory the caller cannot know.
+func geoAssetsDirOpt(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if !filepath.IsAbs(s) {
+		log.Printf("[Engine] ignoring relative geoAssetsDir %q (want an absolute path)", s)
+		return ""
+	}
+	return s
 }
 
 // probeURLOpt rejects non-http(s) URLs so a typo can't break health checks.
@@ -147,21 +171,54 @@ func proxyPortFromOpts(o map[string]string) int {
 	return n
 }
 
-// routingFromOpts: "bypassCountries" is a legacy alias -> Direct geoip: entries.
-func routingFromOpts(o map[string]string) routing.Profile {
+// routingFromOpts: "routingTiers" (a JSON array of {block,direct,proxy}) wins
+// over the legacy single-tier keys; "bypassCountries" is a legacy alias ->
+// Direct geoip: entries. Malformed routingTiers fails the start instead of
+// degrading - silently dropping block rules would bypass the kill-switch.
+func routingFromOpts(o map[string]string) (routing.Profile, error) {
+	p := routing.Profile{
+		Mode: o["routingMode"],
+		// Raw: only xray knows the value set, and engine.go cannot import
+		// xrayconfig (untagged file), so xrayStart normalizes it in place.
+		DomainStrategy: strings.TrimSpace(o["domainStrategy"]),
+		LocalNetworks:  boolOpt(o["localNetworksDirect"]),
+		DisableIPv6:    boolOpt(o["disableIPv6"]),
+		DisableUDP:     boolOpt(o["disableUDP"]),
+	}
+	if raw := strings.TrimSpace(o["routingTiers"]); raw != "" {
+		// DisallowUnknownFields: a misspelled "block" would otherwise parse as
+		// an empty tier and drop the kill-switch rules it was meant to carry.
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p.Tiers); err != nil {
+			return routing.Profile{}, fmt.Errorf("routingTiers: %w", err)
+		}
+		if dec.More() {
+			return routing.Profile{}, fmt.Errorf("routingTiers: trailing data after the tier list")
+		}
+		// "null" decodes without error into no tiers, which would drop every
+		// rule - including the kill-switch ones - as quietly as a typo.
+		if p.Tiers == nil {
+			return routing.Profile{}, fmt.Errorf("routingTiers: null is not a tier list")
+		}
+		if o["proxyRules"]+o["directRules"]+o["blockRules"]+o["bypassCountries"] != "" {
+			log.Printf("[Engine] routingTiers set; ignoring legacy rule keys")
+		}
+		return p, nil
+	}
 	direct := csv(o["directRules"])
 	for _, cc := range lowerCSV(o["bypassCountries"]) {
 		direct = append(direct, "geoip:"+cc)
 	}
-	return routing.Profile{
-		Mode:          o["routingMode"],
-		Proxy:         csv(o["proxyRules"]),
-		Direct:        direct,
-		Block:         csv(o["blockRules"]),
-		LocalNetworks: boolOpt(o["localNetworksDirect"]),
-		DisableIPv6:   boolOpt(o["disableIPv6"]),
-		DisableUDP:    boolOpt(o["disableUDP"]),
+	tier := routing.Tier{
+		Block:  csv(o["blockRules"]),
+		Direct: direct,
+		Proxy:  csv(o["proxyRules"]),
 	}
+	if len(tier.Block)+len(tier.Direct)+len(tier.Proxy) > 0 {
+		p.Tiers = []routing.Tier{tier}
+	}
+	return p, nil
 }
 
 func csv(s string) []string {

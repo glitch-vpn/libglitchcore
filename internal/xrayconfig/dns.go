@@ -3,6 +3,7 @@ package xrayconfig
 import (
 	"encoding/json"
 	"log"
+	"net"
 	"strconv"
 	"strings"
 
@@ -28,12 +29,15 @@ const (
 	fakeIPPoolSize = 65535
 )
 
-func ApplyDNS(cfg *xrayConf.Config, dns dnsconfig.Config) {
+// ApplyDNS reads the routing profile only to place DirectServers (normal mode
+// scopes them by domain rules; fake-ip needs no rules); it never emits routing
+// rules from it.
+func ApplyDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
 	if dns.FakeIP() {
-		applyFakeDNS(cfg, dns)
+		applyFakeDNS(cfg, dns, prof)
 		return
 	}
-	applyPlainDNS(cfg, dns)
+	applyPlainDNS(cfg, dns, prof)
 }
 
 // DisableIPv6 -> UseIPv4: only A records are resolved/answered, so the app
@@ -45,9 +49,32 @@ func queryStrategy(dns dnsconfig.Config) string {
 	return ""
 }
 
-func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config) {
-	nsList := plainNameServers(dns.NormalizedServers(""))
-	if len(nsList) == 0 {
+func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
+	general := plainNameServers(dns.NormalizedServers(""))
+	nsList := general
+	if direct := plainNameServers(dns.NormalizedDirectServers()); len(direct) > 0 {
+		// No fakedns here to fall through, so the split is expressed with
+		// per-server domain scopes. A proxy-scoped copy of the general list
+		// goes first: scopes are flat while routing is tiered, so a name an
+		// earlier tier proxies (vk.ru under a later domain:ru direct rule)
+		// must not be pinned to the direct resolver. The unscoped general list
+		// stays last, so an unreachable direct resolver degrades to it instead
+		// of making the name unresolvable.
+		proxyScoped := scopedCopies(general, tierDomains(prof, routing.TargetProxy))
+		switch {
+		case prof.ResolvedMode() == ModeDirectAll:
+			// Catch-all is direct: the direct resolvers answer by default.
+			nsList = append(append(proxyScoped, direct...), general...)
+		default:
+			if domains := tierDomains(prof, routing.TargetDirect); len(domains) > 0 {
+				nsList = append(append(proxyScoped, scopedCopies(direct, domains)...), general...)
+			} else {
+				log.Printf("[Xray][DNS] directServers ignored in normal mode: no direct domain rules to scope them to")
+			}
+		}
+	}
+	hosts := hostsWrapper(dns.NormalizedHosts())
+	if len(nsList) == 0 && hosts == nil {
 		if dns.DisableIPv6 {
 			// No servers configured but AAAA must still be suppressed for xray's
 			// internal resolution (freedom UseIP).
@@ -55,10 +82,10 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config) {
 		}
 		return
 	}
-	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: nsList, QueryStrategy: queryStrategy(dns)}
+	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: nsList, Hosts: hosts, QueryStrategy: queryStrategy(dns)}
 }
 
-func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config) {
+func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
 	pool := `[{"ipPool":"` + fakeIPv4Pool + `","poolSize":` + strconv.Itoa(fakeIPPoolSize) + `}` +
 		`,{"ipPool":"` + fakeIPv6Pool + `","poolSize":` + strconv.Itoa(fakeIPPoolSize) + `}]`
 	if dns.DisableIPv6 {
@@ -69,7 +96,7 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config) {
 	var fd xrayConf.FakeDNSConfig
 	if err := json.Unmarshal([]byte(pool), &fd); err != nil {
 		log.Printf("[Xray][DNS] fake-ip pool build failed, falling back to plain DNS: %v", err)
-		applyPlainDNS(cfg, dns)
+		applyPlainDNS(cfg, dns, prof)
 		return
 	}
 	cfg.FakeDNS = &fd
@@ -78,19 +105,33 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config) {
 	// the fake pool - no resolve loop) and the filter exclusions.
 	real := plainNameServers(dns.NormalizedServers("1.1.1.1"))
 
-	var servers []*xrayConf.NameServerConfig
 	// Excluded domains resolve for real (kept off fake-ip): a real server matched
-	// only to those domains, placed ahead of the fakedns server.
-	if exclude := fakeDNSExcludeDomains(dns.NormalizedFilter()); len(exclude) > 0 && len(real) > 0 {
+	// only to those domains, placed ahead of the fakedns server. SkipFallback is
+	// what confines it to them - without it xray's fallback pass walks the list
+	// in order and this copy answers *every* name, ahead of fakedns, which turns
+	// fake-ip off wholesale.
+	var servers []*xrayConf.NameServerConfig
+	if exclude := domainMatchers(dns.NormalizedFilter()); len(exclude) > 0 && len(real) > 0 {
 		ns := *real[0]
 		ns.Domains = exclude
+		ns.SkipFallback = true
 		servers = append(servers, &ns)
 	}
 	servers = append(servers, &xrayConf.NameServerConfig{
 		Address: &xrayConf.Address{Address: xrayNet.ParseAddress("fakedns")},
 	})
+	// Direct resolvers sit *behind* fakedns so the app still gets fake IPs;
+	// the module's own lookups skip fakedns (FakeEnable=false) and land here,
+	// and those lookups are what freedom performs when it dials a direct-routed
+	// name. Same reach as mihomo's direct-nameserver: no domain rules needed.
+	servers = append(servers, plainNameServers(dns.NormalizedDirectServers())...)
 	servers = append(servers, real...)
-	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: servers, QueryStrategy: queryStrategy(dns), Tag: dnsInternalTag}
+	cfg.DNSConfig = &xrayConf.DNSConfig{
+		Servers:       servers,
+		Hosts:         hostsWrapper(dns.NormalizedHosts()),
+		QueryStrategy: queryStrategy(dns),
+		Tag:           dnsInternalTag,
+	}
 
 	// A "dns" outbound answers intercepted queries via the built-in DNS module
 	// (which yields fake IPs). Empty settings -> intercept A/AAAA, pass the rest to
@@ -117,6 +158,57 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config) {
 	cfg.RouterConfig.RuleList = append(rules, cfg.RouterConfig.RuleList...)
 }
 
+// scopedCopies restricts copies of the servers to domains; SkipFallback keeps
+// them out of the rotation for every other name, and copying leaves the
+// caller's unscoped entries usable elsewhere in the list.
+func scopedCopies(list []*xrayConf.NameServerConfig, domains []string) []*xrayConf.NameServerConfig {
+	if len(domains) == 0 {
+		return nil
+	}
+	out := make([]*xrayConf.NameServerConfig, 0, len(list))
+	for _, ns := range list {
+		scoped := *ns
+		scoped.Domains = domains
+		scoped.SkipFallback = true
+		out = append(out, &scoped)
+	}
+	return out
+}
+
+// tierDomains collects one target's matchers across every tier as xray domain
+// syntax; IP-plane and process entries carry no name and drop out.
+func tierDomains(prof RoutingProfile, t string) []string {
+	var raw []string
+	for _, tier := range prof.Tiers {
+		switch t {
+		case routing.TargetDirect:
+			raw = append(raw, tier.Direct...)
+		case routing.TargetProxy:
+			raw = append(raw, tier.Proxy...)
+		}
+	}
+	return domainMatchers(raw)
+}
+
+// HostAddress has unexported fields and only UnmarshalJSON as a public
+// constructor, so the map reaches HostsWrapper through a JSON round-trip.
+func hostsWrapper(hosts map[string][]string) *xrayConf.HostsWrapper {
+	if len(hosts) == 0 {
+		return nil
+	}
+	b, err := json.Marshal(hosts)
+	if err != nil {
+		log.Printf("[Xray][DNS] hosts dropped: %v", err)
+		return nil
+	}
+	var hw xrayConf.HostsWrapper
+	if err := json.Unmarshal(b, &hw); err != nil {
+		log.Printf("[Xray][DNS] hosts dropped: %v", err)
+		return nil
+	}
+	return &hw
+}
+
 func plainNameServers(servers []string) []*xrayConf.NameServerConfig {
 	var nsList []*xrayConf.NameServerConfig
 	for _, s := range servers {
@@ -125,17 +217,27 @@ func plainNameServers(servers []string) []*xrayConf.NameServerConfig {
 			log.Printf("[Xray][DNS] skipping %q: xray has no DoT (use https:// or a plain IP)", s)
 			continue
 		}
-		nsList = append(nsList, &xrayConf.NameServerConfig{
-			Address: &xrayConf.Address{Address: xrayNet.ParseAddress(xs)},
-		})
+		ns := &xrayConf.NameServerConfig{}
+		// A plain resolver may carry a non-standard port ("10.0.0.1:5353");
+		// xray takes the port as its own field and would otherwise read the
+		// whole string as a hostname that resolves to nothing.
+		if dnsconfig.Scheme(xs) == "" {
+			if host, port, err := net.SplitHostPort(xs); err == nil {
+				if p, perr := strconv.Atoi(port); perr == nil && p > 0 && p <= 65535 {
+					xs, ns.Port = host, uint16(p)
+				}
+			}
+		}
+		ns.Address = &xrayConf.Address{Address: xrayNet.ParseAddress(xs)}
+		nsList = append(nsList, ns)
 	}
 	return nsList
 }
 
-// fakeDNSExcludeDomains classifies filter entries into xray domain matchers
-// (domain/full/keyword/regexp/geosite). IP and process entries are meaningless
-// for fake-ip exclusion and are dropped.
-func fakeDNSExcludeDomains(filter []string) []string {
+// domainMatchers classifies entries into xray domain matchers
+// (domain/full/keyword/regexp/geosite). IP and process entries carry no name
+// and are dropped - they mean nothing to a per-server domain scope.
+func domainMatchers(filter []string) []string {
 	var domains []string
 	for _, f := range filter {
 		kind, val, ok := routing.Classify(f)

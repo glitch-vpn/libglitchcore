@@ -84,6 +84,13 @@ State a reattaching client needs (last ServerEvent/IPEvent) lives in
 
 New session-scoped state that misses one of the three legs is a finding.
 
+Process-global environment as per-connection state (`applyGeoAssetsDir`) is a
+fourth, narrower shape: snapshot-on-first-override and restore-at-the-next
+opt-less start, mutated only under `coreMutex`, and applied at the top of every
+start path that loads geo data — xray and mihomo today, awg being the exception
+because it has no rule engine. An engine that reads the variable but skips the
+call inherits the previous session's override.
+
 ## 2. Events
 
 ### 2.1 One emitter
@@ -122,6 +129,11 @@ three of each engine:
   `EngineConnected`,
 - stop handler → stop loops and clear state **synchronously**, then the async
   teardown goroutine.
+
+A fourth, narrow leg sits between the guards and `EngineConnecting`: rejecting
+a malformed request (`optsFromRequest`). It emits `EngineError` **without**
+`clearSessionState()` — the caller's request never became a session, and
+clearing would wipe the live one the guards above just protected.
 
 A feature wired into xray but not awg/mihomo (or vice versa) without a stated
 reason is a finding — `balancerStrategy` silently dropped on the awg path for
@@ -165,6 +177,14 @@ if v, ok := o["resolveExternalIp"]; ok && strings.TrimSpace(v) != "" {
 
 - Engines ignore fields they do not support; an opt must never error an
   engine that has no use for it.
+- Routing payloads are the exception to forgiving parsing: malformed
+  `routingTiers` fails the connect instead of degrading — silently dropping
+  block rules would bypass the kill-switch. `domainStrategy` is the other
+  exception (rejected in `xrayStart`): a typo silently falling back to AsIs
+  would disable IP-rule matching for domain-form requests. The two reject
+  through different channels — `routingTiers` synchronously (error return +
+  `EngineError`), `domainStrategy` asynchronously (`EngineError` only), because
+  untagged `engine.go` cannot import `xrayconfig` to learn the value set.
 
 ## 6. Comments
 
@@ -186,6 +206,17 @@ functions carry nothing.
 - Unit tests construct a bare `&CoreController{}` and register a capturing
   sink via `setStatusSink` (package-internal, no replay side effects);
   restore with `t.Cleanup`.
+- Geo fixtures are built in-process with `proto.Marshal` over the v2fly
+  `router.GeoSiteList`/`GeoIPList` shapes, never checked in; every fixture
+  carries a `CN` list, because mihomo validates a .dat by loading that one.
+- Asserting on engine log text (`eventLog.waitForLog`) is allowed only when the
+  observable is unreachable otherwise — a loopback stub cannot receive traffic
+  from the NIC-bound direct outbound, so the DNS split is read from xray's own
+  "will use DNS in order" line. The shape includes
+  `core.ApplyStatusVerbosity(2)` with a `t.Cleanup` restore.
+- A protocol stub the engine talks to (the UDP DNS responder) lives in the test
+  file that needs it and answers the minimum that engine asks for; shared
+  harness pieces belong in `smoke_test.go`.
 - Timing knobs that tests need are package vars (`selectionWatchInterval`),
   overridden and restored in the test, not exported.
 - Table tests where variants differ by data; separate funcs where they differ

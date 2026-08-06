@@ -1,12 +1,15 @@
 package mihomoconfig
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
+	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 
 	// config.ParseRawConfig reaches temporaryUpdateGeneral via //go:linkname,
@@ -19,7 +22,7 @@ func TestBuildConfig_ForceProxyListener(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&encryption=none&sni=www.bing.com&fp=chrome&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f9e232c6fb72d&flow=xtls-rprx-vision#r"
 	cfg, err := BuildConfig([]string{link},
 		Inbound{MixedPort: 17890, ForceProxyPort: 17891},
-		Options{}, routing.Profile{Mode: routing.ModeDirectAll, Proxy: []string{"process:chrome.exe"}})
+		Options{}, routing.Profile{Mode: routing.ModeDirectAll, Tiers: []routing.Tier{{Proxy: []string{"process:chrome.exe"}}}})
 	if err != nil {
 		t.Fatalf("BuildConfig with ForceProxyPort: %v", err)
 	}
@@ -40,7 +43,7 @@ func TestBuildConfig_ForceProxyListener(t *testing.T) {
 func TestBuildConfig_DisableIPv6AndUDP(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
 	cfg, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{},
-		routing.Profile{Block: []string{"ads.example"}, DisableIPv6: true, DisableUDP: true})
+		routing.Profile{Tiers: []routing.Tier{{Block: []string{"ads.example"}}}, DisableIPv6: true, DisableUDP: true})
 	if err != nil {
 		t.Fatalf("BuildConfig with disable flags: %v", err)
 	}
@@ -310,9 +313,11 @@ func TestLinkNames(t *testing.T) {
 
 func TestBuildRules(t *testing.T) {
 	p := routing.Profile{
-		Mode:          routing.ModeProxyAll,
-		Direct:        []string{"geosite:category-ru", "geoip:ru", "domain:gov.ru", "10.1.0.0/16", "process:Discord.exe"},
-		Block:         []string{"ads.example"},
+		Mode: routing.ModeProxyAll,
+		Tiers: []routing.Tier{{
+			Direct: []string{"geosite:category-ru", "geoip:ru", "domain:gov.ru", "10.1.0.0/16", "process:Discord.exe"},
+			Block:  []string{"ads.example"},
+		}},
 		LocalNetworks: true,
 	}
 	joined := strings.Join(buildRules(p, "vpn"), "\n")
@@ -331,16 +336,22 @@ func TestBuildRules(t *testing.T) {
 		}
 	}
 
-	// A bare IP is normalized to a /32 CIDR; full:/keyword:/regexp: map to the
-	// matching mihomo domain rule types.
+	// A bare IP is normalized to a /32 CIDR; zone dots are stripped from
+	// domain matchers; full:/keyword:/regexp: map to the matching mihomo
+	// domain rule types.
 	kinds := strings.Join(buildRules(routing.Profile{
-		Proxy: []string{"48.123.243.123", "full:exact.example", "keyword:ads", "regexp:.*\\.cn$"},
+		Tiers: []routing.Tier{{Proxy: []string{
+			"48.123.243.123", "full:exact.example", "keyword:ads", "regexp:.*\\.cn$",
+			"domain:.ru.", ".рф",
+		}}},
 	}, "vpn"), "\n")
 	for _, want := range []string{
 		"IP-CIDR,48.123.243.123/32,vpn,no-resolve",
 		"DOMAIN,exact.example,vpn",
 		"DOMAIN-KEYWORD,ads,vpn",
 		"DOMAIN-REGEX,.*\\.cn$,vpn",
+		"DOMAIN-SUFFIX,ru,vpn",
+		"DOMAIN-SUFFIX,рф,vpn",
 	} {
 		if !strings.Contains(kinds, want) {
 			t.Fatalf("missing rule %q in:\n%s", want, kinds)
@@ -350,7 +361,7 @@ func TestBuildRules(t *testing.T) {
 	// direct-all flips the catch-all and forces the proxy list to the proxy.
 	da := strings.Join(buildRules(routing.Profile{
 		Mode:  routing.ModeDirectAll,
-		Proxy: []string{"domain:youtube.com"},
+		Tiers: []routing.Tier{{Proxy: []string{"domain:youtube.com"}}},
 	}, "vpn"), "\n")
 	if !strings.Contains(da, "DOMAIN-SUFFIX,youtube.com,vpn") || !strings.Contains(da, "MATCH,DIRECT") {
 		t.Fatalf("direct-all rules wrong:\n%s", da)
@@ -365,13 +376,53 @@ func TestBuildRules(t *testing.T) {
 	// it would fail the whole mihomo config at load. "domain:рф" (a zone) and a
 	// valid geosite alongside still work.
 	inv := strings.Join(buildRules(routing.Profile{
-		Block: []string{"geosite:category-ru", "geoip:рф", "domain:рф"},
+		Tiers: []routing.Tier{{Block: []string{"geosite:category-ru", "geoip:рф", "domain:рф"}}},
 	}, "vpn"), "\n")
 	if strings.Contains(inv, "GEOIP,рф") {
 		t.Fatalf("invalid geo code leaked:\n%s", inv)
 	}
 	if !strings.Contains(inv, "GEOSITE,category-ru,REJECT") || !strings.Contains(inv, "DOMAIN-SUFFIX,рф,REJECT") {
 		t.Fatalf("valid matchers dropped:\n%s", inv)
+	}
+
+	// '!' and '@' are legal geo syntax (inverse match, attribute qualifier,
+	// literal category names like geolocation-!cn) and must survive.
+	geo := strings.Join(buildRules(routing.Profile{
+		Tiers: []routing.Tier{{Proxy: []string{"geosite:geolocation-!cn", "geosite:cn@ads", "geoip:!ru"}}},
+	}, "vpn"), "\n")
+	for _, want := range []string{
+		"GEOSITE,geolocation-!cn,vpn",
+		"GEOSITE,cn@ads,vpn",
+		"GEOIP,!ru,vpn,no-resolve",
+	} {
+		if !strings.Contains(geo, want) {
+			t.Fatalf("missing rule %q in:\n%s", want, geo)
+		}
+	}
+}
+
+func TestBuildRules_TwoTierOrdering(t *testing.T) {
+	// Tier 1's vk.ru->proxy must be emitted before tier 2's .ru->direct, so
+	// the more specific rule wins under first-match-wins evaluation.
+	got := buildRules(routing.Profile{
+		Mode: routing.ModeProxyAll,
+		Tiers: []routing.Tier{
+			{Proxy: []string{"domain:vk.ru"}},
+			{Direct: []string{"domain:ru"}},
+		},
+	}, "vpn")
+	want := []string{
+		"DOMAIN-SUFFIX,vk.ru,vpn",
+		"DOMAIN-SUFFIX,ru,DIRECT",
+		"MATCH,vpn",
+	}
+	if len(got) != len(want) {
+		t.Fatalf("rules = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("rules[%d] = %q, want %q", i, got[i], want[i])
+		}
 	}
 }
 
@@ -419,6 +470,88 @@ func TestBuildConfig_TunInbound(t *testing.T) {
 	}
 	if !desktop.General.Tun.Enable || !desktop.General.Tun.AutoRoute {
 		t.Fatalf("desktop tun not auto-routed: %+v", desktop.General.Tun)
+	}
+}
+
+func TestBuildConfig_GeoAssetsAreCallerSupplied(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com&flow=xtls-rprx-vision"
+	home := t.TempDir()
+	prev := C.Path.HomeDir()
+	C.SetHomeDir(home)
+	t.Cleanup(func() { C.SetHomeDir(prev) })
+
+	// A geo rule with no .dat in the home dir fails the build instead of
+	// letting mihomo download one.
+	_, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{},
+		routing.Profile{Tiers: []routing.Tier{{Direct: []string{"geosite:category-ru"}}}})
+	if err == nil || !strings.Contains(err.Error(), "geosite.dat not found") {
+		t.Fatalf("missing geosite.dat: err = %v, want a not-found error", err)
+	}
+	_, err = BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{},
+		routing.Profile{Tiers: []routing.Tier{{Direct: []string{"geoip:ru"}}}})
+	if err == nil || !strings.Contains(err.Error(), "geoip.dat not found") {
+		t.Fatalf("missing geoip.dat: err = %v, want a not-found error", err)
+	}
+
+	// A .dat mihomo cannot validate (no "cn" list) fails the build with the
+	// file intact - mihomo's own bootstrap would delete it first.
+	junk := t.TempDir()
+	C.SetHomeDir(junk)
+	site := filepath.Join(junk, "geosite.dat")
+	if err := os.WriteFile(site, []byte("not a geosite dat"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{},
+		routing.Profile{Tiers: []routing.Tier{{Direct: []string{"geosite:category-ru"}}}})
+	if err == nil || !strings.Contains(err.Error(), "unusable by mihomo") {
+		t.Fatalf("unverifiable geosite.dat: err = %v, want an unusable-file error", err)
+	}
+	if _, statErr := os.Stat(site); statErr != nil {
+		t.Fatalf("the caller's geosite.dat was destroyed: %v", statErr)
+	}
+	C.SetHomeDir(home)
+
+	// No geo rules -> no requirement, and the download URLs stay blanked so a
+	// fetch can never happen behind the caller's back.
+	cfg, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatalf("geo-free profile: %v", err)
+	}
+	if cfg.General.GeoXUrl != (config.GeoXUrl{}) {
+		t.Fatalf("geox urls = %+v, want empty", cfg.General.GeoXUrl)
+	}
+}
+
+func TestBuildConfig_HostsAndDirectNameServer(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com&flow=xtls-rprx-vision"
+	dns := dnsconfig.Config{
+		Mode:          dnsconfig.ModeFakeIP,
+		Servers:       []string{"https://dns.google/dns-query"},
+		Hosts:         map[string][]string{"router.local": {"192.168.1.1"}},
+		DirectServers: []string{"77.88.8.8"},
+	}
+
+	tun, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{FileDescriptor: 42, DNS: dns}}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatalf("tun: %v", err)
+	}
+	if len(tun.DNS.DirectNameServer) != 1 || tun.DNS.DirectNameServer[0].Addr != "77.88.8.8:53" {
+		t.Fatalf("tun direct nameserver = %+v", tun.DNS.DirectNameServer)
+	}
+	if tun.Hosts == nil || tun.Hosts.Search("router.local") == nil {
+		t.Fatal("tun hosts entry missing")
+	}
+
+	bridge, err := BuildConfig([]string{link},
+		Inbound{MixedPort: 17890, DNS: dns, DNSListenPort: 17899}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatalf("bridge: %v", err)
+	}
+	if len(bridge.DNS.DirectNameServer) != 1 {
+		t.Fatalf("bridge direct nameserver = %+v", bridge.DNS.DirectNameServer)
+	}
+	if bridge.Hosts == nil || bridge.Hosts.Search("router.local") == nil {
+		t.Fatal("bridge hosts entry missing")
 	}
 }
 

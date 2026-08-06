@@ -21,8 +21,10 @@ func TestProbeOnce(t *testing.T) {
 	if err != nil {
 		t.Fatalf("probeOnce(live): %v", err)
 	}
-	if elapsed <= 0 {
-		t.Fatalf("elapsed = %v, want > 0", elapsed)
+	// Not "> 0": a loopback round trip can land inside one tick of Windows'
+	// coarse timer and measure exactly zero.
+	if elapsed < 0 || elapsed > 3*time.Second {
+		t.Fatalf("elapsed = %v, want a sane probe duration", elapsed)
 	}
 
 	srv.Close()

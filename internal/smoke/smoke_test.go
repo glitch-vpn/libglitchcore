@@ -9,8 +9,10 @@
 package smoke
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -22,6 +24,7 @@ import (
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
+	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	xrayCore "github.com/xtls/xray-core/core"
 )
 
@@ -35,15 +38,27 @@ func TestMain(m *testing.M) {
 
 const testUUID = "b831381d-6324-4d53-ad4f-8cda48b30811"
 
+// freePort probes UDP as well: xray binds both, and a TCP-only probe can hand
+// back a port inside a Windows Hyper-V/WinNAT UDP exclusion range, which then
+// fails the engine start.
 func freePort(t *testing.T) int {
 	t.Helper()
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	for i := 0; i < 20; i++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
+		}
+		port := l.Addr().(*net.TCPAddr).Port
+		_ = l.Close()
+		u, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+		if err != nil {
+			continue
+		}
+		_ = u.Close()
+		return port
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	_ = l.Close()
-	return port
+	t.Fatal("no port free on both TCP and UDP")
+	return 0
 }
 
 func startVlessServer(t *testing.T) int {
@@ -94,6 +109,18 @@ func captureEvents(t *testing.T) *eventLog {
 	return ev
 }
 
+func (e *eventLog) reset() {
+	e.mu.Lock()
+	e.byCode = map[int32][]string{}
+	e.mu.Unlock()
+}
+
+func (e *eventLog) all(code int32) []string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return append([]string(nil), e.byCode[code]...)
+}
+
 func (e *eventLog) last(code int32) (string, bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -102,6 +129,25 @@ func (e *eventLog) last(code int32) (string, bool) {
 		return "", false
 	}
 	return msgs[len(msgs)-1], true
+}
+
+// waitForLog is the escape hatch for behaviour the event surface does not
+// report (which resolver the DNS module picked, say). It needs
+// core.ApplyStatusVerbosity(2) with a restore, and it reads engine log text.
+func (e *eventLog) waitForLog(t *testing.T, match func(string) bool, timeout time.Duration) string {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, msg := range e.all(core.LogEvent) {
+			if match(msg) {
+				return msg
+			}
+		}
+		if time.Now().After(deadline) {
+			return ""
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 func (e *eventLog) waitFor(t *testing.T, code int32, timeout time.Duration) string {
@@ -119,7 +165,23 @@ func (e *eventLog) waitFor(t *testing.T, code int32, timeout time.Duration) stri
 	return ""
 }
 
+func stopEngine(t *testing.T, id string) {
+	t.Helper()
+	core.EngineStop(id)
+	deadline := time.Now().Add(10 * time.Second)
+	for core.EngineIsRunning(id) == core.ResultSuccess && time.Now().Before(deadline) {
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 func startProxyEngine(t *testing.T, links string, extraOpts map[string]string) {
+	t.Helper()
+	startProxyEngineDNS(t, links, extraOpts, nil)
+}
+
+// startProxyEngineDNS returns the loopback SOCKS port so a test can drive
+// traffic through the engine it just started.
+func startProxyEngineDNS(t *testing.T, links string, extraOpts map[string]string, dns *dnsconfig.Config) int {
 	t.Helper()
 	// The default 5s SOCKS-ready budget can expire on a cold first run.
 	t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
@@ -131,21 +193,56 @@ func startProxyEngine(t *testing.T, links string, extraOpts map[string]string) {
 		opts[k] = v
 	}
 	res := core.EngineStart("xray", core.EngineStartRequest{
-		Config: links,
-		TunFD:  0,
-		DNS:    "1.1.1.1",
-		Opts:   opts,
+		Config:    links,
+		TunFD:     0,
+		DNS:       "1.1.1.1",
+		LogLevel:  3, // only reaches the sink when the test raises verbosity
+		Opts:      opts,
+		DNSConfig: dns,
 	})
 	if res != core.ResultSuccess {
 		t.Fatalf("EngineStart = %d", res)
 	}
-	t.Cleanup(func() {
-		core.EngineStop("xray")
-		deadline := time.Now().Add(10 * time.Second)
-		for core.EngineIsRunning("xray") == core.ResultSuccess && time.Now().Before(deadline) {
-			time.Sleep(100 * time.Millisecond)
-		}
-	})
+	t.Cleanup(func() { stopEngine(t, "xray") })
+	return proxyPort
+}
+
+// socksConnect asks the loopback SOCKS inbound for a hostname, which is what
+// makes xray route and then resolve it. The CONNECT reply status is ignored:
+// xray answers before dialing and only dials on the first payload, so the
+// write below is what triggers the resolution under test.
+func socksConnect(port int, host string, dstPort uint16) (byte, error) {
+	c, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 5*time.Second)
+	if err != nil {
+		return 0, err
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := c.Write([]byte{5, 1, 0}); err != nil {
+		return 0, err
+	}
+	greeting := make([]byte, 2)
+	if _, err := io.ReadFull(c, greeting); err != nil {
+		return 0, err
+	}
+	if greeting[1] != 0 {
+		return 0, fmt.Errorf("socks auth method %d, want none", greeting[1])
+	}
+	req := []byte{5, 1, 0, 3, byte(len(host))}
+	req = append(req, host...)
+	req = binary.BigEndian.AppendUint16(req, dstPort)
+	if _, err := c.Write(req); err != nil {
+		return 0, err
+	}
+	reply := make([]byte, 10)
+	if _, err := io.ReadFull(c, reply); err != nil {
+		return 0, err
+	}
+	if _, err := c.Write([]byte("GET / HTTP/1.0\r\nHost: " + host + "\r\n\r\n")); err != nil {
+		return reply[1], err
+	}
+	_, _ = io.ReadFull(c, make([]byte, 1))
+	return reply[1], nil
 }
 
 // SOCKS inbound -> vless client -> in-process vless server -> freedom ->

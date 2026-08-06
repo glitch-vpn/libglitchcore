@@ -9,7 +9,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +18,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 	"github.com/metacubex/mihomo/common/observable"
+	"github.com/metacubex/mihomo/component/geodata"
 	mihomoCfg "github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub/executor"
@@ -33,7 +33,7 @@ type mihomoEngine struct{}
 func (mihomoEngine) ID() string { return "mihomo" }
 
 func (mihomoEngine) Start(x *CoreController, req EngineStartRequest) int32 {
-	return x.HandleMihomoStart(req.Config, req.TunFD, optsFromRequest(req))
+	return x.HandleMihomoStart(req)
 }
 
 // Compiles without the tun2socks bridge (plain fields only).
@@ -64,10 +64,7 @@ func mihomoConfigLinks(raw string) []string {
 	return splitEngineLinks(raw)
 }
 
-var (
-	mihomoHomeOnce sync.Once
-	mihomoLogSub   observable.Subscription[mihomoLog.Event]
-)
+var mihomoLogSub observable.Subscription[mihomoLog.Event]
 
 func startMihomoLogBridge() {
 	stopMihomoLogBridge()
@@ -174,22 +171,45 @@ func mihomoConnRecord(info *statistic.TrackerInfo) conninspect.Record {
 	}
 }
 
-// Points mihomo home at xray.location.asset so GEOSITE/GEOIP find the .dat files.
-func ensureMihomoHome() {
-	mihomoHomeOnce.Do(func() {
-		dir := os.Getenv("xray.location.asset")
-		if strings.TrimSpace(dir) == "" {
-			dir = filepath.Join(os.TempDir(), "glitch_vpn_mihomo")
-		}
+// Guarded by coreMutex (only mihomoStart touches it, one engine at a time).
+var mihomoHomeDir string
+
+// Points mihomo home at the per-connection dir (falling back to
+// xray.location.asset, then a temp default) so GEOSITE/GEOIP find the .dat
+// files. Re-applied on change: mihomo memoizes geo matchers by list name
+// only, so a stale cache would keep serving the previous dir's files. An
+// unusable dir fails the start - proceeding would silently serve the
+// previous home's geo data.
+func ensureMihomoHome(optDir string) error {
+	dir, own := strings.TrimSpace(optDir), false
+	if dir == "" {
+		dir = strings.TrimSpace(os.Getenv(xrayAsset))
+	}
+	if dir == "" {
+		dir, own = filepath.Join(os.TempDir(), "glitch_vpn_mihomo"), true
+	}
+	if dir == mihomoHomeDir {
+		return nil
+	}
+	// Only the fallback dir is ours to create. A caller-supplied path is
+	// applied inside the LocalSystem service, where creating directories on
+	// request would hand the (unauthenticated) command pipe a filesystem
+	// primitive.
+	if own {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Printf("[mihomo] home dir: %v", err)
-			return
+			return fmt.Errorf("home dir: %w", err)
 		}
-		C.SetHomeDir(dir)
-	})
+	} else if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+		return fmt.Errorf("home dir %q is not an existing directory", dir)
+	}
+	C.SetHomeDir(dir)
+	geodata.ClearGeoSiteCache()
+	geodata.ClearGeoIPCache()
+	mihomoHomeDir = dir
+	return nil
 }
 
-func (x *CoreController) HandleMihomoStart(rawconfig string, tunFd int, o engineOpts) int32 {
+func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
@@ -205,10 +225,18 @@ func (x *CoreController) HandleMihomoStart(rawconfig string, tunFd int, o engine
 		return glitchCoreResultSuccess
 	}
 
+	// After the guards: a malformed request must not tear down the live
+	// session they protect (EngineError clears client session state).
+	o, err := optsFromRequest(req)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[mihomo] invalid opts: %v", err))
+		return glitchCoreResultError
+	}
+
 	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
 	go func() {
 		mark := x.sessionGen.Load()
-		if err := x.mihomoStart(rawconfig, tunFd, o); err != nil {
+		if err := x.mihomoStart(req.Config, req.TunFD, o); err != nil {
 			log.Printf("[mihomo] start failed: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
@@ -246,7 +274,10 @@ func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) 
 	var livenessPort int
 	switch {
 	case proxyPort > 0:
-		inbound = mihomoconfig.Inbound{MixedPort: proxyPort}
+		// No DNS server in proxy mode (no listener, no fake-ip), but the intent
+		// still carries the hosts table, which mihomo honours through its
+		// resolver either way.
+		inbound = mihomoconfig.Inbound{MixedPort: proxyPort, DNS: dns}
 		if o.proxyUser != "" && o.proxyPass != "" {
 			inbound.Auth = o.proxyUser + ":" + o.proxyPass
 		}
@@ -290,8 +321,13 @@ func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) 
 	}
 
 	// Home dir must be set before BuildConfig - ParseRawConfig loads geo at parse
-	// time for GEOSITE/GEOIP rules.
-	ensureMihomoHome()
+	// time for GEOSITE/GEOIP rules. The env snapshot/restore runs here too, or
+	// ensureMihomoHome's env fallback would inherit a previous xray session's
+	// override.
+	applyGeoAssetsDir(o.geoAssetsDir)
+	if err := ensureMihomoHome(o.geoAssetsDir); err != nil {
+		return fmt.Errorf("[mihomo] %w", err)
+	}
 	startMihomoLogBridge()
 
 	cfg, err := mihomoconfig.BuildConfig(mihomoConfigLinks(rawconfig), inbound,

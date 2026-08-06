@@ -2,6 +2,7 @@ package xrayconfig
 
 import (
 	"encoding/json"
+	"strings"
 
 	xrayConf "github.com/xtls/xray-core/infra/conf"
 
@@ -66,7 +67,7 @@ func matcherRules(matchers []string, t target) []json.RawMessage {
 				domains = append(domains, "geosite:"+val)
 			}
 		case routing.KindGeoIP:
-			if routing.ValidGeoCode(val) {
+			if routing.ValidGeoIPCode(val) {
 				ips = append(ips, "geoip:"+val)
 			}
 		case routing.KindDomainSuffix:
@@ -110,8 +111,8 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	direct := target{tag: directTag}
 	block := target{tag: blockTag}
 
-	needDirect := p.ResolvedMode() == ModeDirectAll || p.LocalNetworks || len(p.Direct) > 0
-	needBlock := len(p.Block) > 0 || p.DisableIPv6 || p.DisableUDP
+	needDirect := p.ResolvedMode() == ModeDirectAll || p.LocalNetworks || p.HasDirect()
+	needBlock := p.HasBlock() || p.DisableIPv6 || p.DisableUDP
 
 	if needDirect {
 		ensureDirectOutbound(p, cfg)
@@ -120,10 +121,10 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		ensureOutbound(cfg, blockTag, xrayConf.OutboundDetourConfig{Protocol: "blackhole", Tag: blockTag})
 	}
 
-	// Priority (first match wins): protocol kill-switches -> block -> explicit
-	// direct -> explicit proxy -> local networks -> mode catch-all. Explicit
-	// direct/proxy rules are emitted in both modes; the catch-all decides what
-	// unlisted traffic does.
+	// Priority (first match wins): protocol kill-switches -> tiers in order
+	// (block -> direct -> proxy within each) -> local networks -> mode
+	// catch-all. Explicit direct/proxy rules are emitted in both modes; the
+	// catch-all decides what unlisted traffic does.
 	var rules []json.RawMessage
 	if p.DisableIPv6 {
 		r := fieldRule{IP: []string{"::/0"}}
@@ -137,9 +138,11 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		block.apply(&r)
 		rules = append(rules, r.raw())
 	}
-	rules = append(rules, matcherRules(p.Block, block)...)
-	rules = append(rules, matcherRules(p.Direct, direct)...)
-	rules = append(rules, matcherRules(p.Proxy, proxy)...)
+	for _, tier := range p.Tiers {
+		rules = append(rules, matcherRules(tier.Block, block)...)
+		rules = append(rules, matcherRules(tier.Direct, direct)...)
+		rules = append(rules, matcherRules(tier.Proxy, proxy)...)
+	}
 
 	if p.LocalNetworks {
 		r := fieldRule{IP: routing.LocalNetworkCIDRs}
@@ -167,6 +170,28 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		cfg.RouterConfig = &xrayConf.RouterConfig{}
 	}
 	cfg.RouterConfig.RuleList = rules
+	if p.DomainStrategy != "" {
+		ds := p.DomainStrategy
+		cfg.RouterConfig.DomainStrategy = &ds
+	}
+}
+
+// NormalizeDomainStrategy maps a caller value onto xray's router strategies
+// ("" = leave the engine default, AsIs). Unknown values are reported instead
+// of inheriting xray's silent AsIs fallback - a typo would silently disable
+// IP-rule matching for domain-form requests.
+func NormalizeDomainStrategy(s string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "":
+		return "", true
+	case "asis":
+		return "AsIs", true
+	case "ipifnonmatch":
+		return "IPIfNonMatch", true
+	case "ipondemand":
+		return "IPOnDemand", true
+	}
+	return "", false
 }
 
 func hasProcessProxy(p RoutingProfile) bool {

@@ -80,6 +80,8 @@ internal/
   routing/ dnsconfig/ logfmt/ conninspect/ procname/
 Makefile, Dockerfile       # deploy builds (Docker)
 .github/workflows/         # ci (tag matrix + license guards), release
+wiki/                      # user-facing docs (GitHub wiki page names);
+                           # README stays short and links here
 ```
 
 ## 4. Runtime contracts

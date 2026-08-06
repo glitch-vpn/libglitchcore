@@ -24,7 +24,7 @@ type xrayEngine struct{}
 func (xrayEngine) ID() string { return "xray" }
 
 func (xrayEngine) Start(x *CoreController, req EngineStartRequest) int32 {
-	return x.HandleXrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, optsFromRequest(req))
+	return x.HandleXrayStart(req)
 }
 
 func (xrayEngine) Stop(x *CoreController) int32 { return x.HandleXrayStop() }
@@ -44,7 +44,7 @@ func init() {
 	registerEngineVersion("xray_core", func() string { return builtXrayCoreVersion })
 }
 
-func (x *CoreController) HandleXrayStart(rawconfig string, tunFd int, dnsServer string, logLevel int, o engineOpts) int32 {
+func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
@@ -60,11 +60,19 @@ func (x *CoreController) HandleXrayStart(rawconfig string, tunFd int, dnsServer 
 		return glitchCoreResultSuccess
 	}
 
+	// After the guards: a malformed request must not tear down the live
+	// session they protect (EngineError clears client session state).
+	o, err := optsFromRequest(req)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[Xray] invalid opts: %v", err))
+		return glitchCoreResultError
+	}
+
 	x.emitStatus(EngineConnecting, "[Xray] Connecting")
 
 	go func() {
 		mark := x.sessionGen.Load()
-		if err := x.xrayStart(rawconfig, tunFd, dnsServer, logLevel, o); err != nil {
+		if err := x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o); err != nil {
 			log.Printf("[Xray] Failed to start Xray: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to start: %v", err))
@@ -131,6 +139,10 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 	}
 	log.Println("[Xray] Initializing core")
 
+	// Before cfg.Build(): xray resolves geoip.dat/geosite.dat lazily from the
+	// env during the build.
+	applyGeoAssetsDir(o.geoAssetsDir)
+
 	// Master switch off (default) forces xray + tun2socks silent regardless of
 	// the connect logLevel.
 	effectiveLogLevel := logLevel
@@ -151,6 +163,11 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 	// loops back through the TUN - a source-IP bind is not enough.
 	routing.DirectSendThrough = physicalInterfaceIP()
 	routing.DirectInterface = physicalInterfaceName()
+	ds, ok := xrayconfig.NormalizeDomainStrategy(routing.DomainStrategy)
+	if !ok {
+		return fmt.Errorf("[Xray] invalid domainStrategy %q (want asis|ipifnonmatch|ipondemand)", routing.DomainStrategy)
+	}
+	routing.DomainStrategy = ds
 	res, err := xrayconfig.BuildConfig(links, xrayconfig.BalancerOptions{Strategy: o.strategy, ProbeURL: o.probeURL}, routing, xrayLogLevel)
 	if err != nil {
 		return fmt.Errorf("[Xray] Link parse error: %w", err)
@@ -175,7 +192,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		cfg.LogConfig.ErrorLog = ""
 		cfg.LogConfig.DNSLog = false
 	}
-	xrayconfig.ApplyDNS(&cfg, o.dns)
+	xrayconfig.ApplyDNS(&cfg, o.dns, routing)
 	xrayconfig.ApplyMux(&cfg, res.OutboundTags, res.VisionTags, o.muxConcurrency, o.xudpConcurrency)
 	xrayconfig.ApplyFingerprint(&cfg, res.OutboundTags, o.fingerprint)
 

@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
+	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
@@ -99,9 +101,15 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		// flows that arrive as literals.
 		raw.IPv6 = false
 	}
-	// v2fly .dat from the home dir; the plugin owns updates - no auto-download.
+	// v2fly .dat from the home dir; the caller owns the files. GeoAutoUpdate
+	// only governs the periodic updater - mihomo also bootstraps a missing or
+	// unverifiable .dat by downloading it when a GEOSITE/GEOIP rule is parsed
+	// (rules/common/geosite.go -> geodata.InitGeoSite). Blanking the URLs turns
+	// that fetch into a start failure: fetching geo data behind the caller's
+	// back is not an engine's call to make.
 	raw.GeodataMode = true
 	raw.GeoAutoUpdate = false
+	raw.GeoXUrl = config.RawGeoXUrl{}
 	// The IP->domain mapping lives in the DNS layer, so switching the sniffer
 	// off never breaks fake-ip itself.
 	raw.Sniffer = config.RawSniffer{
@@ -116,6 +124,7 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	if in.MixedPort > 0 {
 		raw.MixedPort = in.MixedPort // allow-lan:false forces it onto 127.0.0.1
 		applyBridgeDNS(raw, in.DNS, in.DNSListenPort)
+		applyHosts(raw, in.DNS)
 		if in.Auth != "" {
 			raw.Authentication = []string{in.Auth}
 		}
@@ -125,6 +134,7 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	}
 	if in.Tun != nil {
 		applyTun(raw, in.Tun)
+		applyHosts(raw, in.Tun.DNS)
 	}
 
 	names := ProxyNames(links)
@@ -170,12 +180,62 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	}
 	raw.Rule = rules
 
+	if err := checkGeoAssets(rules, raw.DNS.FakeIPFilter); err != nil {
+		return nil, err
+	}
 	return config.ParseRawConfig(raw)
+}
+
+// checkGeoAssets validates the caller's .dat files before mihomo reaches its
+// own bootstrap path. That path does not just download: a file that fails
+// mihomo's CN-load check is **deleted** first, and with the URLs blanked
+// nothing replaces it - so a slimmed or truncated file supplied by the caller
+// would be destroyed. Verifying here fails the start with the file intact.
+func checkGeoAssets(rules, fakeIPFilter []string) error {
+	var needSite, needIP bool
+	for _, r := range rules {
+		switch {
+		case strings.HasPrefix(r, "GEOSITE,"):
+			needSite = true
+		case strings.HasPrefix(r, "GEOIP,"):
+			needIP = true
+		}
+	}
+	for _, f := range fakeIPFilter {
+		if strings.HasPrefix(strings.ToLower(strings.TrimSpace(f)), "geosite:") {
+			needSite = true
+		}
+	}
+	// C.Path resolves these against the home dir the caller's asset dir set,
+	// and sets C.GeositeName/C.GeoipName to the filenames it found.
+	if needSite {
+		if err := requireGeoFile(C.Path.GeoSite(), C.GeositeName, "geosite.dat"); err != nil {
+			return err
+		}
+	}
+	if needIP {
+		if err := requireGeoFile(C.Path.GeoIP(), C.GeoipName, "geoip.dat"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireGeoFile(path, listName, label string) error {
+	st, err := os.Stat(path)
+	if path == "" || err != nil || st.IsDir() {
+		return fmt.Errorf("%s not found (looked for %q); the caller supplies geo assets", label, path)
+	}
+	if err := geodata.Verify(listName); err != nil {
+		return fmt.Errorf("%s at %q is unusable by mihomo (it validates by loading the \"cn\" list): %w", label, path, err)
+	}
+	return nil
 }
 
 // buildRules translates the routing profile into mihomo rule lines. target is
 // where unlisted traffic goes; an empty profile yields just MATCH,target.
-// Priority (first match wins): block -> direct -> proxy -> local -> mode catch-all.
+// Priority (first match wins): kill-switches -> tiers in order (block ->
+// direct -> proxy within each) -> local -> mode catch-all.
 func buildRules(p routing.Profile, target string) []string {
 	var rules []string
 	if p.DisableIPv6 {
@@ -185,9 +245,11 @@ func buildRules(p routing.Profile, target string) []string {
 		// :53 stays open so DNS keeps resolving.
 		rules = append(rules, "AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT")
 	}
-	rules = append(rules, matcherRules(p.Block, "REJECT")...)
-	rules = append(rules, matcherRules(p.Direct, "DIRECT")...)
-	rules = append(rules, matcherRules(p.Proxy, target)...)
+	for _, tier := range p.Tiers {
+		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
+		rules = append(rules, matcherRules(tier.Direct, "DIRECT")...)
+		rules = append(rules, matcherRules(tier.Proxy, target)...)
+	}
 	if p.LocalNetworks {
 		for _, cidr := range routing.LocalNetworkCIDRs {
 			rules = append(rules, "IP-CIDR,"+cidr+",DIRECT,no-resolve")
@@ -217,7 +279,7 @@ func matcherRules(matchers []string, target string) []string {
 				out = append(out, "GEOSITE,"+val+","+target)
 			}
 		case routing.KindGeoIP:
-			if routing.ValidGeoCode(val) {
+			if routing.ValidGeoIPCode(val) {
 				out = append(out, "GEOIP,"+val+","+target+",no-resolve")
 			}
 		case routing.KindDomainSuffix:
@@ -300,6 +362,18 @@ func applyBridgeDNS(raw *config.RawConfig, dns dnsconfig.Config, listenPort int)
 		raw.DNS.FakeIPFilter = filter
 	}
 	raw.DNS.NameServer = dns.NormalizedServers("1.1.1.1")
+	if direct := dns.NormalizedDirectServers(); len(direct) > 0 {
+		raw.DNS.DirectNameServer = direct
+	}
+}
+
+// applyHosts fills mihomo's top-level hosts table (use-hosts defaults true).
+// It runs outside the DNS appliers because mihomo publishes hosts through its
+// resolver even with the DNS server off - proxy mode included.
+func applyHosts(raw *config.RawConfig, dns dnsconfig.Config) {
+	for k, v := range dns.NormalizedHosts() {
+		raw.Hosts[k] = v
+	}
 }
 
 // gVisor is the only stack that works uniformly across Android/Windows/Linux here.
@@ -339,6 +413,9 @@ func applyTun(raw *config.RawConfig, t *TunInbound) {
 	// mihomo parses tls://, https://, quic://, tcp:// and plain natively.
 	if servers := t.DNS.NormalizedServers(""); len(servers) > 0 {
 		raw.DNS.NameServer = servers
+	}
+	if direct := t.DNS.NormalizedDirectServers(); len(direct) > 0 {
+		raw.DNS.DirectNameServer = direct
 	}
 }
 

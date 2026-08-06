@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	xrayConf "github.com/xtls/xray-core/infra/conf"
+
+	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
 type ruleView struct {
@@ -55,8 +57,7 @@ func TestApply_ProxyAllDefault(t *testing.T) {
 func TestApply_ProxyAll_BlockDirectLocalOrder(t *testing.T) {
 	p := RoutingProfile{
 		Mode:          ModeProxyAll,
-		Block:         []string{"ads.example"},
-		Direct:        []string{"domain:bank.example"},
+		Tiers:         []routing.Tier{{Block: []string{"ads.example"}, Direct: []string{"domain:bank.example"}}},
 		LocalNetworks: true,
 	}
 	cfg, rules := applyTo(t, p, "proxy", false)
@@ -93,7 +94,7 @@ func TestApply_ProxyAll_BlockDirectLocalOrder(t *testing.T) {
 func TestApply_DirectAll_CatchAllIsDirect(t *testing.T) {
 	p := RoutingProfile{
 		Mode:  ModeDirectAll,
-		Proxy: []string{"domain:youtube.com"},
+		Tiers: []routing.Tier{{Proxy: []string{"domain:youtube.com"}}},
 	}
 	cfg, rules := applyTo(t, p, "proxy", false)
 
@@ -121,8 +122,8 @@ func TestApply_DirectAll_CatchAllIsDirect(t *testing.T) {
 
 func TestApply_BalancerTargetAndProcess(t *testing.T) {
 	p := RoutingProfile{
-		Mode:   ModeProxyAll,
-		Direct: []string{"process:Discord.exe"},
+		Mode:  ModeProxyAll,
+		Tiers: []routing.Tier{{Direct: []string{"process:Discord.exe"}}},
 	}
 	_, rules := applyTo(t, p, "vpn", true)
 
@@ -144,7 +145,7 @@ func TestApply_BalancerTargetAndProcess(t *testing.T) {
 func TestApply_ForceProxyInbound(t *testing.T) {
 	p := RoutingProfile{
 		Mode:  ModeDirectAll,
-		Proxy: []string{"process:torrent.exe"},
+		Tiers: []routing.Tier{{Proxy: []string{"process:torrent.exe"}}},
 	}
 	_, rules := applyTo(t, p, "proxy", false)
 
@@ -167,7 +168,7 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 	}
 
 	// No process->proxy -> no forceproxy rule (keeps the common case lean).
-	_, plain := applyTo(t, RoutingProfile{Direct: []string{"process:App.exe"}}, "proxy", false)
+	_, plain := applyTo(t, RoutingProfile{Tiers: []routing.Tier{{Direct: []string{"process:App.exe"}}}}, "proxy", false)
 	for _, r := range plain {
 		for _, tag := range r.InboundTag {
 			if tag == "forceproxy" {
@@ -179,7 +180,7 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 
 func TestApply_DisableIPv6AndUDP(t *testing.T) {
 	p := RoutingProfile{
-		Block:       []string{"ads.example"},
+		Tiers:       []routing.Tier{{Block: []string{"ads.example"}}},
 		DisableIPv6: true,
 		DisableUDP:  true,
 	}
@@ -211,14 +212,93 @@ func TestApply_DisableIPv6AndUDP(t *testing.T) {
 	}
 }
 
+func TestApply_TwoTierOrdering(t *testing.T) {
+	// A more specific rule in an earlier tier must outrank a later tier even
+	// when its outcome (proxy) would lose under the old block->direct->proxy
+	// flattening: vk.ru->proxy (tier 1) wins over the .ru->direct suffix (tier 2).
+	p := RoutingProfile{
+		Mode: ModeProxyAll,
+		Tiers: []routing.Tier{
+			{Proxy: []string{"domain:vk.ru"}},
+			{Direct: []string{"domain:ru"}},
+		},
+	}
+	cfg, rules := applyTo(t, p, "proxy", false)
+
+	proxyIdx, directIdx := -1, -1
+	for i, r := range rules {
+		for _, d := range r.Domain {
+			if d == "domain:vk.ru" && r.OutboundTag == "proxy" {
+				proxyIdx = i
+			}
+			if d == "domain:ru" && r.OutboundTag == directTag {
+				directIdx = i
+			}
+		}
+	}
+	if proxyIdx == -1 || directIdx == -1 {
+		t.Fatalf("missing tier rules: %+v", rules)
+	}
+	if proxyIdx >= directIdx {
+		t.Errorf("tier 1 proxy rule (%d) must precede tier 2 direct rule (%d)", proxyIdx, directIdx)
+	}
+	last := rules[len(rules)-1]
+	if len(last.InboundTag) == 0 || last.InboundTag[0] != "tun2socks" {
+		t.Errorf("catch-all must stay last: %+v", last)
+	}
+	if _, err := cfg.Build(); err != nil {
+		t.Fatalf("xray rejected tiered routing: %v", err)
+	}
+}
+
+func TestNormalizeDomainStrategy(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+		ok   bool
+	}{
+		{"", "", true},
+		{"asis", "AsIs", true},
+		{"AsIs", "AsIs", true},
+		{"IPIfNonMatch", "IPIfNonMatch", true},
+		{" ipondemand ", "IPOnDemand", true},
+		{"useip", "", false},
+		{"bogus", "", false},
+	}
+	for _, c := range cases {
+		got, ok := NormalizeDomainStrategy(c.in)
+		if got != c.want || ok != c.ok {
+			t.Errorf("NormalizeDomainStrategy(%q) = (%q,%v), want (%q,%v)", c.in, got, ok, c.want, c.ok)
+		}
+	}
+}
+
+func TestApply_DomainStrategy(t *testing.T) {
+	cfg, _ := applyTo(t, RoutingProfile{DomainStrategy: "IPIfNonMatch"}, "proxy", false)
+	if cfg.RouterConfig.DomainStrategy == nil || *cfg.RouterConfig.DomainStrategy != "IPIfNonMatch" {
+		t.Fatalf("DomainStrategy = %v, want IPIfNonMatch", cfg.RouterConfig.DomainStrategy)
+	}
+	if _, err := cfg.Build(); err != nil {
+		t.Fatalf("xray rejected domainStrategy config: %v", err)
+	}
+
+	// Unset keeps the router config byte-identical (nil -> engine default AsIs).
+	cfg, _ = applyTo(t, RoutingProfile{}, "proxy", false)
+	if cfg.RouterConfig.DomainStrategy != nil {
+		t.Fatalf("empty profile must leave DomainStrategy nil, got %q", *cfg.RouterConfig.DomainStrategy)
+	}
+}
+
 func TestMatcherRules_Classification(t *testing.T) {
 	p := RoutingProfile{
 		Mode: ModeProxyAll,
-		Direct: []string{
+		Tiers: []routing.Tier{{Direct: []string{
 			"geosite:category-ru", "geoip:ru", "domain:рф", "full:exact.example",
 			"keyword:ads", "regexp:.*\\.cn$", "48.123.243.123", "10.0.0.0/8",
-			"geoip:рф", // invalid geo code -> dropped
-		},
+			"geosite:geolocation-!cn", "geosite:cn@ads", "geoip:!ru",
+			"domain:.ru.", // zone dots stripped -> domain:ru
+			"geoip:рф",    // invalid geo code -> dropped
+		}}},
 	}
 	_, rules := applyTo(t, p, "proxy", false)
 
@@ -232,6 +312,8 @@ func TestMatcherRules_Classification(t *testing.T) {
 	wantDomain := map[string]bool{
 		"geosite:category-ru": true, "domain:рф": true,
 		"full:exact.example": true, "ads": true, "regexp:.*\\.cn$": true,
+		"geosite:geolocation-!cn": true, "geosite:cn@ads": true,
+		"domain:ru": true,
 	}
 	for _, d := range domains {
 		if !wantDomain[d] {
@@ -242,13 +324,16 @@ func TestMatcherRules_Classification(t *testing.T) {
 	if len(wantDomain) != 0 {
 		t.Errorf("missing domain matchers: %v", wantDomain)
 	}
-	wantIP := map[string]bool{"geoip:ru": true, "48.123.243.123": true, "10.0.0.0/8": true}
+	wantIP := map[string]bool{
+		"geoip:ru": true, "48.123.243.123": true, "10.0.0.0/8": true,
+		"geoip:!ru": true,
+	}
 	for _, ip := range ips {
 		if !wantIP[ip] {
 			t.Errorf("unexpected ip matcher %q (geoip:рф must be dropped)", ip)
 		}
 	}
-	if len(ips) != 3 {
-		t.Errorf("want 3 ip matchers (geoip:рф dropped), got %v", ips)
+	if len(ips) != 4 {
+		t.Errorf("want 4 ip matchers (geoip:рф dropped), got %v", ips)
 	}
 }

@@ -39,6 +39,55 @@ func TestNormalizedServersFallback(t *testing.T) {
 	}
 }
 
+func TestNormalizedDirectServers(t *testing.T) {
+	c := Config{DirectServers: []string{" 77.88.8.8 ", "", "https://dns.local/q"}}
+	ds := c.NormalizedDirectServers()
+	if len(ds) != 2 || ds[0] != "77.88.8.8" || ds[1] != "https://dns.local/q" {
+		t.Fatalf("direct servers = %v", ds)
+	}
+	if got := (Config{}).NormalizedDirectServers(); len(got) != 0 {
+		t.Fatalf("empty direct = %v", got)
+	}
+}
+
+// One bad value must cost the caller that value, not the connect: mihomo fails
+// the whole config on a value it cannot parse, and xray drops the whole table.
+func TestNormalizedHosts(t *testing.T) {
+	hosts := Config{Hosts: map[string][]string{
+		" doh.example ":   {" 1.2.3.4 ", ""},
+		"":                {"5.6.7.8"},
+		"empty.example":   {" ", ""},
+		"pair.example":    {"1.1.1.1", "not-an-ip", "2.2.2.2"},
+		"alias.example":   {"target.example"},
+		"lan.example":     {"lan"},
+		"garbage.example": {"a b/c"},
+	}}.NormalizedHosts()
+
+	want := map[string][]string{
+		"doh.example":   {"1.2.3.4"},
+		"pair.example":  {"1.1.1.1", "2.2.2.2"}, // multi-value keeps IPs only
+		"alias.example": {"target.example"},     // single value may be a name
+		"lan.example":   {"lan"},                // mihomo's own special value
+	}
+	if len(hosts) != len(want) {
+		t.Fatalf("hosts = %v, want %v", hosts, want)
+	}
+	for k, vals := range want {
+		got := hosts[k]
+		if len(got) != len(vals) {
+			t.Fatalf("hosts[%q] = %v, want %v", k, got, vals)
+		}
+		for i := range vals {
+			if got[i] != vals[i] {
+				t.Fatalf("hosts[%q] = %v, want %v", k, got, vals)
+			}
+		}
+	}
+	if got := (Config{}).NormalizedHosts(); len(got) != 0 {
+		t.Fatalf("empty hosts = %v", got)
+	}
+}
+
 func TestFakeIP(t *testing.T) {
 	if !(Config{Mode: "fake-ip"}).FakeIP() {
 		t.Fatal("fake-ip not detected")

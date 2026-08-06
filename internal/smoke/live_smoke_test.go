@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
+	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 )
 
 // Links stay outside the repo - never commit them.
@@ -33,6 +34,51 @@ func readLiveLinks(t *testing.T) []string {
 		t.Fatal("links file is empty")
 	}
 	return links
+}
+
+// The loopback split test can only read xray's server-selection log, because
+// on Windows the direct outbound binds the physical NIC and never reaches a
+// 127.0.0.1 stub. Against a real exit the resolvers are reachable, so this one
+// also proves the direct-routed name actually resolves and connects.
+func TestLive_DirectServersResolveDirectNames(t *testing.T) {
+	const (
+		directResolver  = "77.88.8.8" // answers the direct-routed name
+		generalResolver = "1.1.1.1"   // everything else
+		directName      = "ya.ru"
+	)
+	links := readLiveLinks(t)
+	core.Initialize()
+	ev := captureEvents(t)
+	core.ApplyStatusVerbosity(2)
+	t.Cleanup(func() { core.ApplyStatusVerbosity(-1) })
+
+	proxyPort := startProxyEngineDNS(t, strings.Join(links, "\n"), map[string]string{
+		"directRules": "domain:" + directName,
+		"disableIPv6": "1",
+	}, &dnsconfig.Config{
+		Mode:          dnsconfig.ModeFakeIP,
+		Servers:       []string{generalResolver},
+		DirectServers: []string{directResolver},
+	})
+	ev.waitFor(t, core.EngineConnected, 30*time.Second)
+
+	if status, err := socksConnect(proxyPort, directName, 80); err != nil {
+		t.Fatalf("direct-routed request (socks status %d): %v", status, err)
+	}
+
+	queriedVia := func(resolver string) func(string) bool {
+		return func(msg string) bool {
+			return strings.Contains(msg, "querying DNS for: "+directName) &&
+				strings.Contains(msg, resolver)
+		}
+	}
+	if ev.waitForLog(t, queriedVia(directResolver), 20*time.Second) == "" {
+		t.Fatalf("%s was not resolved through the direct resolver %s", directName, directResolver)
+	}
+	// A fallback to the general resolver would mean the direct one never answered.
+	if ev.waitForLog(t, queriedVia(generalResolver), time.Second) != "" {
+		t.Fatalf("%s also went to the general resolver %s", directName, generalResolver)
+	}
 }
 
 func TestLive_ServerAndIPEvents(t *testing.T) {
