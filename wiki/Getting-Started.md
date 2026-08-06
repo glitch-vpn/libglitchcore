@@ -15,7 +15,7 @@ ffi/
   libglitchcore.h
 ```
 
-Or build them yourself — see [Engine Compositions](Engine-Compositions.md) if
+Or build them yourself — see [Engine Compositions](Engine-Compositions) if
 you do not need all three engines.
 
 How you load the library is up to you:
@@ -101,7 +101,7 @@ itself without reconnecting.
 
 geoip.dat and geosite.dat are not bundled and never downloaded. Ship or fetch
 them yourself and pass the directory as `opts.geoAssetsDir` (absolute path).
-Details and failure modes: [Bottlenecks](Bottlenecks.md#geo-databases).
+Details and failure modes: [Bottlenecks](Bottlenecks#geo-databases).
 
 ## Windows without UAC prompts
 

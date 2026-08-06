@@ -19,11 +19,11 @@ is one consumer, not the only shape.
 
 ## Pages
 
-* **[Getting Started](Getting-Started.md)** — start a tunnel, read events, stop it.
-* **[Engine Compositions](Engine-Compositions.md)** — ship only the engines you
+* **[Getting Started](Getting-Started)** — start a tunnel, read events, stop it.
+* **[Engine Compositions](Engine-Compositions)** — ship only the engines you
   need; sizes and licence consequences.
-* **[Bottlenecks](Bottlenecks.md)** — what this does not do, and the sharp edges
+* **[Bottlenecks](Bottlenecks)** — what this does not do, and the sharp edges
   worth knowing before you design around them.
-* **[Benchmarks](Benchmarks.md)** — measured binary sizes, memory and start time.
-* **[For Maintainers](For-Maintainers.md)** — development environment, gates,
+* **[Benchmarks](Benchmarks)** — measured binary sizes, memory and start time.
+* **[For Maintainers](For-Maintainers)** — development environment, gates,
   release flow, how we work with LLM assistance.

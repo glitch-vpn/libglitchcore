@@ -20,11 +20,11 @@ wraps this with the platform glue already done.
 
 ## Documentation
 
-* **[Getting Started](wiki/Getting-Started.md)** — start a tunnel, read events, stop it
-* **[Engine Compositions](wiki/Engine-Compositions.md)** — pick your engines, see what each costs
-* **[Bottlenecks](wiki/Bottlenecks.md)** — the limits and sharp edges, stated plainly
-* **[Benchmarks](wiki/Benchmarks.md)** — size, memory and start time, with the method
-* **[For Maintainers](wiki/For-Maintainers.md)** — environment, gates, releases
+* **[Getting Started](https://github.com/glitch-vpn/libglitchcore/wiki/Getting-Started)** — start a tunnel, read events, stop it
+* **[Engine Compositions](https://github.com/glitch-vpn/libglitchcore/wiki/Engine-Compositions)** — pick your engines, see what each costs
+* **[Bottlenecks](https://github.com/glitch-vpn/libglitchcore/wiki/Bottlenecks)** — the limits and sharp edges, stated plainly
+* **[Benchmarks](https://github.com/glitch-vpn/libglitchcore/wiki/Benchmarks)** — size, memory and start time, with the method
+* **[For Maintainers](https://github.com/glitch-vpn/libglitchcore/wiki/For-Maintainers)** — environment, gates, releases
 
 ## Contributing
 
@@ -35,7 +35,7 @@ a leak rather than a bug report.
 Everything runs locally: `CGO_ENABLED=0 go test -tags=with_gvisor ./internal/...`
 needs neither Docker nor cgo, and the loopback smoke suite exercises a real
 engine without a TUN, admin rights or an external server. What we ask of a
-change is in [For Maintainers](wiki/For-Maintainers.md) — including how we work
+change is in [For Maintainers](https://github.com/glitch-vpn/libglitchcore/wiki/For-Maintainers) — including how we work
 with LLM assistance, which we do openly and hold to the same gate.
 
 ## Telemetry

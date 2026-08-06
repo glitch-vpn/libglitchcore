@@ -1,11 +1,11 @@
 ### libglitchcore
 
-* [Home](Home.md)
-* [Getting Started](Getting-Started.md)
-* [Engine Compositions](Engine-Compositions.md)
-* [Bottlenecks](Bottlenecks.md)
-* [Benchmarks](Benchmarks.md)
-* [For Maintainers](For-Maintainers.md)
+* [Home](Home)
+* [Getting Started](Getting-Started)
+* [Engine Compositions](Engine-Compositions)
+* [Bottlenecks](Bottlenecks)
+* [Benchmarks](Benchmarks)
+* [For Maintainers](For-Maintainers)
 
 ---
 

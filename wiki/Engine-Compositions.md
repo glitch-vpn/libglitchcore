@@ -27,7 +27,7 @@ Windows `amd64` c-shared DLL, `-s -w`, `with_gvisor`:
 | mihomo | 40.8 MB |
 | xray + awg + mihomo | 59.8 MB |
 
-More numbers, and how they were taken: [Benchmarks](Benchmarks.md).
+More numbers, and how they were taken: [Benchmarks](Benchmarks).
 
 ## Consequences of the choice
 
