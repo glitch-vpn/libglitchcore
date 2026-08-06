@@ -1,0 +1,52 @@
+name: Wiki
+
+# The repository is the source of truth: wiki/ is mirrored into the wiki repo,
+# so a page edited in the web UI is overwritten on the next push here.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'wiki/**'
+      - '.github/workflows/wiki.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: publish wiki/
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Mirror wiki/ into the wiki repo
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # The wiki repo only exists once a first page has been created in the
+          # GitHub UI; git cannot bring it into being.
+          if ! git clone --depth 1 \
+              "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git" wiki-repo; then
+            echo "::error::No wiki repository. Open the repo's Wiki tab, create any page once, then re-run."
+            exit 1
+          fi
+
+          find wiki-repo -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -R wiki/. wiki-repo/
+
+          cd wiki-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "wiki already matches ${GITHUB_SHA}"
+            exit 0
+          fi
+          git commit -m "docs: sync wiki from ${GITHUB_SHA:0:7}"
+          git push
