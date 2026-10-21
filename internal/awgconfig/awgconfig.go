@@ -1,4 +1,4 @@
-// Package awgconfig parses AmneziaWG/WireGuard INI into UAPI (additive: 1.x + 2.0 fields).
+// Package awgconfig parses AmneziaWG/WireGuard INI into UAPI (WireGuard, AWG 1.0, 2.0 and 3.x fields).
 package awgconfig
 
 import (
@@ -7,8 +7,10 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 )
 
 // LinkScheme prefixes the AmneziaWG share-link format: awg://<base64url(INI)>[#name].
@@ -72,9 +74,9 @@ func DecodeBase64Flexible(s string) (string, error) {
 	return "", fmt.Errorf("not valid base64")
 }
 
-// normalizeKeyToHex normalizes a WireGuard key from base64 or hex into the
-// lowercase 64-char hex (32 bytes) UAPI expects.
-func normalizeKeyToHex(s string) (string, error) {
+// KeyBytes decodes a WireGuard-style key from base64 or hex, and refuses
+// anything but exactly 32 bytes.
+func KeyBytes(s string) ([]byte, error) {
 	s = strings.TrimSpace(s)
 	s = strings.TrimPrefix(s, "hex:")
 	s = strings.TrimPrefix(s, "0x")
@@ -87,11 +89,10 @@ func normalizeKeyToHex(s string) (string, error) {
 		}
 	}
 	if isHex && len(s)%2 == 0 {
-		out := strings.ToLower(s)
-		if len(out) != 64 {
-			return "", fmt.Errorf("expected 32-byte hex key, got %d hex chars", len(out))
+		if len(s) != 64 {
+			return nil, fmt.Errorf("expected 32-byte hex key, got %d hex chars", len(s))
 		}
-		return out, nil
+		return hex.DecodeString(s)
 	}
 
 	var b []byte
@@ -99,14 +100,113 @@ func normalizeKeyToHex(s string) (string, error) {
 	if b, err = base64.StdEncoding.DecodeString(s); err != nil {
 		if b, err = base64.RawStdEncoding.DecodeString(s); err != nil {
 			if b, err = base64.RawURLEncoding.DecodeString(s); err != nil {
-				return "", fmt.Errorf("key is neither hex nor base64: %w", err)
+				return nil, fmt.Errorf("key is neither hex nor base64: %w", err)
 			}
 		}
 	}
 	if len(b) != 32 {
-		return "", fmt.Errorf("expected 32-byte key, got %d bytes", len(b))
+		return nil, fmt.Errorf("expected 32-byte key, got %d bytes", len(b))
+	}
+	return b, nil
+}
+
+// normalizeKeyToHex gives a key as the lowercase 64-char hex UAPI expects.
+func normalizeKeyToHex(s string) (string, error) {
+	b, err := KeyBytes(s)
+	if err != nil {
+		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// AWG15Keys are AWG 1.5's extra junk packets, lowercased, which amneziawg-go
+// 2.0 and later refuse; dropping them would weaken the obfuscation unannounced.
+var AWG15Keys = []string{"j1", "j2", "j3", "itime"}
+
+// AWG3Keys maps the [Interface] keys only AWG 3.x reads, lowercased, to their
+// UAPI names.
+var AWG3Keys = map[string]string{
+	"headerprotectionkey":    "header_protection_key",
+	"contentpaddingaddition": "content_padding_addition",
+	"rekeyaftertime":         "rekey_after_time",
+	"rekeytimeout":           "rekey_timeout",
+	"rejectaftertime":        "reject_after_time",
+	"keepalivetimeout":       "keepalive_timeout",
+	"maxhandshakeattempts":   "max_handshake_attempts",
+	"randomtrailers":         "random_trailers",
+	"disablecookies":         "disable_cookies",
+}
+
+// deviceKeys maps every [Interface] key amneziawg-go reads, lowercased, to
+// its UAPI name.
+var deviceKeys = func() map[string]string {
+	keys := map[string]string{}
+	for _, k := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4",
+		"h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5"} {
+		keys[k] = k
+	}
+	for k, uapi := range AWG3Keys {
+		keys[k] = uapi
+	}
+	return keys
+}()
+
+// ParseBool reads an AWG boolean the way amneziawg-tools does: on/off or a
+// number, plus true/false.
+func ParseBool(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "on", "true":
+		return true, nil
+	case "off", "false":
+		return false, nil
+	}
+	n, err := strconv.ParseUint(strings.TrimSpace(v), 10, 32)
+	if err != nil {
+		return false, fmt.Errorf("%q is neither on/off nor a number", v)
+	}
+	return n != 0, nil
+}
+
+// CheckRange accepts what amneziawg-go's UintRange reads: "lo" or "lo-hi",
+// both unsigned 32-bit, lo <= hi.
+func CheckRange(v string) error {
+	lo, hi, isRange := strings.Cut(v, "-")
+	low, err := strconv.ParseUint(lo, 10, 32)
+	if err != nil {
+		return fmt.Errorf("%q is not a number or a lo-hi range", v)
+	}
+	if isRange {
+		high, err := strconv.ParseUint(hi, 10, 32)
+		if err != nil || high < low {
+			return fmt.Errorf("%q is not a number or a lo-hi range", v)
+		}
+	}
+	return nil
+}
+
+// AWG3Value checks an AWG 3.x [Interface] value and gives it in UAPI form.
+func AWG3Value(key, val string) (string, error) {
+	switch key {
+	case "headerprotectionkey":
+		return normalizeKeyToHex(val)
+	case "randomtrailers", "disablecookies":
+		b, err := ParseBool(val)
+		return strconv.FormatBool(b), err
+	}
+	return val, CheckRange(val)
+}
+
+func deviceValue(key, val string) (string, error) {
+	if _, ok := AWG3Keys[key]; ok {
+		return AWG3Value(key, val)
+	}
+	return val, nil
+}
+
+// hasControl reports a control character other than tab. UAPI is line-based,
+// and the device quotes a line it cannot read in its error.
+func hasControl(s string) bool {
+	return strings.ContainsFunc(s, func(r rune) bool { return r != '\t' && unicode.IsControl(r) })
 }
 
 // ParseToUAPI converts an INI AmneziaWG config into UAPI "set" format.
@@ -127,22 +227,6 @@ func ParseToUAPI(cfg string) (string, error) {
 		section      string
 		deviceExtras []string
 	)
-
-	isAllowedDeviceKey := func(k string) bool {
-		switch k {
-		case "jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4", "itime":
-			return true
-		}
-		if len(k) == 2 {
-			switch k[0] {
-			case 'i':
-				return k[1] >= '1' && k[1] <= '5'
-			case 'j':
-				return k[1] >= '1' && k[1] <= '3'
-			}
-		}
-		return false
-	}
 
 	for _, rawLine := range strings.Split(cfg, "\n") {
 		line := strings.TrimSpace(rawLine)
@@ -171,6 +255,9 @@ func ParseToUAPI(cfg string) (string, error) {
 		}
 		key := strings.ToLower(strings.TrimSpace(kv[0]))
 		val := strings.TrimSpace(kv[1])
+		if hasControl(val) {
+			return "", fmt.Errorf("%s.%s: the value holds a control character", section, key)
+		}
 
 		switch section {
 		case "interface":
@@ -184,8 +271,15 @@ func ParseToUAPI(cfg string) (string, error) {
 			case "listenport":
 				deviceListen = val
 			default:
-				if isAllowedDeviceKey(key) {
-					deviceExtras = append(deviceExtras, key+"="+val)
+				if slices.Contains(AWG15Keys, key) {
+					return "", fmt.Errorf("interface.%s: AmneziaWG 1.5 keys J1-J3 and Itime are not supported", key)
+				}
+				if uapiKey, ok := deviceKeys[key]; ok {
+					v, err := deviceValue(key, val)
+					if err != nil {
+						return "", fmt.Errorf("interface.%s: %w", uapiKey, err)
+					}
+					deviceExtras = append(deviceExtras, uapiKey+"="+v)
 				}
 			}
 
@@ -209,7 +303,10 @@ func ParseToUAPI(cfg string) (string, error) {
 			case "endpoint":
 				curPeer.endpoint = val
 			case "persistentkeepalive", "persistent_keepalive":
-				curPeer.keepalive = val
+				// AWG 3.x takes a range ("22-30") as well as one interval.
+				if !strings.EqualFold(val, "off") {
+					curPeer.keepalive = val
+				}
 			case "allowedips":
 				for _, ip := range strings.Split(val, ",") {
 					ip = strings.TrimSpace(ip)

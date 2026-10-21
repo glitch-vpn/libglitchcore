@@ -280,6 +280,121 @@ PersistentKeepalive = 25`
 	}
 }
 
+const awg3INI = `[Interface]
+PrivateKey = UqX1+GfjpHXk0TC7KI4s11YRL3WKJudP0ebnvmVu4aY=
+Address = 10.10.0.51/32
+Jc = 4
+S1 = 15
+S2 = 18
+S3 = 20
+S4 = 23
+H1 = 100-200
+H2 = 300-400
+H3 = 500-600
+H4 = 700-800
+HeaderProtectionKey = 13BhOBYHDAUF1VgW2f3cb4dXGHSSSCwSk5YeuSP6OSU=
+ContentPaddingAddition = 0-64
+MaxHandshakeAttempts = 15-20
+RandomTrailers = on
+DisableCookies = 0
+
+[Peer]
+PublicKey = ys6ln6BOSOotjcRKGYel/HW/HQ65w+bAg8ac9VVtLWo=
+AllowedIPs = 0.0.0.0/0, ::/0
+Endpoint = 203.0.113.9:51820
+PersistentKeepalive = 22-30`
+
+// An AWG 3.x config runs on mihomo's 3.x device, picked by version 3.
+func TestBuildConfig_AmneziaWG3(t *testing.T) {
+	if _, err := BuildConfig([]string{awg3INI}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{}); err != nil {
+		t.Fatalf("BuildConfig(awg3): %v", err)
+	}
+	proxy, err := ProxyMapFromLink(awg3INI)
+	if err != nil {
+		t.Fatalf("ProxyMapFromLink(awg3): %v", err)
+	}
+	opt, _ := proxy["amnezia-wg-option"].(map[string]any)
+	want := map[string]any{
+		"version":                  3,
+		"s4":                       23,
+		"header-protection-key":    "13BhOBYHDAUF1VgW2f3cb4dXGHSSSCwSk5YeuSP6OSU=",
+		"content-padding-addition": "0-64",
+		"max-handshake-attempts":   "15-20",
+		"random-trailers":          true,
+		"disable-cookies":          false,
+	}
+	for k, v := range want {
+		if opt[k] != v {
+			t.Errorf("amnezia-wg-option[%s] = %v, want %v", k, opt[k], v)
+		}
+	}
+	if proxy["persistent-keepalive"] != 22 {
+		t.Errorf("persistent-keepalive = %v, want 22, the range's shortest", proxy["persistent-keepalive"])
+	}
+
+	mixed := strings.Replace(awg3INI, "S4 = 23", "S4 = 23\nItime = 12", 1)
+	if _, err := ProxyMapFromLink(mixed); err == nil {
+		t.Error("AWG 3.x keys beside AWG 1.5's Itime: want an error")
+	}
+
+	hexKey := strings.Replace(awg3INI, "13BhOBYHDAUF1VgW2f3cb4dXGHSSSCwSk5YeuSP6OSU=",
+		"d770613816070c0505d55816d9fddc6f8757187492482c1293961eb923fa3925", 1)
+	proxy, err = ProxyMapFromLink(hexKey)
+	if err != nil {
+		t.Fatalf("ProxyMapFromLink(hex header key): %v", err)
+	}
+	if got := proxy["amnezia-wg-option"].(map[string]any)["header-protection-key"]; got != "13BhOBYHDAUF1VgW2f3cb4dXGHSSSCwSk5YeuSP6OSU=" {
+		t.Errorf("a hex header key reaches mihomo as %v, want padded standard base64", got)
+	}
+}
+
+// A value mihomo could not read must fail the config, never drop out of it:
+// a lost padding or junk count weakens the obfuscation unannounced.
+func TestBuildConfig_AmneziaWGRefusesUnreadableValues(t *testing.T) {
+	for name, edit := range map[string][2]string{
+		"word count":         {"Jc = 4", "Jc = four"},
+		"inline comment":     {"S1 = 15", "S1 = 15 # pad"},
+		"range padding":      {"S4 = 23", "S4 = 20-30"},
+		"short header key":   {"13BhOBYHDAUF1VgW2f3cb4dXGHSSSCwSk5YeuSP6OSU=", "c2hvcnQ="},
+		"reversed range":     {"MaxHandshakeAttempts = 15-20", "MaxHandshakeAttempts = 20-15"},
+		"word padding range": {"ContentPaddingAddition = 0-64", "ContentPaddingAddition = some"},
+	} {
+		cfg := strings.Replace(awg3INI, edit[0], edit[1], 1)
+		if proxy, err := ProxyMapFromLink(cfg); err == nil {
+			t.Errorf("%s: want an error, got %v", name, proxy["amnezia-wg-option"])
+		}
+	}
+
+	legacyItime := "[Interface]\nPrivateKey = UqX1+GfjpHXk0TC7KI4s11YRL3WKJudP0ebnvmVu4aY=\nAddress = 10.10.0.51/32\nItime = soon\n\n" +
+		"[Peer]\nPublicKey = ys6ln6BOSOotjcRKGYel/HW/HQ65w+bAg8ac9VVtLWo=\nEndpoint = 203.0.113.9:51820"
+	if _, err := ProxyMapFromLink(legacyItime); err == nil {
+		t.Error("Itime = soon: want an error")
+	}
+}
+
+// Without a 3.x key a config stays on mihomo's legacy device, AWG 1.5 keys included.
+func TestBuildConfig_AmneziaWG15StaysLegacy(t *testing.T) {
+	const ini = `[Interface]
+PrivateKey = UqX1+GfjpHXk0TC7KI4s11YRL3WKJudP0ebnvmVu4aY=
+Address = 10.10.0.51/32
+Jc = 4
+J1 = <r 16>
+Itime = 12
+
+[Peer]
+PublicKey = ys6ln6BOSOotjcRKGYel/HW/HQ65w+bAg8ac9VVtLWo=
+Endpoint = 203.0.113.9:51820`
+
+	proxy, err := ProxyMapFromLink(ini)
+	if err != nil {
+		t.Fatalf("ProxyMapFromLink(awg 1.5): %v", err)
+	}
+	opt, _ := proxy["amnezia-wg-option"].(map[string]any)
+	if _, ok := opt["version"]; ok || opt["j1"] != "<r 16>" || opt["itime"] != 12 {
+		t.Fatalf("amnezia-wg-option = %v, want legacy with j1 and itime", opt)
+	}
+}
+
 func TestBuildConfig_MixedVlessAndAwg(t *testing.T) {
 	const awgINI = `[Interface]
 PrivateKey = yAnz5TF+lXXJte14tji3zlMNq+hd2rYUIgJBgB3fBmk=

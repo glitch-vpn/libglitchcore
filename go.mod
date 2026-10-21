@@ -4,11 +4,12 @@ go 1.26.3
 
 require (
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/amnezia-vpn/amneziawg-go v0.2.15
+	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
 	github.com/metacubex/mihomo v1.19.32
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 	github.com/xtls/xray-core v1.260327.0
 	go.uber.org/zap v1.28.0
+	golang.org/x/crypto v0.53.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.46.0
 	golang.zx2c4.com/wireguard/windows v0.5.3
@@ -146,7 +147,6 @@ require (
 	github.com/tailscale/go-winio v0.0.0-20231025203758-c4f33415bf55 // indirect
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a // indirect
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
-	github.com/tevino/abool v1.2.0 // indirect
 	github.com/u-root/uio v0.0.0-20230220225925-ffce2a382923 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/vishvananda/netlink v1.3.1 // indirect
@@ -163,7 +163,6 @@ require (
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
-	golang.org/x/crypto v0.53.0 // indirect
 	golang.org/x/exp v0.0.0-20260611194520-c48552f49976 // indirect
 	golang.org/x/mod v0.37.0 // indirect
 	golang.org/x/sync v0.21.0 // indirect

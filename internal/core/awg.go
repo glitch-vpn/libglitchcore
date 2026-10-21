@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/amnezia-vpn/amneziawg-go/device"
+	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/liveness"

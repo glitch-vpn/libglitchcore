@@ -928,27 +928,107 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 	if mtu, err := strconv.Atoi(iface["mtu"]); err == nil && mtu > 0 {
 		p["mtu"] = mtu
 	}
-	if ka, err := strconv.Atoi(peer["persistentkeepalive"]); err == nil && ka > 0 {
+	// mihomo takes one interval; of an AWG 3.x range it gets the shortest,
+	// which keeps a NAT mapping alive as well as any value in the range.
+	keepalive, _, _ := strings.Cut(peer["persistentkeepalive"], "-")
+	if ka, err := strconv.Atoi(strings.TrimSpace(keepalive)); err == nil && ka > 0 {
 		p["persistent-keepalive"] = ka
 	}
 
-	awgOpt := map[string]any{}
-	for _, k := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "itime"} {
-		if v, err := strconv.Atoi(iface[k]); err == nil && iface[k] != "" {
-			awgOpt[k] = v
-		}
-	}
-	// String params: h1-h4 accept AWG 2.0 ranges, i1-i5/j1-j3 carry blobs.
-	for _, k := range []string{"h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3"} {
-		if v := iface[k]; v != "" {
-			awgOpt[k] = v
-		}
+	awgOpt, err := amneziaOption(iface)
+	if err != nil {
+		return nil, err
 	}
 	if len(awgOpt) > 0 {
 		p["amnezia-wg-option"] = awgOpt
 	}
 
 	return p, nil
+}
+
+// awgInt reads a whole-number AWG option. A value that is not one fails the
+// config: dropping it would weaken the obfuscation unannounced.
+func awgInt(iface map[string]string, key string) (int, bool, error) {
+	v := iface[key]
+	if v == "" {
+		return 0, false, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, false, fmt.Errorf("awg %s: %q is not a whole number", key, v)
+	}
+	return n, true, nil
+}
+
+// amneziaOption builds mihomo's amnezia-wg-option. A config holding any AWG
+// 3.x key runs on mihomo's 3.x device (version 3), which refuses AWG 1.5's
+// J1-J3 and Itime; every other config stays on its legacy device.
+func amneziaOption(iface map[string]string) (map[string]any, error) {
+	opt := map[string]any{}
+	for _, k := range []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4"} {
+		n, ok, err := awgInt(iface, k)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			opt[k] = n
+		}
+	}
+	// h1-h4 accept AWG 2.0 ranges, i1-i5 carry tag chains.
+	for _, k := range []string{"h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5"} {
+		if v := iface[k]; v != "" {
+			opt[k] = v
+		}
+	}
+
+	awg3 := false
+	for k, uapiName := range awgconfig.AWG3Keys {
+		v := iface[k]
+		if v == "" {
+			continue
+		}
+		awg3 = true
+		name := strings.ReplaceAll(uapiName, "_", "-")
+		if _, err := awgconfig.AWG3Value(k, v); err != nil {
+			return nil, fmt.Errorf("awg %s: %w", name, err)
+		}
+		switch k {
+		case "headerprotectionkey":
+			// mihomo decodes this one as padded standard base64.
+			key, _ := awgconfig.KeyBytes(v)
+			opt[name] = base64.StdEncoding.EncodeToString(key)
+		case "randomtrailers", "disablecookies":
+			opt[name], _ = awgconfig.ParseBool(v)
+		default:
+			opt[name] = v
+		}
+	}
+
+	if awg3 {
+		for _, k := range awgconfig.AWG15Keys {
+			if iface[k] != "" {
+				return nil, fmt.Errorf("awg: AWG 3.x keys cannot be combined with AWG 1.5's %s", k)
+			}
+		}
+		opt["version"] = 3
+		return opt, nil
+	}
+	for _, k := range awgconfig.AWG15Keys {
+		if k == "itime" {
+			n, ok, err := awgInt(iface, k)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				opt[k] = n
+			}
+			continue
+		}
+		if v := iface[k]; v != "" {
+			opt[k] = v
+		}
+	}
+	return opt, nil
 }
 
 func parseINI(ini string) map[string]map[string]string {

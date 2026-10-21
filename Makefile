@@ -80,7 +80,7 @@ ffi:
 	cd /app
 	go mod tidy
 	XRAY_VER=$$(go list -m -f '{{.Version}}' github.com/xtls/xray-core 2>/dev/null || echo unknown)
-	AWG_VER=$$(go list -m -f '{{.Version}}' github.com/amnezia-vpn/amneziawg-go 2>/dev/null || echo unknown)
+	AWG_VER=$$(go list -m -f '{{.Version}}' github.com/amnezia-vpn/amneziawg-go/v3 2>/dev/null || echo unknown)
 	MIHOMO_VER=$$(go list -m -f '{{.Version}}' github.com/metacubex/mihomo 2>/dev/null || echo unknown)
 	LDFLAGS="-s -w -X main.builtXrayCoreVersion=$$XRAY_VER -X main.builtAmneziawgVersion=$$AWG_VER -X main.builtMihomoVersion=$$MIHOMO_VER"
 	ANDROID_LDFLAGS="$$LDFLAGS -extldflags \"-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384\""

@@ -8,11 +8,11 @@ the product are yours.
 
 Three engines are compiled in and one runs at a time: **Xray** (VLESS, VMess,
 Trojan, Shadowsocks with Reality/XTLS/uTLS), **AmneziaWG** (WireGuard with
-obfuscation, AWG 2.0) and **mihomo** (Hysteria2, TUIC, AnyTLS, WireGuard/AWG
-outbound). Targets are Android (arm64, x86_64), Windows (amd64) and Linux
-(amd64), behind a plain C ABI — so it binds from Dart, Kotlin, Swift, C# or
-anything else with an FFI. Ship only the engines you need: an awg-only build
-is 11 MB against 60 MB for all three.
+obfuscation, AWG 1.0, 2.0 and 3.x) and **mihomo** (Hysteria2, TUIC, AnyTLS,
+WireGuard/AWG outbound). Targets are Android (arm64, x86_64), Windows (amd64)
+and Linux (amd64), behind a plain C ABI — so it binds from Dart, Kotlin, Swift,
+C# or anything else with an FFI. Ship only the engines you need: an awg-only
+build is 11 MB against 60 MB for all three.
 
 Building a Flutter app? The
 [glitch_vpn_core plugin](https://github.com/glitch-vpn/glitch_vpn_core_plugin)
