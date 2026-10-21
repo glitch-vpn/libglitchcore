@@ -70,3 +70,44 @@ func TestStream_PinnedCertificateReachesVLESSAndTrojan(t *testing.T) {
 		})
 	}
 }
+
+func TestStream_UnmappedTransportOrSecurityIsRefused(t *testing.T) {
+	cases := map[string]string{
+		"vless_kcp":         testVLESSLink + "type=kcp",
+		"vless_h2":          testVLESSLink + "type=h2&security=tls",
+		"vless_http":        testVLESSLink + "type=http&security=tls",
+		"vless_quic":        testVLESSLink + "type=quic&security=tls",
+		"vless_unknown":     testVLESSLink + "type=meek",
+		"vless_tcp_header":  testVLESSLink + "type=tcp&headerType=http",
+		"vless_security":    testVLESSLink + "security=xtls",
+		"trojan_kcp":        testTrojanLink + "type=kcp",
+		"trojan_grpc_typo":  testTrojanLink + "type=gprc",
+		"trojan_tcp_header": testTrojanLink + "headerType=http",
+	}
+	for name, link := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildConfig([]string{link}, BalancerOptions{}, RoutingProfile{}, "none")
+			if err == nil || !strings.Contains(err.Error(), "is not supported") {
+				t.Fatalf("BuildConfig = %v, want a refusal", err)
+			}
+		})
+	}
+}
+
+func TestStream_EachMappedTransportReachesXray(t *testing.T) {
+	for name, c := range map[string]struct{ link, network string }{
+		"vless_raw":         {testVLESSLink + "type=raw", "tcp"},
+		"vless_websocket":   {testVLESSLink + "type=websocket&path=/w", "websocket"},
+		"vless_splithttp":   {testVLESSLink + "type=splithttp&security=tls", "xhttp"},
+		"vless_grpc":        {testVLESSLink + "type=grpc&serviceName=svc", "grpc"},
+		"vless_httpupgrade": {testVLESSLink + "type=httpupgrade&path=/up", "httpupgrade"},
+		"trojan_tcp_plain":  {testTrojanLink + "type=tcp&headerType=none", "tcp"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			stream := buildLink(t, c.link).Config.OutboundConfigs[0].StreamSetting
+			if stream.Network == nil || string(*stream.Network) != c.network {
+				t.Fatalf("network = %v, want %s", stream.Network, c.network)
+			}
+		})
+	}
+}

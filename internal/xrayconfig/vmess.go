@@ -36,20 +36,14 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 		return nil, "", "", fmt.Errorf("vmess: cipher %q is not supported", l.Cipher)
 	}
 	q := l.Params
-	switch network := q.Get("type"); network {
-	case "tcp":
-		if header := q.Get("headerType"); header != "" && header != "none" {
-			return nil, "", "", fmt.Errorf("vmess: tcp header %q is not supported", header)
-		}
-	case "ws", "grpc", "httpupgrade", "xhttp":
-	default:
-		return nil, "", "", fmt.Errorf("vmess: transport %q is not supported", network)
+	if q.Get("security") == "reality" {
+		return nil, "", "", fmt.Errorf("vmess: security \"reality\" is not supported")
 	}
-	switch security := q.Get("security"); security {
-	case "", "none", "tls":
-	default:
-		return nil, "", "", fmt.Errorf("vmess: security %q is not supported", security)
+	stream, err := buildStreamSettings(l.Host, q)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("vmess: %w", err)
 	}
+
 	user, _ := json.Marshal(map[string]string{"id": l.ID, "security": cipher})
 	addrForDial := preResolveIPv4(l.Host)
 	settings, _ := json.Marshal(&xrayConf.VMessOutboundConfig{
@@ -60,10 +54,6 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 		}},
 	})
 	settingsRaw := json.RawMessage(settings)
-	stream, err := buildStreamSettings(l.Host, q)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("vmess: %w", err)
-	}
 	ob := &xrayConf.OutboundDetourConfig{
 		Protocol:      "vmess",
 		Tag:           tag,

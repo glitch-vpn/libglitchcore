@@ -220,6 +220,10 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	}
 
 	q := u.Query()
+	stream, err := buildStreamSettings(host, q)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("vless: %w", err)
+	}
 	vlessUser := map[string]string{
 		"id":         userID,
 		"encryption": "none",
@@ -240,27 +244,25 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	settingsRaw := json.RawMessage(settingsBytes)
 
 	ob := &xrayConf.OutboundDetourConfig{
-		Protocol: "vless",
-		Tag:      tag,
-		Settings: &settingsRaw,
-	}
-
-	stream, err := buildStreamSettings(host, q)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("vless: %w", err)
-	}
-	if stream.Security != "" || stream.Network != nil {
-		ob.StreamSetting = stream
+		Protocol:      "vless",
+		Tag:           tag,
+		Settings:      &settingsRaw,
+		StreamSetting: stream,
 	}
 	return ob, host, addrForDial, nil
 }
 
 // buildStreamSettings maps the transport (type=) and security (security=) query
-// params VLESS, Trojan and VMess links share into an xray StreamConfig.
+// params VLESS, Trojan and VMess links share into an xray StreamConfig. A value
+// it does not map fails the link: run as plain TCP or without TLS, it would
+// connect to nothing the server speaks, or in the clear.
 func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, error) {
 	stream := &xrayConf.StreamConfig{}
-	switch strings.ToLower(q.Get("type")) {
-	case "tcp", "":
+	switch network := strings.ToLower(strings.TrimSpace(q.Get("type"))); network {
+	case "tcp", "raw", "":
+		if header := strings.ToLower(q.Get("headerType")); header != "" && header != "none" {
+			return nil, fmt.Errorf("tcp header %q is not supported", header)
+		}
 		proto := xrayConf.TransportProtocol("tcp")
 		stream.Network = &proto
 	case "ws", "websocket":
@@ -282,7 +284,7 @@ func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, err
 		proto := xrayConf.TransportProtocol("httpupgrade")
 		stream.Network = &proto
 		stream.HTTPUPGRADESettings = &xrayConf.HttpUpgradeConfig{Path: q.Get("path"), Host: q.Get("host")}
-	case "xhttp":
+	case "xhttp", "splithttp":
 		proto := xrayConf.TransportProtocol("xhttp")
 		stream.Network = &proto
 		xhttp := &xrayConf.SplitHTTPConfig{
@@ -300,9 +302,12 @@ func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, err
 			xhttp.Host = host
 		}
 		stream.XHTTPSettings = xhttp
+	default:
+		return nil, fmt.Errorf("transport %q is not supported", network)
 	}
 
-	switch strings.ToLower(q.Get("security")) {
+	switch security := strings.ToLower(strings.TrimSpace(q.Get("security"))); security {
+	case "", "none":
 	case "tls":
 		stream.Security = "tls"
 		tls := &xrayConf.TLSConfig{}
@@ -359,6 +364,8 @@ func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, err
 			r.Fingerprint = fp
 		}
 		stream.REALITYSettings = r
+	default:
+		return nil, fmt.Errorf("security %q is not supported", security)
 	}
 
 	// TCP keepalive to prevent carrier NAT timeout on idle connections.
@@ -399,6 +406,14 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 	}
 
 	q := u.Query()
+	// Trojan runs over TLS or REALITY; any other security= still means TLS.
+	if s := strings.ToLower(q.Get("security")); s != "tls" && s != "reality" {
+		q.Set("security", "tls")
+	}
+	stream, err := buildStreamSettings(host, q)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("trojan: %w", err)
+	}
 	addrForDial := preResolveIPv4(host)
 
 	// Flow removed in xray-core for Trojan - leave unset.
@@ -413,19 +428,11 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 	settingsRaw := json.RawMessage(settingsBytes)
 
 	ob := &xrayConf.OutboundDetourConfig{
-		Protocol: "trojan",
-		Tag:      tag,
-		Settings: &settingsRaw,
+		Protocol:      "trojan",
+		Tag:           tag,
+		Settings:      &settingsRaw,
+		StreamSetting: stream,
 	}
-	// Trojan runs over TLS or REALITY; any other security= still means TLS.
-	if s := strings.ToLower(q.Get("security")); s != "tls" && s != "reality" {
-		q.Set("security", "tls")
-	}
-	stream, err := buildStreamSettings(host, q)
-	if err != nil {
-		return nil, "", "", fmt.Errorf("trojan: %w", err)
-	}
-	ob.StreamSetting = stream
 	return ob, host, addrForDial, nil
 }
 
