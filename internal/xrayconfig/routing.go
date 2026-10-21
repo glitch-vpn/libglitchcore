@@ -13,6 +13,11 @@ const (
 	directTag = "direct"
 	blockTag  = "block"
 
+	// ExitEchoTag is the inbound the core's exit-address echo dials as, in
+	// process and with no listener; its rule sends it to the proxy ahead of
+	// the tiers, so no profile can keep it from the exit.
+	ExitEchoTag = "exitecho"
+
 	ModeProxyAll  = routing.ModeProxyAll
 	ModeDirectAll = routing.ModeDirectAll
 )
@@ -121,9 +126,9 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		ensureOutbound(cfg, blockTag, xrayConf.OutboundDetourConfig{Protocol: "blackhole", Tag: blockTag})
 	}
 
-	// Priority (first match wins): protocol kill-switches -> tiers in order
-	// (block -> direct -> proxy within each) -> local networks -> mode
-	// catch-all. Explicit direct/proxy rules are emitted in both modes; the
+	// Priority (first match wins): protocol kill-switches -> exit echo ->
+	// tiers in order (block -> direct -> proxy within each) -> local networks
+	// -> mode catch-all. Explicit direct/proxy rules are emitted in both modes; the
 	// catch-all decides what unlisted traffic does.
 	var rules []json.RawMessage
 	if p.DisableIPv6 {
@@ -138,6 +143,9 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		block.apply(&r)
 		rules = append(rules, r.raw())
 	}
+	echoRule := fieldRule{InboundTag: []string{ExitEchoTag}}
+	proxy.apply(&echoRule)
+	rules = append(rules, echoRule.raw())
 	for _, tier := range p.Tiers {
 		rules = append(rules, matcherRules(tier.Block, block)...)
 		rules = append(rules, matcherRules(tier.Direct, direct)...)

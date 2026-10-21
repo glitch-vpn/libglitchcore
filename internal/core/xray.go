@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net"
@@ -14,6 +15,8 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
+	xrayNet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/session"
 	xrayCore "github.com/xtls/xray-core/core"
 	xrayStats "github.com/xtls/xray-core/features/stats"
 	xrayConf "github.com/xtls/xray-core/infra/conf"
@@ -257,7 +260,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 			urlV4:   o.ipEchoV4,
 			urlV6:   o.ipEchoV6,
 			skipV6:  o.dns.DisableIPv6,
-			dial:    socksTunnelDial(loopbackSocksURL(endpoint, o.proxyUser, o.proxyPass)),
+			dial:    x.xrayExitEchoDial(x.xrayCoreInstance),
 		})
 		log.Printf("[Xray] Proxy mode: SOCKS5 at %s (no TUN)", endpoint)
 		return nil
@@ -378,7 +381,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		urlV4:   o.ipEchoV4,
 		urlV6:   o.ipEchoV6,
 		skipV6:  o.dns.DisableIPv6,
-		dial:    socksTunnelDial(proxyURL),
+		dial:    x.xrayExitEchoDial(x.xrayCoreInstance),
 	})
 
 	return nil
@@ -410,6 +413,28 @@ func (x *CoreController) xrayStop() error {
 
 	log.Println("[Xray] Core stopped")
 	return nil
+}
+
+// xrayExitEchoDial dials inside the instance as the exit-echo inbound, so the
+// flow takes the proxy ahead of the routing tiers with no listener. Like
+// mihomoTunnelDial it refuses once its session has ended.
+func (x *CoreController) xrayExitEchoDial(inst *xrayCore.Instance) tunnelDialFunc {
+	gen := x.sessionGen.Load()
+	return func(ctx context.Context, _, addr string) (net.Conn, error) {
+		if x.sessionGen.Load() != gen {
+			return nil, errSessionEnded
+		}
+		host, portStr, err := net.SplitHostPort(addr)
+		if err != nil {
+			return nil, err
+		}
+		port, err := xrayNet.PortFromString(portStr)
+		if err != nil {
+			return nil, err
+		}
+		ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: xrayconfig.ExitEchoTag})
+		return xrayCore.Dial(ctx, inst, xrayNet.TCPDestination(xrayNet.ParseAddress(host), port))
+	}
 }
 
 // process:->proxy needs an always-tunnel inbound so the rule holds in direct-all

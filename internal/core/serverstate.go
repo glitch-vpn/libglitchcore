@@ -1,6 +1,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -53,6 +54,10 @@ func (x *CoreController) reemitSessionState() {
 		x.emitStatus(IPEvent, s)
 	}
 }
+
+// errSessionEnded is what an in-process dial captured by a session returns
+// once clearSessionState has run for it.
+var errSessionEnded = errors.New("session ended")
 
 func (x *CoreController) clearSessionState() {
 	x.sessionGen.Add(1)

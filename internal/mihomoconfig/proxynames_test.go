@@ -21,3 +21,13 @@ func TestProxyNames(t *testing.T) {
 		}
 	}
 }
+
+func TestTarget_ProxyOrBalancerGroup(t *testing.T) {
+	one := []string{"ss://aes-128-gcm:pass@5.6.7.8:8388#solo"}
+	if got := Target(one); got != "solo" {
+		t.Fatalf("Target(one link) = %q, want the proxy's name", got)
+	}
+	if got := Target(append(one, "ss://aes-128-gcm:pass@5.6.7.9:8388#other")); got != GroupTag {
+		t.Fatalf("Target(two links) = %q, want %q", got, GroupTag)
+	}
+}

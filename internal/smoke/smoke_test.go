@@ -84,9 +84,23 @@ func startVlessServer(t *testing.T) int {
 
 func echoBody(t *testing.T, body string) *httptest.Server {
 	t.Helper()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	return echoBodyOn(t, "127.0.0.1", body)
+}
+
+// echoBodyOn serves on another loopback address when a test needs routing to
+// tell two stubs apart.
+func echoBodyOn(t *testing.T, addr, body string) *httptest.Server {
+	t.Helper()
+	l, err := net.Listen("tcp", net.JoinHostPort(addr, "0"))
+	if err != nil {
+		t.Fatalf("listen on %s: %v", addr, err)
+	}
+	srv := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(body))
 	}))
+	_ = srv.Listener.Close()
+	srv.Listener = l
+	srv.Start()
 	t.Cleanup(srv.Close)
 	return srv
 }

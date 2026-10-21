@@ -56,7 +56,7 @@ func TestMihomoBridgeListeners_RefuseAnonymousClient(t *testing.T) {
 
 func TestMihomoTunnelDial_RefusesAfterItsSessionEnds(t *testing.T) {
 	x := &CoreController{}
-	dial := x.mihomoTunnelDial()
+	dial := x.mihomoTunnelDial("")
 	x.clearSessionState()
 	if conn, err := dial(context.Background(), "tcp", "example.com:443"); err == nil {
 		_ = conn.Close()

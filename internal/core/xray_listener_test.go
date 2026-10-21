@@ -3,6 +3,7 @@
 package core
 
 import (
+	"context"
 	"net/url"
 	"testing"
 
@@ -54,5 +55,15 @@ func TestXrayLoopbackInbounds_RefuseAnonymousClient(t *testing.T) {
 		requireSocksRefusesAnonymous(t, u.Host)
 		requireSocks4RefusesAnonymous(t, u.Host)
 		requireSocksAcceptsURL(t, socksURL)
+	}
+}
+
+func TestXrayExitEchoDial_RefusesAfterItsSessionEnds(t *testing.T) {
+	x := &CoreController{}
+	dial := x.xrayExitEchoDial(nil)
+	x.clearSessionState()
+	if conn, err := dial(context.Background(), "tcp", "example.com:443"); err == nil {
+		_ = conn.Close()
+		t.Fatal("a dial from an ended session must not reach xray")
 	}
 }

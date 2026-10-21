@@ -4,7 +4,6 @@ package core
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -334,7 +333,8 @@ func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) 
 	}
 	startMihomoLogBridge()
 
-	cfg, err := mihomoconfig.BuildConfig(mihomoConfigLinks(rawconfig), inbound,
+	links := mihomoConfigLinks(rawconfig)
+	cfg, err := mihomoconfig.BuildConfig(links, inbound,
 		mihomoconfig.Options{Strategy: o.strategy, DisableSniffing: !o.sniffing, ProbeURL: o.probeURL, Fingerprint: o.fingerprint}, prof)
 	if err != nil {
 		stopMihomoLogBridge()
@@ -363,36 +363,36 @@ func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) 
 	x.startLiveness(livenessParams{
 		engine:   "mihomo",
 		interval: livenessInterval(o.livenessSec),
-		probe:    tunnelProber(x.mihomoTunnelDial(), o.probeURL),
+		probe:    tunnelProber(x.mihomoTunnelDial(""), o.probeURL),
 	})
-	x.initMihomoServerState(mihomoConfigLinks(rawconfig), o)
+	x.initMihomoServerState(links, o)
 	x.configureIPResolve(ipResolveConfig{
 		enabled: o.resolveIP,
 		urlV4:   o.ipEchoV4,
 		urlV6:   o.ipEchoV6,
 		skipV6:  o.dns.DisableIPv6,
-		dial:    x.mihomoTunnelDial(),
+		dial:    x.mihomoTunnelDial(mihomoconfig.Target(links)),
 	})
 	log.Println("[mihomo] started")
 	return nil
 }
 
-// mihomoTunnelDial dials inside mihomo's tunnel under the rules, so the core's
-// own probes need no loopback listener. xray probes through its tun2socks
-// inbound instead, which its TUN path opens anyway. The dial refuses once its
-// session has ended: mihomo's tunnel outlives the session with only DIRECT
-// left, and an echo retried then would leave from the user's own address.
-func (x *CoreController) mihomoTunnelDial() tunnelDialFunc {
+// mihomoTunnelDial dials inside mihomo's tunnel, so the core's own probes need
+// no loopback listener: proxy "" follows the rules like user traffic, a proxy
+// name pins the flow to that proxy or group ahead of every rule. xray's
+// liveness probe uses its tun2socks inbound instead, which its TUN path opens
+// anyway. The dial refuses once its session has ended: mihomo's tunnel
+// outlives the session with only DIRECT left, and an echo retried then would
+// leave from the user's own address.
+func (x *CoreController) mihomoTunnelDial(proxy string) tunnelDialFunc {
 	gen := x.sessionGen.Load()
 	return func(_ context.Context, _, addr string) (net.Conn, error) {
 		if x.sessionGen.Load() != gen {
 			return nil, errSessionEnded
 		}
-		return inner.HandleTcp(mihomoTunnel.Tunnel, addr, "")
+		return inner.HandleTcp(mihomoTunnel.Tunnel, addr, proxy)
 	}
 }
-
-var errSessionEnded = errors.New("session ended")
 
 // url-test/fallback groups are followed via Now(); load-balance dispatches
 // per connection, so its Selected stays nil.

@@ -157,14 +157,13 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		return nil, fmt.Errorf("no links provided")
 	}
 
-	target := names[0]
+	target := Target(links)
 	if len(names) > 1 {
 		group, err := balancerGroup(names, opts.Strategy, opts.ProbeURL)
 		if err != nil {
 			return nil, err
 		}
 		raw.ProxyGroup = []map[string]any{group}
-		target = GroupTag
 	}
 
 	rules := buildRules(prof, target)
@@ -456,6 +455,19 @@ func proxyFromLink(link, name string) (map[string]any, error) {
 	default:
 		return nil, fmt.Errorf("unsupported link scheme")
 	}
+}
+
+// Target is the proxy, or the balancer group over several, that proxied
+// traffic goes to.
+func Target(links []string) string {
+	names := ProxyNames(links)
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	}
+	return GroupTag
 }
 
 // Must match BuildConfig's naming exactly - callers map the group's Now()

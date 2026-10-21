@@ -39,10 +39,10 @@ func applyTo(t *testing.T, p RoutingProfile, proxyTag string, isBalancer bool) (
 
 func TestApply_ProxyAllDefault(t *testing.T) {
 	cfg, rules := applyTo(t, RoutingProfile{}, "proxy", false)
-	if len(rules) != 1 {
-		t.Fatalf("default profile: want 1 rule, got %d: %+v", len(rules), rules)
+	if len(rules) != 2 {
+		t.Fatalf("default profile: want the exit-echo rule and the catch-all, got %d: %+v", len(rules), rules)
 	}
-	r := rules[0]
+	r := rules[1]
 	if r.OutboundTag != "proxy" || len(r.InboundTag) != 1 || r.InboundTag[0] != "tun2socks" {
 		t.Fatalf("catch-all = %+v, want tun2socks->proxy", r)
 	}
@@ -63,8 +63,8 @@ func TestApply_ProxyAll_BlockDirectLocalOrder(t *testing.T) {
 	cfg, rules := applyTo(t, p, "proxy", false)
 
 	// Bare "ads.example" -> domain suffix; "domain:bank.example" -> same syntax.
-	if rules[0].OutboundTag != blockTag || rules[0].Domain[0] != "domain:ads.example" {
-		t.Errorf("first rule must be block: %+v", rules[0])
+	if rules[1].OutboundTag != blockTag || rules[1].Domain[0] != "domain:ads.example" {
+		t.Errorf("first tier rule must be block: %+v", rules[1])
 	}
 	last := rules[len(rules)-1]
 	if last.OutboundTag != "proxy" || len(last.InboundTag) == 0 {
@@ -178,6 +178,17 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 	}
 }
 
+func TestApply_ExitEchoPrecedesTiers(t *testing.T) {
+	p := RoutingProfile{
+		Mode:  ModeDirectAll,
+		Tiers: []routing.Tier{{Block: []string{"domain:ipify.org"}, Direct: []string{"0.0.0.0/0"}}},
+	}
+	_, rules := applyTo(t, p, "proxy", false)
+	if len(rules) == 0 || len(rules[0].InboundTag) != 1 || rules[0].InboundTag[0] != ExitEchoTag || rules[0].OutboundTag != "proxy" {
+		t.Fatalf("first rule must send the exit echo to the proxy: %+v", rules)
+	}
+}
+
 func TestApply_DisableIPv6AndUDP(t *testing.T) {
 	p := RoutingProfile{
 		Tiers:       []routing.Tier{{Block: []string{"ads.example"}}},
@@ -192,8 +203,11 @@ func TestApply_DisableIPv6AndUDP(t *testing.T) {
 	if rules[1].Network != "udp" || rules[1].Port != "1-52,54-65535" || rules[1].OutboundTag != blockTag {
 		t.Fatalf("second rule must block udp except :53: %+v", rules[1])
 	}
-	if len(rules[2].Domain) != 1 || rules[2].Domain[0] != "domain:ads.example" {
-		t.Fatalf("explicit block matchers must follow the kill-switches: %+v", rules[2])
+	if len(rules[2].InboundTag) != 1 || rules[2].InboundTag[0] != ExitEchoTag {
+		t.Fatalf("the exit-echo rule must follow the kill-switches: %+v", rules[2])
+	}
+	if len(rules[3].Domain) != 1 || rules[3].Domain[0] != "domain:ads.example" {
+		t.Fatalf("explicit block matchers must follow the exit-echo rule: %+v", rules[3])
 	}
 	if !hasOutbound(cfg, blockTag) {
 		t.Fatal("blackhole outbound missing")
