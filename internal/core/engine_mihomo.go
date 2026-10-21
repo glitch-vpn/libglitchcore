@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -81,6 +82,11 @@ func startMihomoLogBridge() {
 	go func(s observable.Subscription[mihomoLog.Event]) {
 		for ev := range s {
 			emitLog(mihomoEventLevel(ev.LogLevel), "mihomo", ev.Payload)
+			if ev.LogLevel == mihomoLog.INFO && connInspectEnabled.Load() && globalController != nil {
+				if rec, ok := mihomoRejectRecord(ev.Payload); ok {
+					globalController.emitConn(rec)
+				}
+			}
 		}
 	}(sub)
 }
@@ -138,7 +144,7 @@ func startMihomoConnInspector() {
 						return true
 					}
 					seen[id] = struct{}{}
-					if emit && globalController != nil {
+					if emit && globalController != nil && !mihomoRejected(info.Chain) {
 						globalController.emitConn(mihomoConnRecord(info))
 					}
 					return true
@@ -170,17 +176,66 @@ func mihomoConnRecord(info *statistic.TrackerInfo) conninspect.Record {
 	if host == "" && m.DstIP.IsValid() {
 		host = m.DstIP.String()
 	}
+	inbound := m.InName
+	if inbound == "" {
+		inbound = m.Type.String()
+	}
 	rule := strings.TrimSpace(info.Rule + " " + info.RulePayload)
 	return conninspect.Record{
 		Engine:   "mihomo",
 		Src:      src,
-		Status:   "accepted", // trackers are established conns; REJECT never becomes one
+		Status:   "accepted",
 		Network:  m.NetWork.String(),
 		Host:     host,
 		Port:     strconv.Itoa(int(m.DstPort)),
+		Inbound:  inbound,
 		Outbound: info.Chain.String(),
 		Rule:     rule,
 	}
+}
+
+// A chain lists the outbound first and the groups that picked it after.
+func mihomoRejected(chain C.Chain) bool {
+	return len(chain) > 0 && isMihomoReject(chain[0])
+}
+
+func isMihomoReject(outbound string) bool {
+	return outbound == "REJECT" || outbound == "REJECT-DROP"
+}
+
+// A rejected connection's tracker closes at once, before the inspector's next
+// poll, so it is reported from the rule-match line mihomo writes for it:
+//
+//	[TCP] 127.0.0.1:50000(app.exe) --> ads.example:443 match DomainSuffix(ads.example) using REJECT
+//
+// The line names no inbound. The core's rules name REJECT directly, never
+// through a group, so the outbound must be REJECT itself: a proxy can be
+// named "x[REJECT]".
+var mihomoMatchLine = regexp.MustCompile(`^\[(TCP|UDP)\] (\S+?)(?:\([^)]*\))? --> (\S+) match (\S+?)(?:\((.*)\))? using (\S+)$`)
+
+func mihomoRejectRecord(line string) (conninspect.Record, bool) {
+	m := mihomoMatchLine.FindStringSubmatch(line)
+	if m == nil {
+		return conninspect.Record{}, false
+	}
+	outbound := m[6]
+	if !isMihomoReject(outbound) {
+		return conninspect.Record{}, false
+	}
+	host, port, err := net.SplitHostPort(m[3])
+	if err != nil {
+		host, port = m[3], ""
+	}
+	return conninspect.Record{
+		Engine:   "mihomo",
+		Src:      m[2],
+		Status:   "rejected",
+		Network:  strings.ToLower(m[1]),
+		Host:     host,
+		Port:     port,
+		Outbound: outbound,
+		Rule:     strings.TrimSpace(m[4] + " " + m[5]),
+	}, true
 }
 
 // Guarded by coreMutex (only mihomoStart touches it, one engine at a time).

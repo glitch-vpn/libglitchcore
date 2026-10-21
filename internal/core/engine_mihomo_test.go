@@ -6,6 +6,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/glitch-vpn/libglitchcore/internal/conninspect"
+
 	mihomoCfg "github.com/metacubex/mihomo/config"
 	mihomoLog "github.com/metacubex/mihomo/log"
 )
@@ -57,5 +59,35 @@ func TestMihomoTeardownConfig_IsSilent(t *testing.T) {
 	}
 	if cfg.General.LogLevel != mihomoLog.SILENT {
 		t.Fatalf("teardown config level = %v, want silent", cfg.General.LogLevel)
+	}
+}
+
+func TestMihomoRejectRecord_ReadsTheRuleMatchLine(t *testing.T) {
+	cases := []struct {
+		line string
+		ok   bool
+		want conninspect.Record
+	}{
+		{
+			line: "[TCP] 127.0.0.1:51245 --> blocked.test:80 match DomainSuffix(blocked.test) using REJECT",
+			ok:   true,
+			want: conninspect.Record{Engine: "mihomo", Src: "127.0.0.1:51245", Status: "rejected", Network: "tcp",
+				Host: "blocked.test", Port: "80", Outbound: "REJECT", Rule: "DomainSuffix blocked.test"},
+		},
+		{
+			line: "[UDP] 10.0.0.2:5353(app.exe, uid=10123) --> [2001:db8::1]:443 match AND((NETWORK,udp),(NOT,((DST-PORT,53)))) using REJECT-DROP",
+			ok:   true,
+			want: conninspect.Record{Engine: "mihomo", Src: "10.0.0.2:5353", Status: "rejected", Network: "udp",
+				Host: "2001:db8::1", Port: "443", Outbound: "REJECT-DROP", Rule: "AND (NETWORK,udp),(NOT,((DST-PORT,53)))"},
+		},
+		{line: "[TCP] 127.0.0.1:51247 --> a.test:443 match Match using x[REJECT]", ok: false},
+		{line: "[TCP] 127.0.0.1:51247 --> 127.0.0.1:51246 match Match using Inspect", ok: false},
+		{line: "[TCP] dial Inspect (match Match/) 127.0.0.1:1 --> a.test:443 error: refused", ok: false},
+	}
+	for _, c := range cases {
+		got, ok := mihomoRejectRecord(c.line)
+		if ok != c.ok || got != c.want {
+			t.Errorf("mihomoRejectRecord(%q) = %+v, %v; want %+v, %v", c.line, got, ok, c.want, c.ok)
+		}
 	}
 }

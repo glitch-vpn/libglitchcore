@@ -195,6 +195,32 @@ func (e *eventLog) everything() map[int32][]string {
 	return out
 }
 
+type connRecord struct {
+	Engine   string `json:"engine"`
+	Status   string `json:"status"`
+	Host     string `json:"host"`
+	Inbound  string `json:"inbound"`
+	Outbound string `json:"outbound"`
+	Rule     string `json:"rule"`
+}
+
+func (e *eventLog) waitForConn(t *testing.T, match func(connRecord) bool, timeout time.Duration) (connRecord, bool) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for {
+		for _, msg := range e.all(core.ConnEvent) {
+			var rec connRecord
+			if json.Unmarshal([]byte(msg), &rec) == nil && match(rec) {
+				return rec, true
+			}
+		}
+		if time.Now().After(deadline) {
+			return connRecord{}, false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // waitForNew waits for an event of code beyond the first seen already
 // captured: a test that provokes the same event twice cannot use waitFor.
 func (e *eventLog) waitForNew(t *testing.T, code int32, seen int, timeout time.Duration) bool {
