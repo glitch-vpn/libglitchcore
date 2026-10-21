@@ -304,7 +304,7 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
 	go func() {
 		mark := x.sessionGen.Load()
-		if err := x.mihomoStart(links, req.TunFD, o); err != nil {
+		if err := x.mihomoStart(links, req.TunFD, o, mark); err != nil {
 			logfmt.Errorf("[mihomo] start failed: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
@@ -320,7 +320,7 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	return glitchCoreResultSuccess
 }
 
-func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts) error {
+func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, mark int64) error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
@@ -423,7 +423,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts) er
 	x.startLiveness(livenessParams{
 		engine:   "mihomo",
 		interval: livenessInterval(o.livenessSec),
-		probe:    tunnelProber(x.mihomoTunnelDial(""), o.probeURL),
+		probe:    tunnelProber(x.mihomoTunnelDial("", mark), o.probeURL),
 	})
 	x.initMihomoServerState(links, o)
 	x.configureIPResolve(ipResolveConfig{
@@ -431,7 +431,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts) er
 		urlV4:   o.ipEchoV4,
 		urlV6:   o.ipEchoV6,
 		skipV6:  o.dns.DisableIPv6,
-		dial:    x.mihomoTunnelDial(mihomoconfig.Target(links)),
+		dial:    x.mihomoTunnelDial(mihomoconfig.Target(links), mark),
 	})
 	log.Println("[mihomo] started")
 	return nil
@@ -441,13 +441,12 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts) er
 // no loopback listener: proxy "" follows the rules like user traffic, a proxy
 // name pins the flow to that proxy or group ahead of every rule. xray's
 // liveness probe uses its tun2socks inbound instead, which its TUN path opens
-// anyway. The dial refuses once its session has ended: mihomo's tunnel
-// outlives the session with only DIRECT left, and an echo retried then would
-// leave from the user's own address.
-func (x *CoreController) mihomoTunnelDial(proxy string) tunnelDialFunc {
-	gen := x.sessionGen.Load()
+// anyway. The dial refuses once the session that started at mark has ended:
+// mihomo's tunnel outlives the session with only DIRECT left, and an echo
+// retried then would leave from the user's own address.
+func (x *CoreController) mihomoTunnelDial(proxy string, mark int64) tunnelDialFunc {
 	return func(_ context.Context, _, addr string) (net.Conn, error) {
-		if x.sessionGen.Load() != gen {
+		if x.sessionGen.Load() != mark {
 			return nil, errSessionEnded
 		}
 		return inner.HandleTcp(mihomoTunnel.Tunnel, addr, proxy)

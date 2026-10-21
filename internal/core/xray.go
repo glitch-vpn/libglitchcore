@@ -76,7 +76,7 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 
 	go func() {
 		mark := x.sessionGen.Load()
-		if err := x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o); err != nil {
+		if err := x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o, mark); err != nil {
 			logfmt.Errorf("[Xray] Failed to start Xray: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to start: %v", err))
@@ -130,7 +130,7 @@ func (x *CoreController) HandleXrayIsRunning() int32 {
 	return glitchCoreResultError
 }
 
-func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string, logLevel int, o engineOpts) (err error) {
+func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string, logLevel int, o engineOpts, mark int64) (err error) {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
@@ -264,7 +264,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 			urlV4:   o.ipEchoV4,
 			urlV6:   o.ipEchoV6,
 			skipV6:  o.dns.DisableIPv6,
-			dial:    x.xrayExitEchoDial(x.xrayCoreInstance),
+			dial:    x.xrayExitEchoDial(x.xrayCoreInstance, mark),
 		})
 		log.Printf("[Xray] Proxy mode: SOCKS5 at %s (no TUN)", endpoint)
 		return nil
@@ -385,7 +385,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		urlV4:   o.ipEchoV4,
 		urlV6:   o.ipEchoV6,
 		skipV6:  o.dns.DisableIPv6,
-		dial:    x.xrayExitEchoDial(x.xrayCoreInstance),
+		dial:    x.xrayExitEchoDial(x.xrayCoreInstance, mark),
 	})
 
 	return nil
@@ -421,11 +421,10 @@ func (x *CoreController) xrayStop() error {
 
 // xrayExitEchoDial dials inside the instance as the exit-echo inbound, so the
 // flow takes the proxy ahead of the routing tiers with no listener. Like
-// mihomoTunnelDial it refuses once its session has ended.
-func (x *CoreController) xrayExitEchoDial(inst *xrayCore.Instance) tunnelDialFunc {
-	gen := x.sessionGen.Load()
+// mihomoTunnelDial it refuses once the session that started at mark has ended.
+func (x *CoreController) xrayExitEchoDial(inst *xrayCore.Instance, mark int64) tunnelDialFunc {
 	return func(ctx context.Context, _, addr string) (net.Conn, error) {
-		if x.sessionGen.Load() != gen {
+		if x.sessionGen.Load() != mark {
 			return nil, errSessionEnded
 		}
 		host, portStr, err := net.SplitHostPort(addr)

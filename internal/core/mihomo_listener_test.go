@@ -54,10 +54,13 @@ func TestMihomoBridgeListeners_RefuseAnonymousClient(t *testing.T) {
 	requireSocksAcceptsURL(t, b.forceProxyURL)
 }
 
-func TestMihomoTunnelDial_RefusesAfterItsSessionEnds(t *testing.T) {
+// A dial armed after a stop raced the start still belongs to the start's
+// session, so it refuses.
+func TestMihomoTunnelDial_RefusesOnceItsStartsSessionEnded(t *testing.T) {
 	x := &CoreController{}
-	dial := x.mihomoTunnelDial("")
+	mark := x.sessionGen.Load()
 	x.clearSessionState()
+	dial := x.mihomoTunnelDial("", mark)
 	if conn, err := dial(context.Background(), "tcp", "example.com:443"); err == nil {
 		_ = conn.Close()
 		t.Fatal("a dial from an ended session must not reach mihomo's tunnel")
