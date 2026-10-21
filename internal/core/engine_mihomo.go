@@ -398,6 +398,9 @@ func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) 
 		return fmt.Errorf("[mihomo] config build: %w", err)
 	}
 
+	countMihomoDirect(cfg, &mihomoSessionTraffic)
+	mihomoSessionTraffic.startSession()
+
 	log.Println("[mihomo] applying config")
 	// ApplyConfig is void but blocks through TUN creation; a cleared TUN Enable
 	// flag is the only success signal (checked below, native TUN mode only).
@@ -558,12 +561,5 @@ func (x *CoreController) HandleMihomoIsRunning() int32 {
 
 // (rx=down, tx=up), per the xray/awg convention.
 func (x *CoreController) getMihomoTraffic() (uint64, uint64) {
-	up, down := statistic.DefaultManager.Total()
-	if up < 0 {
-		up = 0
-	}
-	if down < 0 {
-		down = 0
-	}
-	return uint64(down), uint64(up)
+	return mihomoSessionTraffic.proxied()
 }
