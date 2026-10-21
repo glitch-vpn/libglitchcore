@@ -42,16 +42,11 @@ func flagSet(v string) bool {
 	return false
 }
 
-// Share-link generators spell "skip certificate verification" three ways.
-func insecureRequested(q url.Values) bool {
-	return flagSet(q.Get("insecure")) || flagSet(q.Get("allowInsecure")) || flagSet(q.Get("allow_insecure"))
-}
-
 // applyCertChecks maps the certificate options a TLS link may carry: skip
 // verification, a pinned certificate hash (pcs in v2rayN, hpkp in mihomo's
 // converter), the name to verify the certificate against, and ECH.
 func applyCertChecks(p map[string]any, q url.Values, protocol string) error {
-	if insecureRequested(q) {
+	if sharelink.SkipsVerification(q) {
 		p["skip-cert-verify"] = true
 	}
 	pin := q.Get("pcs")

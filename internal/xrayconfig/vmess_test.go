@@ -7,8 +7,6 @@ import (
 	"testing"
 )
 
-const testVMessUUID = "6f4b7a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
-
 func vmessShared(t *testing.T, fields map[string]any) string {
 	t.Helper()
 	base := map[string]any{"v": "2", "ps": "VM", "add": "203.0.113.5", "port": "443", "id": testVMessUUID, "aid": "0"}
@@ -22,22 +20,8 @@ func vmessShared(t *testing.T, fields map[string]any) string {
 	return "vmess://" + base64.StdEncoding.EncodeToString(b)
 }
 
-// buildVMess runs the link through xray's own config builder, which checks
-// what the outbound and its stream settings say.
-func buildVMess(t *testing.T, link string) *BuildResult {
-	t.Helper()
-	res, err := BuildConfig([]string{link}, BalancerOptions{}, RoutingProfile{}, "none")
-	if err != nil {
-		t.Fatalf("BuildConfig: %v", err)
-	}
-	if _, err := res.Config.Build(); err != nil {
-		t.Fatalf("xray rejects the config: %v", err)
-	}
-	return res
-}
-
 func TestVMess_SharedJSONOverWebSocketTLS(t *testing.T) {
-	res := buildVMess(t, vmessShared(t, map[string]any{
+	res := buildLink(t, vmessShared(t, map[string]any{
 		"scy": "aes-128-gcm", "net": "ws", "host": "cdn.example.com", "path": "/vm?ed=2048",
 		"tls": "tls", "sni": "sni.example.com", "alpn": "h2,http/1.1", "fp": "chrome",
 	}))
@@ -61,20 +45,19 @@ func TestVMess_SharedJSONOverWebSocketTLS(t *testing.T) {
 }
 
 func TestVMess_URIFormWithCertificateChecks(t *testing.T) {
-	const pin = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-	res := buildVMess(t, "vmess://"+testVMessUUID+"@203.0.113.5:8443?type=grpc&serviceName=svc&security=tls&sni=a.example.com&pcs="+pin+"&vcn=cert.example.com&ech=AEX%2BDQBBAAAgACA%3D#URI")
+	res := buildLink(t, "vmess://"+testVMessUUID+"@203.0.113.5:8443?type=grpc&serviceName=svc&security=tls&sni=a.example.com&pcs="+testPin+"&vcn=cert.example.com&ech=AEX%2BDQBBAAAgACA%3D#URI")
 	stream := res.Config.OutboundConfigs[0].StreamSetting
 	if string(*stream.Network) != "grpc" || stream.GRPCSettings.ServiceName != "svc" {
 		t.Fatalf("grpc = %+v", stream.GRPCSettings)
 	}
 	tls := stream.TLSSettings
-	if tls.PinnedPeerCertSha256 != pin || tls.VerifyPeerCertByName != "cert.example.com" || tls.ECHConfigList != "AEX+DQBBAAAgACA=" {
+	if tls.PinnedPeerCertSha256 != testPin || tls.VerifyPeerCertByName != "cert.example.com" || tls.ECHConfigList != "AEX+DQBBAAAgACA=" {
 		t.Fatalf("tls = %+v", tls)
 	}
 }
 
 func TestVMess_PlainTCPWithoutTLS(t *testing.T) {
-	res := buildVMess(t, vmessShared(t, map[string]any{"net": "tcp", "type": "none", "tls": ""}))
+	res := buildLink(t, vmessShared(t, map[string]any{"net": "tcp", "type": "none", "tls": ""}))
 	stream := res.Config.OutboundConfigs[0].StreamSetting
 	if stream.Security != "" || string(*stream.Network) != "tcp" {
 		t.Fatalf("stream = %+v", stream)
@@ -113,15 +96,8 @@ func TestVMess_Refuses(t *testing.T) {
 	}
 }
 
-func TestVMess_SkipVerificationWithoutTLSIsHarmless(t *testing.T) {
-	res := buildVMess(t, vmessShared(t, map[string]any{"tls": "", "insecure": "1"}))
-	if stream := res.Config.OutboundConfigs[0].StreamSetting; stream.TLSSettings != nil {
-		t.Fatalf("a link without TLS must get no TLS settings: %+v", stream.TLSSettings)
-	}
-}
-
 func TestVMess_FingerprintOptionReachesIt(t *testing.T) {
-	res := buildVMess(t, vmessShared(t, map[string]any{"tls": "tls", "fp": "chrome"}))
+	res := buildLink(t, vmessShared(t, map[string]any{"tls": "tls", "fp": "chrome"}))
 	ApplyFingerprint(res.Config, res.OutboundTags, "firefox")
 	if got := res.Config.OutboundConfigs[0].StreamSetting.TLSSettings.Fingerprint; got != "firefox" {
 		t.Fatalf("fingerprint = %q", got)

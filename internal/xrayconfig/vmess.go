@@ -50,16 +50,6 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 	default:
 		return nil, "", "", fmt.Errorf("vmess: security %q is not supported", security)
 	}
-	// xray refuses allowInsecure outright since 2026-06-01. Without TLS
-	// there is no certificate, and the flag means nothing.
-	if q.Get("security") == "tls" {
-		for _, k := range []string{"allowInsecure", "insecure", "allow_insecure"} {
-			if v := strings.ToLower(strings.TrimSpace(q.Get(k))); v == "1" || v == "true" {
-				return nil, "", "", fmt.Errorf("vmess: skipping certificate verification is not supported; pin the certificate with pcs")
-			}
-		}
-	}
-
 	user, _ := json.Marshal(map[string]string{"id": l.ID, "security": cipher})
 	addrForDial := preResolveIPv4(l.Host)
 	settings, _ := json.Marshal(&xrayConf.VMessOutboundConfig{
@@ -70,19 +60,17 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 		}},
 	})
 	settingsRaw := json.RawMessage(settings)
+	stream, err := buildStreamSettings(l.Host, q)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("vmess: %w", err)
+	}
 	ob := &xrayConf.OutboundDetourConfig{
 		Protocol:      "vmess",
 		Tag:           tag,
 		Settings:      &settingsRaw,
-		StreamSetting: buildStreamSettings(l.Host, q),
+		StreamSetting: stream,
 	}
-	if tls := ob.StreamSetting.TLSSettings; tls != nil {
-		if pin := strings.TrimSpace(q.Get("pcs")); pin != "" {
-			tls.PinnedPeerCertSha256 = pin
-		}
-		if name := strings.TrimSpace(q.Get("vcn")); name != "" {
-			tls.VerifyPeerCertByName = name
-		}
+	if tls := stream.TLSSettings; tls != nil {
 		// xray takes ech as a config list or as where to query one; the
 		// switch form names neither.
 		switch ech := strings.TrimSpace(q.Get("ech")); strings.ToLower(ech) {

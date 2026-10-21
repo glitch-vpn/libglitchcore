@@ -21,6 +21,7 @@ import (
 	xrayConf "github.com/xtls/xray-core/infra/conf"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
+	"github.com/glitch-vpn/libglitchcore/internal/sharelink"
 )
 
 const (
@@ -184,11 +185,7 @@ func outboundFromLink(link, tag string) (*xrayConf.OutboundDetourConfig, string,
 
 	switch strings.ToLower(u.Scheme) {
 	case "vless":
-		ob, server, dialIP := outboundFromVLESS(u, tag)
-		if ob == nil {
-			return nil, "", "", fmt.Errorf("unsupported or invalid vless link")
-		}
-		return ob, server, dialIP, nil
+		return outboundFromVLESS(u, tag)
 	case "ss":
 		ob, server, dialIP, perr := outboundFromSS(u, tag)
 		if perr != nil {
@@ -206,7 +203,7 @@ func outboundFromLink(link, tag string) (*xrayConf.OutboundDetourConfig, string,
 	}
 }
 
-func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, string, string) {
+func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
 	// vless://<uuid>@host:port?type=ws&security=tls&path=/xxx&host=example.com&sni=example.com&alpn=h2,http/1.1&fp=chrome
 	userID := ""
 	if u.User != nil {
@@ -219,7 +216,7 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 		port = uint16(p)
 	}
 	if userID == "" || host == "" || port == 0 {
-		return nil, "", ""
+		return nil, "", "", fmt.Errorf("unsupported or invalid vless link")
 	}
 
 	q := u.Query()
@@ -248,16 +245,19 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 		Settings: &settingsRaw,
 	}
 
-	stream := buildStreamSettings(host, q)
+	stream, err := buildStreamSettings(host, q)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("vless: %w", err)
+	}
 	if stream.Security != "" || stream.Network != nil {
 		ob.StreamSetting = stream
 	}
-	return ob, host, addrForDial
+	return ob, host, addrForDial, nil
 }
 
 // buildStreamSettings maps the transport (type=) and security (security=) query
-// params common to VLESS and Trojan links into an Xray StreamConfig.
-func buildStreamSettings(host string, q url.Values) *xrayConf.StreamConfig {
+// params VLESS, Trojan and VMess links share into an xray StreamConfig.
+func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, error) {
 	stream := &xrayConf.StreamConfig{}
 	switch strings.ToLower(q.Get("type")) {
 	case "tcp", "":
@@ -329,9 +329,12 @@ func buildStreamSettings(host string, q url.Values) *xrayConf.StreamConfig {
 		if fp := q.Get("fp"); fp != "" {
 			tls.Fingerprint = fp
 		}
-		if ai := q.Get("allowInsecure"); ai == "1" || strings.EqualFold(ai, "true") {
-			tls.AllowInsecure = true
+		// xray refuses allowInsecure outright since 2026-06-01.
+		if sharelink.SkipsVerification(q) {
+			return nil, fmt.Errorf("skipping certificate verification is not supported; pin the certificate with pcs")
 		}
+		tls.PinnedPeerCertSha256 = strings.TrimSpace(q.Get("pcs"))
+		tls.VerifyPeerCertByName = strings.TrimSpace(q.Get("vcn"))
 		if tls.ServerName == "" {
 			if h := q.Get("host"); h != "" {
 				tls.ServerName = h
@@ -362,7 +365,7 @@ func buildStreamSettings(host string, q url.Values) *xrayConf.StreamConfig {
 	stream.SocketSettings = &xrayConf.SocketConfig{
 		TCPKeepAliveInterval: 15,
 	}
-	return stream
+	return stream, nil
 }
 
 // preResolveIPv4 returns host's first IPv4 (short DNS timeout) for use as the
@@ -414,15 +417,13 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 		Tag:      tag,
 		Settings: &settingsRaw,
 	}
-	stream := buildStreamSettings(host, q)
-	// Trojan without explicit security= still implies TLS in practice; default to it.
-	if stream.Security == "" {
-		stream.Security = "tls"
-		tlsCfg := &xrayConf.TLSConfig{ServerName: host}
-		if sni := q.Get("sni"); sni != "" {
-			tlsCfg.ServerName = sni
-		}
-		stream.TLSSettings = tlsCfg
+	// Trojan runs over TLS or REALITY; any other security= still means TLS.
+	if s := strings.ToLower(q.Get("security")); s != "tls" && s != "reality" {
+		q.Set("security", "tls")
+	}
+	stream, err := buildStreamSettings(host, q)
+	if err != nil {
+		return nil, "", "", fmt.Errorf("trojan: %w", err)
 	}
 	ob.StreamSetting = stream
 	return ob, host, addrForDial, nil

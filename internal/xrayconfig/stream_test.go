@@ -1,0 +1,72 @@
+package xrayconfig
+
+import (
+	"strings"
+	"testing"
+)
+
+const (
+	testVMessUUID  = "6f4b7a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b"
+	testVLESSLink  = "vless://" + testVMessUUID + "@203.0.113.5:443?"
+	testTrojanLink = "trojan://made-up-password@203.0.113.5:443?"
+	testPin        = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+)
+
+// buildLink runs the link through xray's own config builder, which checks
+// what the outbound and its stream settings say.
+func buildLink(t *testing.T, link string) *BuildResult {
+	t.Helper()
+	res, err := BuildConfig([]string{link}, BalancerOptions{}, RoutingProfile{}, "none")
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	if _, err := res.Config.Build(); err != nil {
+		t.Fatalf("xray rejects the config: %v", err)
+	}
+	return res
+}
+
+func TestStream_SkipVerificationIsRefusedNamingPCS(t *testing.T) {
+	for name, link := range map[string]string{
+		"vless_allowInsecure":  testVLESSLink + "security=tls&allowInsecure=1",
+		"vless_insecure":       testVLESSLink + "security=tls&type=ws&insecure=true",
+		"vless_allow_insecure": testVLESSLink + "security=tls&allow_insecure=1",
+		"trojan_allowInsecure": testTrojanLink + "security=tls&allowInsecure=true",
+		"trojan_implied_tls":   testTrojanLink + "allowInsecure=1",
+		"trojan_security_none": testTrojanLink + "security=none&insecure=1",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := BuildConfig([]string{link}, BalancerOptions{}, RoutingProfile{}, "none")
+			if err == nil || !strings.Contains(err.Error(), "pcs") {
+				t.Fatalf("BuildConfig = %v, want a refusal naming pcs", err)
+			}
+		})
+	}
+}
+
+func TestStream_SkipVerificationWithoutTLSIsHarmless(t *testing.T) {
+	for name, link := range map[string]string{
+		"vless": testVLESSLink + "security=none&allowInsecure=1",
+		"vmess": vmessShared(t, map[string]any{"tls": "", "insecure": "1"}),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if tls := buildLink(t, link).Config.OutboundConfigs[0].StreamSetting.TLSSettings; tls != nil {
+				t.Fatalf("a link without TLS must get no TLS settings: %+v", tls)
+			}
+		})
+	}
+}
+
+func TestStream_PinnedCertificateReachesVLESSAndTrojan(t *testing.T) {
+	for name, link := range map[string]string{
+		"vless":  testVLESSLink + "security=tls&sni=a.example.com&pcs=" + testPin + "&vcn=cert.example.com",
+		"trojan": testTrojanLink + "sni=a.example.com&pcs=" + testPin + "&vcn=cert.example.com",
+	} {
+		t.Run(name, func(t *testing.T) {
+			tls := buildLink(t, link).Config.OutboundConfigs[0].StreamSetting.TLSSettings
+			if tls.ServerName != "a.example.com" || tls.PinnedPeerCertSha256 != testPin || tls.VerifyPeerCertByName != "cert.example.com" {
+				t.Fatalf("tls = %+v", tls)
+			}
+		})
+	}
+}

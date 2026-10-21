@@ -99,3 +99,7 @@ Domain and IP matchers honour tier order normally.
   that package is upstream.
 * mihomo's home directory is process-global; the core re-applies it per
   connection and clears the geodata caches when it changes.
+* xray no longer skips certificate verification (`allowInsecure` was removed
+  on 2026-06-01). A VLESS, VMess or Trojan link that asks for it
+  (`allowInsecure`, `insecure` or `allow_insecure`) fails the xray start; pin
+  the certificate with `pcs`, and `vcn` for the name to check it against.

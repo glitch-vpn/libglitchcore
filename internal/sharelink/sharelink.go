@@ -5,6 +5,7 @@ package sharelink
 import (
 	"fmt"
 	"net/url"
+	"strings"
 )
 
 // ParseURL fails with a fixed message: url.Parse quotes its whole input,
@@ -16,4 +17,16 @@ func ParseURL(link, protocol string) (*url.URL, error) {
 		return nil, fmt.Errorf("%s: malformed link", protocol)
 	}
 	return u, nil
+}
+
+// SkipsVerification reports whether a link asks to skip certificate checks;
+// share-link generators spell it three ways.
+func SkipsVerification(q url.Values) bool {
+	for _, k := range []string{"allowInsecure", "insecure", "allow_insecure"} {
+		switch strings.ToLower(strings.TrimSpace(q.Get(k))) {
+		case "1", "true":
+			return true
+		}
+	}
+	return false
 }
