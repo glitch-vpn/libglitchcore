@@ -145,6 +145,11 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 		x.emitStatus(EngineError, "[AWG] Start rejected: proxy mode (proxyPort) is not supported; awg runs as a TUN only")
 		return glitchCoreResultError
 	}
+	links, err := splitEngineLinks(req.Config)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[AWG] invalid config: %v", err))
+		return glitchCoreResultError
+	}
 
 	x.emitStatus(EngineConnecting, "[AWG] Connecting")
 
@@ -152,7 +157,7 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 
 	go func() {
 		mark := x.sessionGen.Load()
-		chosen, idx, links := x.pickAwgConfig(req.Config, o)
+		chosen, idx := x.pickAwgConfig(links, o)
 		// awg (L3) takes only a plain resolver; empty -> INI DNS field.
 		if err := x.awgStart(ifaceName, req.TunFD, chosen, o.dns.FirstPlainServer()); err != nil {
 			logfmt.Errorf("[AWG] Failed to start AWG: %v", err)
@@ -181,13 +186,12 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 }
 
 // Multilink: probe each awg:// link, pick by strategy; fall back to first if none alive.
-func (x *CoreController) pickAwgConfig(raw string, o engineOpts) (string, int, []string) {
-	links := splitEngineLinks(raw)
+func (x *CoreController) pickAwgConfig(links []string, o engineOpts) (string, int) {
 	if len(links) == 0 {
-		return raw, 0, nil
+		return "", 0
 	}
 	if len(links) == 1 {
-		return links[0], 0, links
+		return links[0], 0
 	}
 
 	res := pinger.Measure(pinger.Request{Links: links, ProbeURL: o.probeURL})
@@ -200,7 +204,7 @@ func (x *CoreController) pickAwgConfig(raw string, o engineOpts) (string, int, [
 		delay = fmt.Sprintf("%dms", res[idx].DelayMs)
 	}
 	log.Printf("[AWG] multilink: %d links, strategy=%q -> picked #%d (%s)", len(links), o.strategy, idx, delay)
-	return links[idx], idx, links
+	return links[idx], idx
 }
 
 // awg is pick-a-winner: the selection is final for the session.

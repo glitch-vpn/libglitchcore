@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/conninspect"
-
 	mihomoCfg "github.com/metacubex/mihomo/config"
 	mihomoLog "github.com/metacubex/mihomo/log"
 )
@@ -89,5 +88,18 @@ func TestMihomoRejectRecord_ReadsTheRuleMatchLine(t *testing.T) {
 		if ok != c.ok || got != c.want {
 			t.Errorf("mihomoRejectRecord(%q) = %+v, %v; want %+v, %v", c.line, got, ok, c.want, c.ok)
 		}
+	}
+}
+
+func TestHandleMihomoStart_RefusesRawConfigInPool(t *testing.T) {
+	var codes []int32
+	setStatusSink(func(code int32, _ string) { codes = append(codes, code) })
+	defer setStatusSink(nil)
+
+	ctl := &CoreController{nextHandle: 1}
+	got := ctl.HandleMihomoStart(EngineStartRequest{Config: rawINIConfig + "\nhysteria2://p@h:443"})
+
+	if got != glitchCoreResultError || len(codes) != 1 || codes[0] != EngineError {
+		t.Fatalf("result = %d, events = %v; want error and one EngineError", got, codes)
 	}
 }

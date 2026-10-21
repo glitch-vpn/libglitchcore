@@ -80,3 +80,16 @@ func TestHandleAwgStart_RefusesProxyMode(t *testing.T) {
 		t.Fatal("awg marked running after a refused proxy-mode start")
 	}
 }
+
+func TestHandleAwgStart_RefusesRawConfigInPool(t *testing.T) {
+	var codes []int32
+	setStatusSink(func(code int32, _ string) { codes = append(codes, code) })
+	defer setStatusSink(nil)
+
+	ctl := &CoreController{nextHandle: 1}
+	got := ctl.HandleAwgStart(EngineStartRequest{Config: rawINIConfig + "\nawg://AAAA#two"})
+
+	if got != glitchCoreResultError || len(codes) != 1 || codes[0] != EngineError {
+		t.Fatalf("result = %d, events = %v; want error and one EngineError", got, codes)
+	}
+}

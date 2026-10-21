@@ -1,8 +1,10 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -37,12 +39,40 @@ func splitLinks(raw string) []string {
 	return strings.Split(raw, "\n")
 }
 
-// splitEngineLinks splits one-per-line, except a raw INI AmneziaWG config
-// ("[Interface]") is a single unit (its lines aren't links). awg:// links split
-// per line, which enables awg multilink.
-func splitEngineLinks(raw string) []string {
-	if strings.Contains(raw, "[Interface]") {
-		return []string{strings.TrimSpace(raw)}
+var linkLinePattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9+.-]*://`)
+
+var errRawConfigInPool = errors.New("a raw [Interface] config cannot share a pool; send each config in it as an awg:// link")
+
+// isInterfaceHeader reads a section header the way the INI parsers do, so
+// "[ interface ]" counts as a config's start here too.
+func isInterfaceHeader(line string) bool {
+	line = strings.TrimSpace(line)
+	return strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") &&
+		strings.EqualFold(strings.Trim(line, "[] \t"), "interface")
+}
+
+// splitEngineLinks splits one link per line. A raw INI AmneziaWG config
+// ("[Interface]") is one unit and travels alone: inside a pool its lines
+// cannot be told apart from its neighbours', and a guess would shift every
+// server position the caller counts on.
+func splitEngineLinks(raw string) ([]string, error) {
+	lines := splitLinks(raw)
+	interfaces := 0
+	for _, l := range lines {
+		if isInterfaceHeader(l) {
+			interfaces++
+		}
+	}
+	if interfaces > 0 {
+		if interfaces > 1 {
+			return nil, errRawConfigInPool
+		}
+		for _, l := range lines {
+			if linkLinePattern.MatchString(strings.TrimSpace(l)) {
+				return nil, errRawConfigInPool
+			}
+		}
+		return []string{strings.TrimSpace(raw)}, nil
 	}
 	var out []string
 	for _, l := range splitLinks(raw) {
@@ -50,7 +80,7 @@ func splitEngineLinks(raw string) []string {
 			out = append(out, l)
 		}
 	}
-	return out
+	return out, nil
 }
 
 // pickLoopbackPort finds a 127.0.0.1 port bindable on both TCP and UDP - a mixed

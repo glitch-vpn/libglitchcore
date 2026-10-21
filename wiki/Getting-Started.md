@@ -67,7 +67,9 @@ when an engine gains an option:
 ```
 
 * `config` — one share link, or several separated by newlines, which turns the
-  session into a balancer pool.
+  session into a balancer pool. A raw WireGuard/AmneziaWG INI config only
+  goes alone; in a pool, send it as `awg://` followed by the base64url of the
+  INI, with an optional `#name`.
 * `tunFd` — a TUN file descriptor (Android `VpnService`). Leave it out on
   desktop, where the library opens its own adapter, or set `opts.proxyPort`
   instead for a loopback SOCKS proxy with no TUN and no elevation (xray and

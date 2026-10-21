@@ -66,10 +66,6 @@ func init() {
 	registerEngineVersion("mihomo", func() string { return builtMihomoVersion })
 }
 
-func mihomoConfigLinks(raw string) []string {
-	return splitEngineLinks(raw)
-}
-
 var mihomoLogSub observable.Subscription[mihomoLog.Event]
 
 // mihomo publishes every event to its subscribers whatever its own level;
@@ -299,11 +295,16 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 		x.emitStatus(EngineError, fmt.Sprintf("[mihomo] invalid opts: %v", err))
 		return glitchCoreResultError
 	}
+	links, err := splitEngineLinks(req.Config)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[mihomo] invalid config: %v", err))
+		return glitchCoreResultError
+	}
 
 	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
 	go func() {
 		mark := x.sessionGen.Load()
-		if err := x.mihomoStart(req.Config, req.TunFD, o); err != nil {
+		if err := x.mihomoStart(links, req.TunFD, o); err != nil {
 			logfmt.Errorf("[mihomo] start failed: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
@@ -319,7 +320,7 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	return glitchCoreResultSuccess
 }
 
-func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) error {
+func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts) error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
@@ -390,7 +391,6 @@ func (x *CoreController) mihomoStart(rawconfig string, tunFd int, o engineOpts) 
 	}
 	startMihomoLogBridge()
 
-	links := mihomoConfigLinks(rawconfig)
 	cfg, err := mihomoconfig.BuildConfig(links, inbound,
 		mihomoconfig.Options{Strategy: o.strategy, DisableSniffing: !o.sniffing, ProbeURL: o.probeURL, Fingerprint: o.fingerprint}, prof)
 	if err != nil {
