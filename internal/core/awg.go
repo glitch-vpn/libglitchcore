@@ -139,6 +139,12 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 		x.emitStatus(EngineError, fmt.Sprintf("[AWG] invalid opts: %v", err))
 		return glitchCoreResultError
 	}
+	// awg has no proxy inbound: honouring the start would bring up a TUN the
+	// caller did not ask for, and in this process rather than the service's.
+	if o.proxyPort > 0 {
+		x.emitStatus(EngineError, "[AWG] Start rejected: proxy mode (proxyPort) is not supported; awg runs as a TUN only")
+		return glitchCoreResultError
+	}
 
 	x.emitStatus(EngineConnecting, "[AWG] Connecting")
 
