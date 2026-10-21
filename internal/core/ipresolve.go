@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 // Family-specific echo hosts: api.ipify.org has only an A record and
@@ -138,7 +140,7 @@ func fetchExternalIPs(cfg ipResolveConfig) externalIPState {
 	go func() {
 		defer wg.Done()
 		if ip, err := fetchIPEchoRetry(cfg.urlV4, cfg.dial, false); err != nil {
-			st.IPv4Error = err.Error()
+			st.IPv4Error = logfmt.Scrub(err.Error())
 		} else {
 			st.IPv4 = ip
 		}
@@ -150,7 +152,7 @@ func fetchExternalIPs(cfg ipResolveConfig) externalIPState {
 		go func() {
 			defer wg.Done()
 			if ip, err := fetchIPEchoRetry(cfg.urlV6, cfg.dial, true); err != nil {
-				st.IPv6Error = err.Error()
+				st.IPv6Error = logfmt.Scrub(err.Error())
 			} else {
 				st.IPv6 = ip
 			}

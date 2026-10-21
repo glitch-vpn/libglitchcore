@@ -1,0 +1,53 @@
+# Each "in:" line is followed by what Scrub must make of it. Credentials are made up.
+
+in: [Xray] Failed to start: [Xray] Link parse error: parse link: parse "vless://b831381d-6324-4d53-ad4f-8cda48b30811@127.0.0.1:notaport?security=reality&pbk=Qzm3mXq2Gk5n0yR7vT1cF8hJ4pL6sW9aBxDeNuIoKtE&sid=6ba85179e30d4fc2&type=tcp": invalid port ":notaport" after host
+out: [Xray] Failed to start: [Xray] Link parse error: parse link: parse "vless://[redacted]": invalid port ":notaport" after host
+
+in: [STACK] tun://GlitchVPN <-> socks5://k3fZ0qLmX9aB2cD4:Wq9rT2yU4iO6pA8sD0fG2hJ4kL6zX8cV0bN2mQ4wE6r@127.0.0.1:61234
+out: [STACK] tun://GlitchVPN <-> socks5://[redacted]@127.0.0.1:61234
+
+in: probe https://sub.example.com/api/v1/client/subscribe?token=abc123 failed
+out: probe https://sub.example.com/[redacted] failed
+
+in: DoH https://dns.nextdns.io/a1b2c3 ok, probe http://cp.cloudflare.com/ ok
+out: DoH https://dns.nextdns.io/[redacted] ok, probe http://cp.cloudflare.com/ ok
+
+in: private_key=58e6a6a7f6d4c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c4b3a
+out: private_key=[redacted]
+
+in: {"password": "hunter2", "server": "203.0.113.4"}
+out: {"password": [redacted], "server": "203.0.113.4"}
+
+in: hysteria auth_str=s3cret obfs-password='x y' psk=abc
+out: hysteria auth_str=[redacted] obfs-password=[redacted] psk=[redacted]
+
+in: [AWG] Failed to start: config AWG: interface.private_key: key is neither hex nor base64
+out: [AWG] Failed to start: config AWG: interface.private_key: key is neither hex nor base64
+
+in: peer(Ab3x…9zQk) - bypassing; passive sample failed
+out: peer(Ab3x…9zQk) - bypassing; passive sample failed
+
+in: geosite.dat not found (looked for "/data/user/0/app.glitch.vpn/files/geo/geosite.dat")
+out: geosite.dat not found (looked for "/data/user/0/app.glitch.vpn/files/geo/geosite.dat")
+
+in: parse "hysteria2://my secret pass@203.0.113.9:443?obfs=salamander&obfs-password=Obfs": net/url: invalid userinfo
+out: parse "hysteria2://[redacted]": net/url: invalid userinfo
+
+in: parse "vless://pa)ss'W0rd@203.0.113.9:notaport?sni=a.example": invalid port ":notaport" after host
+out: parse "vless://[redacted]": invalid port ":notaport" after host
+
+in: parse "https://user:p\"w d@sub.example.com/s/abc": net/url: invalid userinfo
+out: parse "https://[redacted]@sub.example.com/[redacted]": net/url: invalid userinfo
+
+in: infra/conf: invalid "shortId": 6ba85179e30dzfc2
+out: infra/conf: invalid "shortId": [redacted]
+
+in: infra/conf: too long "shortId": 6ba85179e30d4fc2ab
+out: infra/conf: too long "shortId": [redacted]
+
+in: infra/conf: invalid "password": qzmmxqgknyrvtcfhjplswabxdenuiokteqzmmxqgknyr
+out: infra/conf: invalid "password": [redacted]
+
+in: hy2 auth=Secret1 pbk=abc
+out: hy2 auth=[redacted] pbk=[redacted]
+

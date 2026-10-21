@@ -1,0 +1,2 @@
+# A made-up link url.Parse rejects (a bad port); its password must not reach the error.
+hysteria2://Hy2SmokePass@203.0.113.9:notaport?obfs=salamander&obfs-password=ObfsSmokePass#Bad

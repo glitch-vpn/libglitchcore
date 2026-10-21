@@ -1,0 +1,74 @@
+# Lines the engines and the core wrote in TestSmoke_NoSecretLeavesInEvents
+# (internal/smoke) at verbosity 2, before the scrubber; every credential in
+# them is the smoke suite's own made-up one.
+core: Xray 26.3.27 started
+[Xray] Connecting
+Initializing core
+Parsing link(s)
+app/log: Logger started
+app/dns: DNS: created UDP client initialized for 1.1.1.1:53
+app/stats: create new counter inbound>>>tun2socks>>>traffic>>>uplink
+app/stats: create new counter inbound>>>tun2socks>>>traffic>>>downlink
+app/proxyman/inbound: creating stream worker on 127.0.0.1:65117
+app/stats: create new counter outbound>>>proxy>>>traffic>>>uplink
+app/stats: create new counter outbound>>>proxy>>>traffic>>>downlink
+transport/internet/tcp: listening TCP on 127.0.0.1:65117
+transport/internet/udp: listening UDP on 127.0.0.1:65117
+started for xray (interval 20s)
+[2808133535] proxy/socks: Connection closed immediately, likely health check connection
+Proxy mode: SOCKS5 at 127.0.0.1:65117 (no TUN)
+stopStats
+Started listenStats with interval 1s
+[Xray] Connected
+[813699713] proxy/socks: TCP Connect request to tcp:127.0.0.1:65116
+[813699713] app/dispatcher: sniffed domain: 127.0.0.1
+[813699713] app/dispatcher: taking detour [proxy] for [tcp:127.0.0.1:65116]
+[813699713] transport/internet/tcp: dialing TCP to tcp:127.0.0.1:65111
+[813699713] transport/internet: dialing to tcp:127.0.0.1:65111
+[813699713] proxy/vless/outbound: tunneling request to tcp:127.0.0.1:65116 via 127.0.0.1:65111
+[2287885401] proxy/vless/inbound: firstLen = 61
+[2287885401] proxy/vless/inbound: received request for tcp:127.0.0.1:65116
+[2287885401] app/dispatcher: default route for tcp:127.0.0.1:65116
+[2287885401] transport/internet/tcp: dialing TCP to tcp:127.0.0.1:65116
+[2287885401] transport/internet: dialing to tcp:127.0.0.1:65116
+[2287885401] proxy/freedom: connection opened to tcp:127.0.0.1:65116, local endpoint 127.0.0.1:65126, remote endpoint 127.0.0.1:65116
+[2287885401] proxy: CopyRawConn (maybe) readv
+app/log: Logger closing
+[Xray] Disconnecting
+Core stopped
+[Xray] Disconnected
+Failed to start Xray: [Xray] Link parse error: parse link: parse "vless://b831381d-6324-4d53-ad4f-8cda48b30811@127.0.0.1:notaport?security=reality&pbk=Qzm3mXq2Gk5n0yR7vT1cF8hJ4pL6sW9aBxDeNuIoKtE&sid=6ba85179e30d4fc2&type=tcp": invalid port ":notaport" after host
+[Xray] Failed to start: [Xray] Link parse error: parse link: parse "vless://b831381d-6324-4d53-ad4f-8cda48b30811@127.0.0.1:notaport?security=reality&pbk=Qzm3mXq2Gk5n0yR7vT1cF8hJ4pL6sW9aBxDeNuIoKtE&sid=6ba85179e30d4fc2&type=tcp": invalid port ":notaport" after host
+[mihomo] Connecting
+Start initial configuration in progress
+Geodata Loader mode: memconservative
+Geosite Matcher implementation: succinct
+applying config
+Initial configuration complete, total time: 5ms
+Sniffer is loaded and working
+Mixed(http+socks) proxy listening at: 127.0.0.1:65129
+Start initial compatible provider default
+Proxy mode: mixed SOCKS/HTTP at 127.0.0.1:65129 (no TUN)
+started for mihomo (interval 20s)
+started
+[mihomo] Connected
+Stats: rx=0, tx=0, durationMs=1001, rss=36560896, goMem=13543672, goroutines=15, handles=259
+[Rule] use default rules
+[TCP] dial Dead (match Match/) 127.0.0.1:53212 --> www.gstatic.com:443 error: 127.0.0.1:65128 connect error: dial tcp 127.0.0.1:65128: connectex: No connection could be made because the target machine actively refused it.
+[mihomo] Disconnecting
+Initial configuration complete, total time: 4ms
+Sniffer is closed
+stopped
+[mihomo] Disconnected
+start failed: [mihomo] config build: link 0: parse "hysteria2://Hy2SmokePass@127.0.0.1:notaport?obfs=salamander&obfs-password=ObfsSmokePass": invalid port ":notaport" after host
+[mihomo] Failed to start: [mihomo] config build: link 0: parse "hysteria2://Hy2SmokePass@127.0.0.1:notaport?obfs=salamander&obfs-password=ObfsSmokePass": invalid port ":notaport" after host
+[Xray] Stop rejected: not running
+# Lines in the formats their writers use, with made-up credentials.
+# tun2socks engine.general at Info, with the loopback credentials the core puts on its SOCKS inbound:
+[STACK] tun://GlitchVPN <-> socks5://k3fZ0qLmX9aB2cD4:Wq9rT2yU4iO6pA8sD0fG2hJ4kL6zX8cV0bN2mQ4wE6r@127.0.0.1:61234
+# awgconfig's key errors, wrapped by the start path:
+[AWG] Failed to start: config AWG: interface.private_key: key is neither hex nor base64: illegal base64 data at input byte 3
+[AWG] Failed to start: awg link: parse "awg://cHJpdmF0ZV9rZXk9WUJrM2pSbUt2Wlo5aEo2c1dEcU9McnpQb1RqN0ZnMXg=@203.0.113.9:51820": invalid port
+# AmneziaWG's UAPI dump, as the stats path reads it:
+private_key=58e6a6a7f6d4c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c4b3a
+preshared_key=0d1c2b3a49586776859a4b3c2d1e0f1a2b3c4d5e6f708192a3b4c5d6e7f80910

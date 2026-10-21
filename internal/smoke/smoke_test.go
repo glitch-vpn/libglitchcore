@@ -166,6 +166,49 @@ func (e *eventLog) waitForLog(t *testing.T, match func(string) bool, timeout tim
 	}
 }
 
+// maskedHalf is an IPv4 address (with or without a port) as xray's log prints
+// it under MaskAddress "half".
+func maskedHalf(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		host, port = addr, ""
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) != 4 {
+		return addr
+	}
+	masked := parts[0] + "." + parts[1] + ".*.*"
+	if port != "" {
+		masked += ":" + port
+	}
+	return masked
+}
+
+// everything is a copy of every event captured so far, by code.
+func (e *eventLog) everything() map[int32][]string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	out := make(map[int32][]string, len(e.byCode))
+	for code, msgs := range e.byCode {
+		out[code] = append([]string(nil), msgs...)
+	}
+	return out
+}
+
+// waitForNew waits for an event of code beyond the first seen already
+// captured: a test that provokes the same event twice cannot use waitFor.
+func (e *eventLog) waitForNew(t *testing.T, code int32, seen int, timeout time.Duration) bool {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for len(e.all(code)) <= seen {
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	return true
+}
+
 func (e *eventLog) waitFor(t *testing.T, code int32, timeout time.Duration) string {
 	t.Helper()
 	deadline := time.Now().Add(timeout)

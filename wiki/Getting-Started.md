@@ -94,7 +94,7 @@ Everything the caller needs to render arrives on the status port as
 | 300 / 301 | traffic + memory stats (1 Hz), stats error |
 | 302 | connected server: name, host, port, protocol, and the whole pool |
 | 303 | external IPv4/IPv6 of the exit, fetched through the proxy whatever the routing tiers say |
-| 400 / 401 | structured logs (off by default); 401 carries the error and fatal lines |
+| 400 / 401 | structured logs (off by default); 401 carries the error and fatal lines; credentials are redacted and xray masks addresses |
 | 402 | per-connection inspector (opt-in) |
 
 Registering a status port over a live engine replays the current state —

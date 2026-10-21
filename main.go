@@ -111,11 +111,11 @@ func MeasurePings(cRequestJSON *C.char) *C.char {
 	// Caller frees via FreeStatusMessage.
 	var req pinger.Request
 	if err := json.Unmarshal([]byte(C.GoString(cRequestJSON)), &req); err != nil {
-		return C.CString(fmt.Sprintf(`{"error":%q}`, err.Error()))
+		return C.CString(fmt.Sprintf(`{"error":%q}`, logfmt.Scrub(err.Error())))
 	}
 	data, err := json.Marshal(pinger.Measure(req))
 	if err != nil {
-		return C.CString(fmt.Sprintf(`{"error":%q}`, err.Error()))
+		return C.CString(fmt.Sprintf(`{"error":%q}`, logfmt.Scrub(err.Error())))
 	}
 	return C.CString(string(data))
 }

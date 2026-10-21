@@ -147,7 +147,7 @@ func TestSmoke_DirectServersAnswerDirectNames(t *testing.T) {
 		t.Fatalf("xray never resolved direct.test (direct stub saw %v, general saw %v)",
 			direct.asked(), general.asked())
 	}
-	fake, d, g := strings.Index(line, "FakeDNS"), strings.Index(line, direct.addr), strings.Index(line, general.addr)
+	fake, d, g := strings.Index(line, "FakeDNS"), strings.Index(line, maskedHalf(direct.addr)), strings.Index(line, maskedHalf(general.addr))
 	if d < 0 || g < 0 {
 		t.Fatalf("both resolvers must be offered for direct.test: %s", line)
 	}

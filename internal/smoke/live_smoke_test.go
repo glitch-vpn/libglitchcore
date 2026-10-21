@@ -69,7 +69,7 @@ func TestLive_DirectServersResolveDirectNames(t *testing.T) {
 	queriedVia := func(resolver string) func(string) bool {
 		return func(msg string) bool {
 			return strings.Contains(msg, "querying DNS for: "+directName) &&
-				strings.Contains(msg, resolver)
+				strings.Contains(msg, maskedHalf(resolver))
 		}
 	}
 	if ev.waitForLog(t, queriedVia(directResolver), 20*time.Second) == "" {

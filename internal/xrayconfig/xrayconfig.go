@@ -19,6 +19,8 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
 
 	xrayConf "github.com/xtls/xray-core/infra/conf"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -177,7 +179,7 @@ func outboundFromLink(link, tag string) (*xrayConf.OutboundDetourConfig, string,
 	}
 	u, err := url.Parse(link)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("parse link: %w", err)
+		return nil, "", "", fmt.Errorf("parse link: %w", logfmt.WithoutURL(err))
 	}
 
 	switch strings.ToLower(u.Scheme) {

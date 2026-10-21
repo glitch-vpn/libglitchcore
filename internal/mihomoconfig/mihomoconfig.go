@@ -13,6 +13,7 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
@@ -563,7 +564,7 @@ func uniqueName(name string, used map[string]bool) string {
 func vlessProxy(link, name string) (map[string]any, error) {
 	u, err := url.Parse(link)
 	if err != nil {
-		return nil, err
+		return nil, logfmt.WithoutURL(err)
 	}
 	port, err := strconv.Atoi(u.Port())
 	if err != nil {
@@ -654,7 +655,7 @@ func applyTLS(p map[string]any, q url.Values) {
 func trojanProxy(link, name string) (map[string]any, error) {
 	u, err := url.Parse(link)
 	if err != nil {
-		return nil, err
+		return nil, logfmt.WithoutURL(err)
 	}
 	port, err := strconv.Atoi(u.Port())
 	if err != nil {
@@ -691,7 +692,7 @@ func hysteria2Proxy(link, name string) (map[string]any, error) {
 	}
 	u, err := url.Parse(normalized)
 	if err != nil {
-		return nil, err
+		return nil, logfmt.WithoutURL(err)
 	}
 	host := u.Hostname()
 	if host == "" {

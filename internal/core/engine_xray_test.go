@@ -3,9 +3,12 @@
 package core
 
 import (
+	"strings"
 	"testing"
 
+	xrayAppLog "github.com/xtls/xray-core/app/log"
 	xrayCommonLog "github.com/xtls/xray-core/common/log"
+	xrayNet "github.com/xtls/xray-core/common/net"
 )
 
 func TestEngineRegistry_HasXray(t *testing.T) {
@@ -34,4 +37,34 @@ func TestXrayLogHandler_KeepsXraysSeverity(t *testing.T) {
 		{LogError, "error", "Xray", "core: started"},
 	}
 	assertLogs(t, logs(), want)
+}
+
+func TestXrayLogHandler_MasksLinesNotTheInspector(t *testing.T) {
+	logs := captureLogs(t, 2)
+	prev := connInspectEnabled.Load()
+	connInspectEnabled.Store(true)
+	t.Cleanup(func() { connInspectEnabled.Store(prev) })
+
+	masked := func(m xrayCommonLog.Message) xrayCommonLog.Message {
+		return &xrayAppLog.MaskedMsgWrapper{Message: m, Mask4: 16, Mask6: 32}
+	}
+	h := xrayLogHandler{}
+	h.Handle(masked(&xrayCommonLog.GeneralMessage{Severity: xrayCommonLog.Severity_Info, Content: "dialing to tcp:203.0.113.9:443"}))
+	assertLogs(t, logs(), []capturedLog{{LogEvent, "info", "Xray", "dialing to tcp:203.0.*.*:443"}})
+
+	var conns []string
+	setStatusSink(func(code int32, message string) {
+		if code == ConnEvent {
+			conns = append(conns, message)
+		}
+	})
+	h.Handle(masked(&xrayCommonLog.AccessMessage{
+		From:   xrayNet.TCPDestination(xrayNet.ParseAddress("127.0.0.1"), 50000),
+		To:     xrayNet.TCPDestination(xrayNet.ParseAddress("203.0.113.9"), 443),
+		Status: xrayCommonLog.AccessAccepted,
+		Detour: "tun2socks -> proxy",
+	}))
+	if len(conns) != 1 || !strings.Contains(conns[0], `"203.0.113.9"`) {
+		t.Fatalf("inspector record = %v, want the unmasked host", conns)
+	}
 }

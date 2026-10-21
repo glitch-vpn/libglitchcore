@@ -9,6 +9,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -112,7 +114,8 @@ func Measure(req Request) []Result {
 
 			delay, err := m(ctx, link, probeURL)
 			if err != nil {
-				results[i].Error = err.Error()
+				// A parse error quotes the link it rejected.
+				results[i].Error = logfmt.Scrub(err.Error())
 				return
 			}
 			results[i].Alive = true

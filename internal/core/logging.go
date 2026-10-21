@@ -41,12 +41,13 @@ func logEnabled(level logfmt.Level) bool {
 
 // emitLog is the one sink for every engine's lines and the core's own: the
 // level is the one its writer reported, and it alone decides the verbosity
-// gate and LogEvent versus LogError.
+// gate and LogEvent versus LogError. The text is scrubbed before the payload
+// is built: a redaction inside JSON could cut an escape in half.
 func emitLog(level logfmt.Level, component, message string) {
 	if !logEnabled(level) || strings.TrimSpace(message) == "" {
 		return
 	}
-	line := logfmt.BuildJSON(level, component, message)
+	line := logfmt.BuildJSON(level, logfmt.Scrub(component), logfmt.Scrub(message))
 	_, _ = os.Stdout.Write(append([]byte(line), '\n'))
 	if globalController == nil || inFFICall.Load() {
 		return

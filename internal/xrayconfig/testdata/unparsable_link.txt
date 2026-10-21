@@ -1,0 +1,2 @@
+# A made-up link url.Parse rejects (a bad port); its password must not reach the error.
+vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.9:notaport?security=reality&pbk=Qzm3mXq2Gk5n0yR7vT1cF8hJ4pL6sW9aBxDeNuIoKtE&sid=6ba85179e30d4fc2&type=tcp#Bad

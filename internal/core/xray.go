@@ -189,13 +189,16 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 	}
 
 	if cfg.LogConfig == nil {
-		cfg.LogConfig = &xrayConf.LogConfig{LogLevel: xrayLogLevel, AccessLog: "", ErrorLog: "", DNSLog: false}
-	} else {
-		cfg.LogConfig.LogLevel = xrayLogLevel
-		cfg.LogConfig.AccessLog = ""
-		cfg.LogConfig.ErrorLog = ""
-		cfg.LogConfig.DNSLog = false
+		cfg.LogConfig = &xrayConf.LogConfig{}
 	}
+	cfg.LogConfig.LogLevel = xrayLogLevel
+	cfg.LogConfig.AccessLog = ""
+	cfg.LogConfig.ErrorLog = ""
+	cfg.LogConfig.DNSLog = false
+	// xray's lines name the addresses it dials and resolves; "half" keeps
+	// the /16 (IPv6 /32) a support reader needs to tell networks apart.
+	// mihomo has no such option, so its lines keep theirs.
+	cfg.LogConfig.MaskAddress = "half"
 	xrayconfig.ApplyDNS(&cfg, o.dns, routing)
 	xrayconfig.ApplyMux(&cfg, res.OutboundTags, res.VisionTags, o.muxConcurrency, o.xudpConcurrency)
 	xrayconfig.ApplyFingerprint(&cfg, res.OutboundTags, o.fingerprint)

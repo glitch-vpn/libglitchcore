@@ -24,11 +24,17 @@ func registerCoreLogHandler() {
 }
 
 // xrayLogHandler takes xray's messages typed, so a line keeps the severity
-// xray gave it.
+// xray gave it. With MaskAddress set xray hands every message over wrapped:
+// the wrapper's text is the masked one, and the inspector reads the
+// unmasked access record inside.
 type xrayLogHandler struct{}
 
 func (xrayLogHandler) Handle(msg xrayCommonLog.Message) {
-	switch m := msg.(type) {
+	inner := msg
+	if masked, ok := msg.(*xrayAppLog.MaskedMsgWrapper); ok {
+		inner = masked.Message
+	}
+	switch m := inner.(type) {
 	case *xrayCommonLog.AccessMessage:
 		handleXrayAccess(m)
 	case *xrayCommonLog.GeneralMessage:

@@ -190,3 +190,20 @@ func TestRelayedLogPasses_HoldsServiceLinesToTheLocalGate(t *testing.T) {
 		t.Error("a relayed log payload that does not parse must be dropped")
 	}
 }
+
+func TestLogPipeline_ScrubsBeforeThePayload(t *testing.T) {
+	const link = `vless://b831381d-6324-4d53-ad4f-8cda48b30811@203.0.113.9:443?pbk=Qzm3mXq2Gk5n0yR7vT1cF8hJ4pL6sW9aBxDeNuIoKtE`
+	logs := captureLogs(t, 2)
+
+	logfmt.Errorf(`[Xray] Failed to start Xray: parse "%s"`, link)
+	assertLogs(t, logs(), []capturedLog{
+		{LogError, "error", "Xray", `Failed to start Xray: parse "vless://[redacted]"`},
+	})
+
+	var lifecycle []string
+	setStatusSink(func(code int32, message string) { lifecycle = append(lifecycle, message) })
+	globalController.emitStatus(EngineError, `[Xray] Failed to start: parse "`+link+`": invalid port`)
+	if len(lifecycle) != 1 || lifecycle[0] != `[Xray] Failed to start: parse "vless://[redacted]": invalid port` {
+		t.Fatalf("EngineError text = %q", lifecycle)
+	}
+}

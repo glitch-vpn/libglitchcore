@@ -141,6 +141,9 @@ func (x *CoreController) awgRunning() bool {
 
 func (x *CoreController) emitStatus(code int32, message string) {
 	x.updateConnectedAt(code)
+	if carriesErrorText(code) {
+		message = logfmt.Scrub(message)
+	}
 	if !statusCallbackRegistered.Load() {
 		return
 	}
@@ -154,6 +157,19 @@ func (x *CoreController) emitStatus(code int32, message string) {
 		return
 	}
 	callback(code, message)
+}
+
+// Lifecycle and stats-error texts wrap engine errors, and a parse error quotes
+// the link it rejected. A JSON payload's free-text fields are scrubbed where
+// they are built (log lines in emitLog, the IP errors in ipresolve).
+func carriesErrorText(code int32) bool {
+	switch code {
+	case StatsError, EngineConnecting, EngineConnected, EngineError, EngineDisconnecting,
+		EngineDisconnected, EngineAlreadyRunning, EngineConflictOtherCore, EngineStopRejectedNotRunning:
+		return true
+	default:
+		return false
+	}
 }
 
 func (x *CoreController) updateConnectedAt(code int32) {

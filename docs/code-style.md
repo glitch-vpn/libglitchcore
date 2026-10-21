@@ -108,6 +108,15 @@ being info. Those two write the level as the line's leading token ("warn: ",
 text; nothing reads one out of the message's words. The level alone picks the
 verbosity gate and `LogEvent` versus `LogError`.
 
+`emitLog` scrubs a line's text before its JSON is built, and `emitStatus`
+scrubs the lifecycle and stats-error texts (`logfmt.Scrub`). xray's lines
+arrive with addresses masked ("half"); the inspector reads the unmasked access
+record. A scrubber pattern is tested against `internal/logfmt/testdata/
+engine_lines.txt`, real lines with made-up credentials, which a line without
+one must pass unchanged, and its own case goes in `testdata/scrub_cases.txt`
+rather than in the test source: Defender on Windows quarantines a test binary
+that embeds some of these links.
+
 ### 2.2 Payloads: marshal structs, dedupe before emit
 
 Event payloads are small structs with json tags, marshaled — see

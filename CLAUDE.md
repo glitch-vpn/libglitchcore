@@ -48,8 +48,11 @@ under `internal/`. One `CoreController`, one engine at a time.
 5. **No config contents in logs or event payloads.** Share links and INI
    configs carry credentials. `ServerEvent` deliberately exposes identity only
    (name/host/port/protocol); keep it that way unless an opt explicitly asks
-   for more. Live-test links live outside the repo (`GLITCH_LIVE_LINKS_FILE`),
-   never committed.
+   for more. A wrapped error can still quote a link, so every log line and
+   every lifecycle or stats-error text passes `logfmt.Scrub` on its way out
+   (`emitLog` before the JSON is built, `emitStatus` for the text codes); a
+   new free-text path goes through one of the two. Live-test links live
+   outside the repo (`GLITCH_LIVE_LINKS_FILE`), never committed.
 6. **Cross-process routing is local-first.** `engineStop` / `engineIsRunning`
    / `startStats` / `stopStats` act on the in-process engine when one runs and
    forward to the service only otherwise. A proxy-mode session must never
