@@ -23,9 +23,16 @@ with `opts.geoAssetsDir`; it travels inside the start request, so it also
 reaches the engine when it runs inside the Windows service, where an env var
 set by the app process would not.
 
-* **No default on Android.** Desktop falls back to the directory beside the
-  binary; Android has no such place and nothing is packaged in the APK, so geo
-  rules there require `geoAssetsDir`.
+* **No default on Android or Linux.** Windows and macOS fall back to the
+  directory beside the binary; Android has no such place and nothing is
+  packaged in the APK, so geo rules there require `geoAssetsDir`, as they do on
+  Linux.
+* **mihomo's home is the same directory.** mihomo reads the .dat files from its
+  home and writes `cache.db` there, so it needs a writable directory even
+  without geo rules: `geoAssetsDir`, else `xray.location.asset`. On Android
+  and Linux, where neither has a default, a mihomo start without one fails;
+  pass the app's files directory, or set `xray.location.asset` to it once
+  through `SetEnvVar`.
 * **mihomo validates by loading the `cn` list.** A trimmed .dat without it is
   rejected. Upstream mihomo would delete such a file and download a
   replacement; the core verifies first and fails the start with the file

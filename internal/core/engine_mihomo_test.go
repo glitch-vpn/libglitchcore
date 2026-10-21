@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,5 +116,17 @@ func TestMihomoTunnelDial_RefusesOnceItsStartsSessionEnded(t *testing.T) {
 	if conn, err := dial(context.Background(), "tcp", "example.com:443"); err == nil {
 		_ = conn.Close()
 		t.Fatal("a dial from an ended session must not reach mihomo's tunnel")
+	}
+}
+
+func TestEnsureMihomoHome_RefusesWithoutADir(t *testing.T) {
+	t.Setenv(xrayAsset, "")
+	before := mihomoHomeDir
+	err := ensureMihomoHome("")
+	if err == nil || !strings.Contains(err.Error(), "geoAssetsDir") {
+		t.Fatalf("ensureMihomoHome(\"\") = %v, want an error naming geoAssetsDir", err)
+	}
+	if mihomoHomeDir != before {
+		t.Errorf("home moved to %q on a refused start", mihomoHomeDir)
 	}
 }

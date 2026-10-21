@@ -4,11 +4,11 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -233,32 +233,26 @@ func mihomoRejectRecord(line string) (conninspect.Record, bool) {
 // Guarded by coreMutex (only mihomoStart touches it, one engine at a time).
 var mihomoHomeDir string
 
-// Points mihomo home at the per-connection dir (falling back to
-// xray.location.asset, then a temp default) so GEOSITE/GEOIP find the .dat
-// files. Re-applied on change: mihomo memoizes geo matchers by list name
-// only, so a stale cache would keep serving the previous dir's files. An
-// unusable dir fails the start - proceeding would silently serve the
-// previous home's geo data.
+// Points mihomo home at the per-connection dir, else xray.location.asset, so
+// GEOSITE/GEOIP find the .dat files; mihomo writes cache.db there too.
+// Re-applied on change: mihomo memoizes geo matchers by list name only, so a
+// stale cache would keep serving the previous dir's files. An unusable dir
+// fails the start - proceeding would silently serve the previous home's geo
+// data. Never created: the dir is applied inside the LocalSystem service, where
+// creating directories on request would hand the (unauthenticated) command pipe
+// a filesystem primitive.
 func ensureMihomoHome(optDir string) error {
-	dir, own := strings.TrimSpace(optDir), false
+	dir := strings.TrimSpace(optDir)
 	if dir == "" {
 		dir = strings.TrimSpace(os.Getenv(xrayAsset))
 	}
 	if dir == "" {
-		dir, own = filepath.Join(os.TempDir(), "glitch_vpn_mihomo"), true
+		return errors.New("no home dir: pass geoAssetsDir, an existing directory the app can write")
 	}
 	if dir == mihomoHomeDir {
 		return nil
 	}
-	// Only the fallback dir is ours to create. A caller-supplied path is
-	// applied inside the LocalSystem service, where creating directories on
-	// request would hand the (unauthenticated) command pipe a filesystem
-	// primitive.
-	if own {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return fmt.Errorf("home dir: %w", err)
-		}
-	} else if st, err := os.Stat(dir); err != nil || !st.IsDir() {
+	if st, err := os.Stat(dir); err != nil || !st.IsDir() {
 		return fmt.Errorf("home dir %q is not an existing directory", dir)
 	}
 	C.SetHomeDir(dir)

@@ -22,8 +22,9 @@ static void relax_fdsan() {
 import "C"
 
 // No asset-dir default here: geo files are not packaged in the APK and there
-// is no exe dir to fall back to, so an Android caller with geo rules must pass
-// geoAssetsDir (or set xray.location.asset itself).
+// is no exe dir to fall back to, so an Android caller must pass geoAssetsDir
+// (or set xray.location.asset itself) for geo rules and for every mihomo start,
+// whose home it is.
 func platformInit(_ string) {
 	C.relax_fdsan()
 }
