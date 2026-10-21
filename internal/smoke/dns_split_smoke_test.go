@@ -114,8 +114,8 @@ func TestSmoke_DirectServersAnswerDirectNames(t *testing.T) {
 
 	link := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#DnsSplit", testUUID, upstream)
 	proxyPort := startProxyEngineDNS(t, link, map[string]string{
-		"directRules": "domain:direct.test",
-		"disableIPv6": "1",
+		"routingTiers": `[{"direct":["domain:direct.test"]}]`,
+		"disableIPv6":  "1",
 		// The probe would otherwise resolve through the general stub and blur
 		// the assertion.
 		"probeUrl":          echo.URL,

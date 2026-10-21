@@ -4,53 +4,27 @@ import (
 	"encoding/json"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
 func TestRoutingFromOpts_Tiers(t *testing.T) {
-	// Legacy keys produce one tier, byte-identical to the old flat profile;
-	// bypassCountries stays a Direct geoip alias.
-	p, err := routingFromOpts(map[string]string{
-		"routingMode":     "direct-all",
-		"proxyRules":      "domain:youtube.com, geosite:youtube",
-		"directRules":     "geoip:ru",
-		"blockRules":      "geosite:ads",
-		"bypassCountries": "KZ,BY",
-	})
-	if err != nil {
-		t.Fatalf("legacy keys: %v", err)
-	}
-	want := routing.Profile{
-		Mode: "direct-all",
-		Tiers: []routing.Tier{{
-			Block:  []string{"geosite:ads"},
-			Direct: []string{"geoip:ru", "geoip:kz", "geoip:by"},
-			Proxy:  []string{"domain:youtube.com", "geosite:youtube"},
-		}},
-	}
-	if got, exp := jsonOf(t, p), jsonOf(t, want); got != exp {
-		t.Errorf("legacy profile = %s, want %s", got, exp)
-	}
-
-	// No rule keys at all -> no tiers.
-	p, err = routingFromOpts(map[string]string{"routingMode": "proxy-all"})
+	p, err := routingFromOpts(map[string]string{"routingMode": "proxy-all"})
 	if err != nil || len(p.Tiers) != 0 {
 		t.Errorf("empty opts: tiers = %v, err = %v; want none, nil", p.Tiers, err)
 	}
 
-	// routingTiers wins; legacy keys are ignored.
 	p, err = routingFromOpts(map[string]string{
-		"routingTiers": `[{"proxy":["domain:vk.ru"]},{"direct":["domain:ru"]}]`,
-		"directRules":  "geoip:ru",
+		"routingTiers": `[{"proxy":["domain:vk.ru","process:My, App.exe"]},{"direct":["domain:ru","regexp:^x{1,3}\\.ru$"]}]`,
 	})
 	if err != nil {
 		t.Fatalf("routingTiers: %v", err)
 	}
 	wantTiers := []routing.Tier{
-		{Proxy: []string{"domain:vk.ru"}},
-		{Direct: []string{"domain:ru"}},
+		{Proxy: []string{"domain:vk.ru", "process:My, App.exe"}},
+		{Direct: []string{"domain:ru", `regexp:^x{1,3}\.ru$`}},
 	}
 	if got, exp := jsonOf(t, p.Tiers), jsonOf(t, wantTiers); got != exp {
 		t.Errorf("tiers = %s, want %s", got, exp)
@@ -60,6 +34,39 @@ func TestRoutingFromOpts_Tiers(t *testing.T) {
 	for _, bad := range []string{"not json", `{"block":[]}`, `[1,2]`, `[{"block":"x"}]`, "null", `[] []`} {
 		if _, err := routingFromOpts(map[string]string{"routingTiers": bad}); err == nil {
 			t.Errorf("routingTiers %q: want error, got nil", bad)
+		}
+	}
+}
+
+// A caller still on the CSV keys would connect without the rules it means;
+// the start fails instead, even beside routingTiers and even when empty.
+func TestRoutingFromOpts_LegacyKeysRefused(t *testing.T) {
+	for _, key := range legacyRuleKeys {
+		for _, opts := range []map[string]string{
+			{key: "geoip:ru"},
+			{key: ""},
+			{key: "geoip:ru", "routingTiers": `[{"proxy":["domain:vk.ru"]}]`},
+		} {
+			_, err := routingFromOpts(opts)
+			if err == nil || !strings.Contains(err.Error(), key) {
+				t.Errorf("opts %v: err = %v, want a refusal naming %s", opts, err, key)
+			}
+		}
+	}
+}
+
+// A comma in a domain value would split mihomo's rule line and could re-target
+// the rule, so the start fails on every engine alike.
+func TestRoutingFromOpts_CommaInDomainRefused(t *testing.T) {
+	for _, tiers := range []string{
+		`[{"block":["domain:example.com,DIRECT"]}]`,
+		`[{"proxy":["full:a.example,b.example"]}]`,
+		`[{"direct":["keyword:ads,REJECT"]}]`,
+		`[{"proxy":["domain:vk.ru"]},{"block":["ads.example,DIRECT"]}]`,
+		`[{"block":["regexp:^(a|b) , c$"]}]`,
+	} {
+		if _, err := routingFromOpts(map[string]string{"routingTiers": tiers}); err == nil {
+			t.Errorf("routingTiers %s: want error, got nil", tiers)
 		}
 	}
 }

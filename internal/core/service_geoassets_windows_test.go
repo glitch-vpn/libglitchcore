@@ -56,7 +56,7 @@ func TestServiceDispatch_EngineStart_GeoAssetsDir(t *testing.T) {
 		Opts: map[string]string{
 			"proxyPort":    fmt.Sprint(proxyPort),
 			"geoAssetsDir": dir,
-			"directRules":  "geosite:glitch-test,geoip:glitch-test",
+			"routingTiers": `[{"direct":["geosite:glitch-test","geoip:glitch-test"]}]`,
 			"disableIPv6":  "1",
 		},
 	})

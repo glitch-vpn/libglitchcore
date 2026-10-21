@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -269,7 +270,8 @@ func buildRules(p routing.Profile, target string) []string {
 
 // matcherRules classifies a flat matcher list (routing.Classify) into mihomo rule
 // lines routing each entry to target. Invalid geo codes (non-ASCII) are dropped so
-// one mistake can't fail the whole config.
+// one mistake can't fail the whole config. The core runs routing.Profile.Validate
+// first, so no domain value here holds a comma that would split its line.
 func matcherRules(matchers []string, target string) []string {
 	var out []string
 	for _, m := range matchers {
@@ -297,10 +299,22 @@ func matcherRules(matchers []string, target string) []string {
 		case routing.KindIPCIDR:
 			out = append(out, "IP-CIDR,"+routing.NormalizeCIDR(val)+","+target+",no-resolve")
 		case routing.KindProcess:
-			out = append(out, "PROCESS-NAME,"+val+","+target)
+			out = append(out, processRule(val, target))
 		}
 	}
 	return out
+}
+
+// processRule: PROCESS-NAME reads its value from one comma-separated field,
+// so a name holding a comma (legal on Windows) rides PROCESS-NAME-REGEX, which
+// rejoins its fields. Spaces are spelled \x20 because mihomo trims each field.
+// Both forms match the whole name, case-insensitively.
+func processRule(name, target string) string {
+	if !strings.Contains(name, ",") {
+		return "PROCESS-NAME," + name + "," + target
+	}
+	pattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(name), " ", `\x20`) + "$"
+	return "PROCESS-NAME-REGEX," + pattern + "," + target
 }
 
 // Strategies mihomo accepts (besides "" = url-test default); the plugin gates on

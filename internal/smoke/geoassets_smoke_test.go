@@ -75,7 +75,7 @@ func TestSmoke_GeoAssetsDirOpt_Xray(t *testing.T) {
 	link := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#Geo", testUUID, upstream)
 	startProxyEngine(t, link, map[string]string{
 		"geoAssetsDir": dir,
-		"directRules":  "geosite:glitch-test,geoip:glitch-test",
+		"routingTiers": `[{"direct":["geosite:glitch-test","geoip:glitch-test"]}]`,
 		"disableIPv6":  "1",
 	})
 	ev.waitFor(t, core.EngineConnected, 30*time.Second)
@@ -102,7 +102,7 @@ func TestSmoke_GeoAssetsMissing_MihomoFailsInsteadOfDownloading(t *testing.T) {
 		Opts: map[string]string{
 			"proxyPort":    strconv.Itoa(freePort(t)),
 			"geoAssetsDir": dir,
-			"directRules":  "geosite:glitch-test",
+			"routingTiers": `[{"direct":["geosite:glitch-test"]}]`,
 			"disableIPv6":  "1",
 		},
 	})
@@ -149,7 +149,7 @@ func TestSmoke_GeoAssetsDirOpt_Mihomo(t *testing.T) {
 			Opts: map[string]string{
 				"proxyPort":    strconv.Itoa(freePort(t)),
 				"geoAssetsDir": dir,
-				"directRules":  "geosite:glitch-test,geoip:glitch-test",
+				"routingTiers": `[{"direct":["geosite:glitch-test","geoip:glitch-test"]}]`,
 				"disableIPv6":  "1",
 			},
 		})

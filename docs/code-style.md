@@ -185,6 +185,10 @@ if v, ok := o["resolveExternalIp"]; ok && strings.TrimSpace(v) != "" {
   through different channels — `routingTiers` synchronously (error return +
   `EngineError`), `domainStrategy` asynchronously (`EngineError` only), because
   untagged `engine.go` cannot import `xrayconfig` to learn the value set.
+- A matcher one engine cannot carry intact is refused for all of them, in
+  `routing.Profile.Validate` (run by `routingFromOpts`), never inside one
+  engine's config builder: the same rule list must mean the same on every
+  engine. The CSV rule keys are refused outright, as keys no engine reads.
 
 ## 6. Comments
 

@@ -77,7 +77,9 @@ when an engine gains an option:
 * `opts` — flat string map. Routing tiers are evaluated in order, first match
   wins; within a tier block beats direct beats proxy. Matchers are `geoip:nl`,
   `geosite:category-ads-all`, `domain:example.com`, `full:host`, `keyword:str`,
-  `regexp:expr`, `process:app.exe` or a bare IP/CIDR.
+  `regexp:expr`, `process:app.exe` or a bare IP/CIDR. A start fails on a
+  domain, `full:` or `keyword:` matcher holding a comma, and on a regexp with
+  a space beside a comma: mihomo splits its rule lines there.
 * `dnsConfig` — resolvers (plain, DoT, DoH, DoQ), fake-ip mode, a hosts table
   and separate resolvers for direct-routed names.
 

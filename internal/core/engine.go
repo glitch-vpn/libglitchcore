@@ -171,11 +171,19 @@ func proxyPortFromOpts(o map[string]string) int {
 	return n
 }
 
-// routingFromOpts: "routingTiers" (a JSON array of {block,direct,proxy}) wins
-// over the legacy single-tier keys; "bypassCountries" is a legacy alias ->
-// Direct geoip: entries. Malformed routingTiers fails the start instead of
-// degrading - silently dropping block rules would bypass the kill-switch.
+// CSV rule keys the core does not read. A caller sending them would connect
+// without the rules it means, so their presence fails the start.
+var legacyRuleKeys = []string{"proxyRules", "directRules", "blockRules", "bypassCountries"}
+
+// routingFromOpts: "routingTiers" is a JSON array of {block,direct,proxy}.
+// Malformed tiers fail the start instead of degrading - silently dropping
+// block rules would bypass the kill-switch.
 func routingFromOpts(o map[string]string) (routing.Profile, error) {
+	for _, key := range legacyRuleKeys {
+		if _, ok := o[key]; ok {
+			return routing.Profile{}, fmt.Errorf("%s is not read; send the rules as routingTiers", key)
+		}
+	}
 	p := routing.Profile{
 		Mode: o["routingMode"],
 		// Raw: only xray knows the value set, and engine.go cannot import
@@ -201,46 +209,11 @@ func routingFromOpts(o map[string]string) (routing.Profile, error) {
 		if p.Tiers == nil {
 			return routing.Profile{}, fmt.Errorf("routingTiers: null is not a tier list")
 		}
-		if o["proxyRules"]+o["directRules"]+o["blockRules"]+o["bypassCountries"] != "" {
-			log.Printf("[Engine] routingTiers set; ignoring legacy rule keys")
+		if err := p.Validate(); err != nil {
+			return routing.Profile{}, fmt.Errorf("routingTiers: %w", err)
 		}
-		return p, nil
-	}
-	direct := csv(o["directRules"])
-	for _, cc := range lowerCSV(o["bypassCountries"]) {
-		direct = append(direct, "geoip:"+cc)
-	}
-	tier := routing.Tier{
-		Block:  csv(o["blockRules"]),
-		Direct: direct,
-		Proxy:  csv(o["proxyRules"]),
-	}
-	if len(tier.Block)+len(tier.Direct)+len(tier.Proxy) > 0 {
-		p.Tiers = []routing.Tier{tier}
 	}
 	return p, nil
-}
-
-func csv(s string) []string {
-	if strings.TrimSpace(s) == "" {
-		return nil
-	}
-	parts := strings.Split(s, ",")
-	out := make([]string, 0, len(parts))
-	for _, p := range parts {
-		if p = strings.TrimSpace(p); p != "" {
-			out = append(out, p)
-		}
-	}
-	return out
-}
-
-func lowerCSV(s string) []string {
-	out := csv(s)
-	for i := range out {
-		out[i] = strings.ToLower(out[i])
-	}
-	return out
 }
 
 func (x *CoreController) localEngineRunning(e Engine) bool {

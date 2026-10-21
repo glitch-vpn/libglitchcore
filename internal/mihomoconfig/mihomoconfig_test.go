@@ -413,6 +413,39 @@ func TestBuildRules(t *testing.T) {
 	}
 }
 
+// mihomo splits rule lines on commas and trims each piece. Read back through
+// its own parser: a process name with commas and spaces beside them must keep
+// its target and match only itself, and a regexp's comma must survive.
+func TestBuildConfig_CommasSurviveMihomoParser(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com#vpn"
+	const process = "My App , v2.exe"
+	cfg, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{},
+		routing.Profile{Tiers: []routing.Tier{{
+			Block:  []string{"process:" + process},
+			Direct: []string{`regexp:^x{1,3}\.example$`},
+		}}})
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	proc, re := cfg.Rules[0], cfg.Rules[1]
+	if proc.RuleType() != C.ProcessNameRegex || proc.Adapter() != "REJECT" {
+		t.Fatalf("process rule = %s -> %s, want PROCESS-NAME-REGEX -> REJECT", proc.RuleType(), proc.Adapter())
+	}
+	for name, want := range map[string]bool{
+		process:            true,
+		"my app , V2.EXE":  true,
+		"My App,v2.exe":    false,
+		"xMy App , v2.exe": false,
+	} {
+		if got, _ := proc.Match(&C.Metadata{Process: name}, C.RuleMatchHelper{}); got != want {
+			t.Errorf("process rule matches %q = %v, want %v", name, got, want)
+		}
+	}
+	if re.RuleType() != C.DomainRegex || re.Payload() != `^x{1,3}\.example$` || re.Adapter() != "DIRECT" {
+		t.Fatalf("regexp rule = %s %q -> %s", re.RuleType(), re.Payload(), re.Adapter())
+	}
+}
+
 func TestBuildRules_TwoTierOrdering(t *testing.T) {
 	// Tier 1's vk.ru->proxy must be emitted before tier 2's .ru->direct, so
 	// the more specific rule wins under first-match-wins evaluation.

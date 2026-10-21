@@ -2,6 +2,8 @@
 package routing
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 )
@@ -17,7 +19,8 @@ const (
 	TargetBlock  = "block"
 )
 
-// ProcessRules: process:NAME -> target. Mihomo uses PROCESS-NAME; xray applies
+// ProcessRules: process:NAME -> target. Mihomo uses PROCESS-NAME, or
+// PROCESS-NAME-REGEX for a name holding a comma; xray applies
 // direct/block in the tun2socks dialer (xray can't see the real app behind it).
 // The dialer consumes one flat map, so tier order cannot apply to process:
 // rules - only the global priority block > direct > proxy does (later writes win).
@@ -99,6 +102,38 @@ func (p Profile) HasBlock() bool {
 		}
 	}
 	return false
+}
+
+// Validate refuses what mihomo's comma-split rule lines would cut or re-target.
+func (p Profile) Validate() error {
+	for i, t := range p.Tiers {
+		for _, list := range [][]string{t.Block, t.Direct, t.Proxy} {
+			for _, m := range list {
+				if err := validateMatcher(m); err != nil {
+					return fmt.Errorf("tier %d: %q: %w", i+1, m, err)
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func validateMatcher(m string) error {
+	kind, val, ok := Classify(m)
+	if !ok {
+		return nil
+	}
+	switch kind {
+	case KindDomainSuffix, KindDomainFull, KindDomainKeyword:
+		if strings.Contains(val, ",") {
+			return errors.New("a domain cannot contain a comma")
+		}
+	case KindDomainRegex:
+		if strings.Contains(val, " ,") || strings.Contains(val, ", ") {
+			return errors.New("a regexp cannot have a space beside a comma")
+		}
+	}
+	return nil
 }
 
 type MatchKind int

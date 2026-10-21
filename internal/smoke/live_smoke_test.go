@@ -53,8 +53,8 @@ func TestLive_DirectServersResolveDirectNames(t *testing.T) {
 	t.Cleanup(func() { core.ApplyStatusVerbosity(-1) })
 
 	proxyPort := startProxyEngineDNS(t, strings.Join(links, "\n"), map[string]string{
-		"directRules": "domain:" + directName,
-		"disableIPv6": "1",
+		"routingTiers": `[{"direct":["domain:` + directName + `"]}]`,
+		"disableIPv6":  "1",
 	}, &dnsconfig.Config{
 		Mode:          dnsconfig.ModeFakeIP,
 		Servers:       []string{generalResolver},
