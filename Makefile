@@ -100,7 +100,8 @@ ffi:
 	if [ -z "$$HAS_XRAY" ]; then NO_TAGS="$$NO_TAGS no_xray"; fi
 	if [ -z "$$HAS_AWG" ]; then NO_TAGS="$$NO_TAGS no_awg"; fi
 	if [ -z "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_mihomo"; fi
-	if [ -n "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_tailscale"; fi
+	# mihomo outbounds no share link reaches; easytier alone embeds a ~7 MB WASM core.
+	if [ -n "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier"; fi
 	# cmfa gates mihomo's Android package reader; only meaningful with mihomo in.
 	CMFA=""
 	if [ -n "$$HAS_MIHOMO" ]; then CMFA="cmfa"; fi
@@ -150,7 +151,7 @@ run-tests:
 	NO_TAGS=""
 	case " $$ENGINE_SET " in *" xray "*) ;; *) NO_TAGS="$$NO_TAGS no_xray" ;; esac
 	case " $$ENGINE_SET " in *" awg "*) ;; *) NO_TAGS="$$NO_TAGS no_awg" ;; esac
-	case " $$ENGINE_SET " in *" mihomo "*) NO_TAGS="$$NO_TAGS no_tailscale" ;; *) NO_TAGS="$$NO_TAGS no_mihomo" ;; esac
+	case " $$ENGINE_SET " in *" mihomo "*) NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier" ;; *) NO_TAGS="$$NO_TAGS no_mihomo" ;; esac
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=gcc CGO_CFLAGS="-I$$DART_SDK/include" \
 	  go test -tags="with_gvisor $$NO_TAGS" -count=1 -timeout 120s ./...
 	echo "[OK] Tests passed"

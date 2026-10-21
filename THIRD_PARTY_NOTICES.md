@@ -37,6 +37,7 @@ guards.
 |---|---|---|
 | sing (sagernet, via xray-core) | GPL-3.0-or-later | https://github.com/SagerNet |
 | sing, sing-tun and other sing-* modules (metacubex forks, via mihomo) | GPL-3.0-or-later | https://github.com/MetaCubeX |
+| mipstack (via mihomo) | MPL-2.0 | https://github.com/metacubex/mipstack |
 | wireguard-go | MIT | https://git.zx2c4.com/wireguard-go |
 | gVisor (netstack) | Apache-2.0 | https://github.com/google/gvisor |
 

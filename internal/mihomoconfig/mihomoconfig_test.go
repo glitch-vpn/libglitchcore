@@ -267,6 +267,13 @@ PersistentKeepalive = 25`
 	if _, ok := cfg.Proxies["proxy-0"]; !ok {
 		t.Fatalf("wireguard proxy not built: %v", cfg.Proxies)
 	}
+	proxy, err := ProxyMapFromLink(ini)
+	if err != nil {
+		t.Fatalf("ProxyMapFromLink(awg): %v", err)
+	}
+	if stack, _ := proxy["ip-stack"].(map[string]any); stack["mode"] != "gvisor" {
+		t.Fatalf("ip-stack = %v, want gvisor", proxy["ip-stack"])
+	}
 
 	if _, err := BuildConfig([]string{awgconfig.EncodeLink(ini, "demo")}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{}); err != nil {
 		t.Fatalf("BuildConfig(awg link): %v", err)
@@ -507,6 +514,9 @@ func TestBuildConfig_TunInbound(t *testing.T) {
 	}
 	if !fd.General.Tun.Enable || fd.General.Tun.FileDescriptor != 42 {
 		t.Fatalf("fd tun not configured: %+v", fd.General.Tun)
+	}
+	if n := fd.General.Tun.ProcessorsPerChannel; n != 0 {
+		t.Fatalf("tun processors per channel = %d, want 0 (one per processor)", n)
 	}
 
 	desktop, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPN", DNS: dns}}, Options{}, routing.Profile{})

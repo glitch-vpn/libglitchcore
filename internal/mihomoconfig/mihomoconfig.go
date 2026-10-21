@@ -404,6 +404,9 @@ func applyTun(raw *config.RawConfig, t *TunInbound) {
 	raw.Tun.Stack = C.TunGvisor
 	raw.Tun.DNSHijack = []string{"any:53"}
 	raw.Tun.MTU = uint32(mtu)
+	// mihomo defaults to 1, one goroutine for all inbound packets; 0 lets gVisor
+	// run one per processor on Linux and Android, as the tunnel is tested with.
+	raw.Tun.ProcessorsPerChannel = 0
 
 	if t.FileDescriptor > 0 {
 		// Android. AutoRoute/AutoDetectInterface MUST stay off: either one makes
@@ -885,6 +888,9 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 		"private-key": iface["privatekey"],
 		"public-key":  peer["publickey"],
 		"udp":         true,
+		// mihomo's default here is its own mips stack; gVisor is the one the
+		// rest of the core runs and the one this path is tested on.
+		"ip-stack": map[string]any{"mode": "gvisor"},
 	}
 	if v4, v6 := splitWGAddresses(iface["address"]); v4 != "" || v6 != "" {
 		if v4 != "" {
