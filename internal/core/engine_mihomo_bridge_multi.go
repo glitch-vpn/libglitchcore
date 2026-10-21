@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
@@ -32,8 +33,12 @@ func (x *CoreController) mihomoBuildBridgeInbound(dns *dnsconfig.Config, prof ro
 	if perr != nil {
 		return mihomoconfig.Inbound{}, nil, fmt.Errorf("[mihomo] pick bridge port: %w", perr)
 	}
-	b := &bridgeSetup{mixedPort: p}
-	in := mihomoconfig.Inbound{MixedPort: p, Interface: physicalInterfaceName()}
+	auth := loopbackauth.New()
+	b := &bridgeSetup{
+		mixedPort: p,
+		proxyURL:  loopbackSocksURL(fmt.Sprintf("127.0.0.1:%d", p), auth.User, auth.Pass),
+	}
+	in := mihomoconfig.Inbound{MixedPort: p, Interface: physicalInterfaceName(), Auth: auth}
 
 	if strings.TrimSpace(dns.Mode) == "" {
 		dns.Mode = dnsconfig.ModeFakeIP
@@ -60,7 +65,7 @@ func (x *CoreController) mihomoBuildBridgeInbound(dns *dnsconfig.Config, prof ro
 			return mihomoconfig.Inbound{}, nil, fmt.Errorf("[mihomo] pick force-proxy port: %w", ferr)
 		}
 		in.ForceProxyPort = fp
-		b.forceProxyURL = fmt.Sprintf("socks5://127.0.0.1:%d", fp)
+		b.forceProxyURL = loopbackSocksURL(fmt.Sprintf("127.0.0.1:%d", fp), auth.User, auth.Pass)
 	}
 	return in, b, nil
 }
@@ -72,7 +77,7 @@ func (x *CoreController) mihomoStartBridge(b *bridgeSetup, prof routing.Profile,
 		dnsServer = xrayDefaultDnsServer
 	}
 	if err := x.startTun2socks(tun2socksParams{
-		proxyURL:        fmt.Sprintf("socks5://127.0.0.1:%d", b.mixedPort),
+		proxyURL:        b.proxyURL,
 		tunFd:           tunFd,
 		dnsServer:       dnsServer,
 		logLevel:        "warning",

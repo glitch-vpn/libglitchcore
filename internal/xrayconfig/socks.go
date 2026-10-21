@@ -1,8 +1,6 @@
 package xrayconfig
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -10,6 +8,8 @@ import (
 	"strconv"
 
 	xrayConf "github.com/xtls/xray-core/infra/conf"
+
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 )
 
 const (
@@ -22,15 +22,10 @@ const (
 	localSocksPortPickAttempts = 128
 )
 
-type localSocksCredentials struct {
-	Username string
-	Password string
-}
-
 type localSocksSession struct {
 	Address     string
 	Port        uint32
-	Credentials localSocksCredentials
+	Credentials loopbackauth.Credentials
 }
 
 func newLocalSocksSession() (localSocksSession, error) {
@@ -39,22 +34,10 @@ func newLocalSocksSession() (localSocksSession, error) {
 		return localSocksSession{}, err
 	}
 
-	username, err := randomURLToken(12)
-	if err != nil {
-		return localSocksSession{}, fmt.Errorf("generate socks username: %w", err)
-	}
-	password, err := randomURLToken(32)
-	if err != nil {
-		return localSocksSession{}, fmt.Errorf("generate socks password: %w", err)
-	}
-
 	return localSocksSession{
-		Address: defaultProxyAddress,
-		Port:    port,
-		Credentials: localSocksCredentials{
-			Username: username,
-			Password: password,
-		},
+		Address:     defaultProxyAddress,
+		Port:        port,
+		Credentials: loopbackauth.New(),
 	}, nil
 }
 
@@ -87,19 +70,6 @@ func pickLocalSocksPort() (uint32, error) {
 	return 0, fmt.Errorf("unable to reserve a TCP+UDP-bindable local socks port")
 }
 
-func randomURLToken(byteLen int) (string, error) {
-	if byteLen <= 0 {
-		return "", fmt.Errorf("invalid token byte length %d", byteLen)
-	}
-
-	buf := make([]byte, byteLen)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-
-	return base64.RawURLEncoding.EncodeToString(buf), nil
-}
-
 func (s localSocksSession) Endpoint() string {
 	return net.JoinHostPort(s.Address, fmt.Sprintf("%d", s.Port))
 }
@@ -108,8 +78,8 @@ func (s localSocksSession) proxyURL() string {
 	u := url.URL{
 		Scheme: "socks5",
 		User: url.UserPassword(
-			s.Credentials.Username,
-			s.Credentials.Password,
+			s.Credentials.User,
+			s.Credentials.Pass,
 		),
 		Host: s.Endpoint(),
 	}
@@ -132,8 +102,8 @@ func (s localSocksSession) settings() (*json.RawMessage, error) {
 		Auth: "password",
 		Accounts: []socksAccount{
 			{
-				Username: s.Credentials.Username,
-				Password: s.Credentials.Password,
+				Username: s.Credentials.User,
+				Password: s.Credentials.Pass,
 			},
 		},
 		UDP: true,
@@ -196,21 +166,24 @@ func findInboundIdx(inbounds []xrayConf.InboundDetourConfig, tag string) int {
 // "route only this app through the VPN" works even in direct-all mode.
 const forceProxyTag = "forceproxy"
 
-// ApplyForceProxyInbound adds a no-auth loopback SOCKS inbound tagged
-// "forceproxy" and returns its socks5:// URL for the tun2socks dialer.
+// ApplyForceProxyInbound adds a loopback SOCKS inbound tagged "forceproxy",
+// gated by per-session credentials, and returns its socks5:// URL (credentials
+// included) for the tun2socks dialer.
 func ApplyForceProxyInbound(cfg *xrayConf.Config) (string, error) {
-	port, err := pickLocalSocksPort()
+	session, err := newLocalSocksSession()
 	if err != nil {
-		return "", fmt.Errorf("force-proxy port: %w", err)
+		return "", fmt.Errorf("force-proxy inbound: %w", err)
 	}
-	addr := defaultProxyAddress
-	settings := json.RawMessage(fmt.Sprintf(`{"auth":"noauth","udp":true,"ip":%q}`, addr))
+	settings, err := session.settings()
+	if err != nil {
+		return "", fmt.Errorf("force-proxy inbound settings: %w", err)
+	}
 	inbound := xrayConf.InboundDetourConfig{
 		Protocol:       "socks",
-		PortList:       &xrayConf.PortList{Range: []xrayConf.PortRange{{From: port, To: port}}},
-		ListenOn:       xrayConf.ParseSendThough(&addr),
+		PortList:       &xrayConf.PortList{Range: []xrayConf.PortRange{{From: session.Port, To: session.Port}}},
+		ListenOn:       xrayConf.ParseSendThough(&session.Address),
 		Tag:            forceProxyTag,
-		Settings:       &settings,
+		Settings:       settings,
 		SniffingConfig: sniffingConfig(),
 	}
 	if idx := findInboundIdx(cfg.InboundConfigs, forceProxyTag); idx == -1 {
@@ -218,8 +191,7 @@ func ApplyForceProxyInbound(cfg *xrayConf.Config) (string, error) {
 	} else {
 		cfg.InboundConfigs[idx] = inbound
 	}
-	u := url.URL{Scheme: "socks5", Host: net.JoinHostPort(addr, strconv.Itoa(int(port)))}
-	return u.String(), nil
+	return session.proxyURL(), nil
 }
 
 // Marshaled (not fmt'd) so credentials containing quotes can't break the JSON.

@@ -8,9 +8,11 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/listener/inbound"
 
 	// config.ParseRawConfig reaches temporaryUpdateGeneral via //go:linkname,
 	// whose body lives in hub/executor; without it the test binary won't link.
@@ -20,14 +22,24 @@ import (
 
 func TestBuildConfig_ForceProxyListener(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&encryption=none&sni=www.bing.com&fp=chrome&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f9e232c6fb72d&flow=xtls-rprx-vision#r"
+	prof := routing.Profile{Mode: routing.ModeDirectAll, Tiers: []routing.Tier{{Proxy: []string{"process:chrome.exe"}}}}
+	auth := loopbackauth.Credentials{User: "u", Pass: "p"}
 	cfg, err := BuildConfig([]string{link},
-		Inbound{MixedPort: 17890, ForceProxyPort: 17891},
-		Options{}, routing.Profile{Mode: routing.ModeDirectAll, Tiers: []routing.Tier{{Proxy: []string{"process:chrome.exe"}}}})
+		Inbound{MixedPort: 17890, ForceProxyPort: 17891, Auth: auth},
+		Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig with ForceProxyPort: %v", err)
 	}
-	if _, ok := cfg.Listeners[forceProxyListenerName]; !ok {
+	listener, ok := cfg.Listeners[forceProxyListenerName]
+	if !ok {
 		t.Fatalf("forceproxy listener missing; have %v", cfg.Listeners)
+	}
+	opt, ok := listener.Config().(*inbound.MixedOption)
+	if !ok || len(opt.Users) != 1 || opt.Users[0].Username != "u" || opt.Users[0].Password != "p" {
+		t.Fatalf("forceproxy listener must carry the credentials, got %+v", listener.Config())
+	}
+	if _, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890, ForceProxyPort: 17891}, Options{}, prof); err == nil {
+		t.Fatal("a force-proxy listener without credentials must be refused")
 	}
 	var found bool
 	for _, r := range cfg.Rules {
@@ -85,7 +97,7 @@ func TestBuildConfig_SnifferToggle(t *testing.T) {
 func TestBuildConfig_ProxyAuth(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
 
-	authed, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890, Auth: "bob:secret"}, Options{}, routing.Profile{})
+	authed, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890, Auth: loopbackauth.Credentials{User: "bob", Pass: "secret"}}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatalf("BuildConfig(auth): %v", err)
 	}
@@ -98,7 +110,7 @@ func TestBuildConfig_ProxyAuth(t *testing.T) {
 		t.Fatalf("BuildConfig(open): %v", err)
 	}
 	if len(open.Users) != 0 {
-		t.Fatalf("bridge inbound must stay open, got %d users", len(open.Users))
+		t.Fatalf("an inbound without credentials must not invent users, got %d", len(open.Users))
 	}
 }
 

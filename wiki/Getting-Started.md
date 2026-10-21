@@ -71,7 +71,9 @@ when an engine gains an option:
 * `tunFd` — a TUN file descriptor (Android `VpnService`). Leave it out on
   desktop, where the library opens its own adapter, or set `opts.proxyPort`
   instead for a loopback SOCKS proxy with no TUN and no elevation. Proxy mode
-  is also the easiest way to try the library out.
+  is also the easiest way to try the library out. `opts.proxyUser` and
+  `opts.proxyPass` put a username and password on that proxy; without them
+  every local app can use it.
 * `opts` — flat string map. Routing tiers are evaluated in order, first match
   wins; within a tier block beats direct beats proxy. Matchers are `geoip:nl`,
   `geosite:category-ads-all`, `domain:example.com`, `full:host`, `keyword:str`,

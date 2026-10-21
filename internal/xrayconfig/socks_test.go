@@ -10,6 +10,7 @@ import (
 	xrayConf "github.com/xtls/xray-core/infra/conf"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 )
 
 func TestPickLocalSocksPort_TCPAndUDPBindable(t *testing.T) {
@@ -46,22 +47,16 @@ func TestNewLocalSocksSessionUsesRandomAuthenticatedEndpoint(t *testing.T) {
 	if session.Port == defaultProxyPort {
 		t.Fatalf("Port = %d, must not use default exposed port", session.Port)
 	}
-	if session.Credentials.Username == "" {
-		t.Fatal("Username is empty")
-	}
-	if session.Credentials.Password == "" {
-		t.Fatal("Password is empty")
+	if !session.Credentials.Set() {
+		t.Fatal("credentials are empty")
 	}
 }
 
 func TestLocalSocksSessionSettingsRequirePasswordAuth(t *testing.T) {
 	session := localSocksSession{
-		Address: defaultProxyAddress,
-		Port:    23456,
-		Credentials: localSocksCredentials{
-			Username: "user",
-			Password: "pass",
-		},
+		Address:     defaultProxyAddress,
+		Port:        23456,
+		Credentials: loopbackauth.Credentials{User: "user", Pass: "pass"},
 	}
 
 	settings, err := session.settings()
@@ -101,12 +96,9 @@ func TestLocalSocksSessionSettingsRequirePasswordAuth(t *testing.T) {
 
 func TestLocalSocksSessionProxyURLCarriesCredentials(t *testing.T) {
 	session := localSocksSession{
-		Address: defaultProxyAddress,
-		Port:    23456,
-		Credentials: localSocksCredentials{
-			Username: "user",
-			Password: "pass",
-		},
+		Address:     defaultProxyAddress,
+		Port:        23456,
+		Credentials: loopbackauth.Credentials{User: "user", Pass: "pass"},
 	}
 
 	parsed, err := url.Parse(session.proxyURL())

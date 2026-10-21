@@ -12,6 +12,7 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/config"
@@ -41,7 +42,7 @@ type TunInbound struct {
 	DNS            dnsconfig.Config
 }
 
-// Inbound: loopback mixed, native TUN, or both (TUN path adds mixed for liveness).
+// Inbound: loopback mixed (proxy mode, tun2socks bridge) or native TUN.
 type Inbound struct {
 	MixedPort int         // > 0 -> loopback socks/http on 127.0.0.1
 	Tun       *TunInbound // non-nil -> native TUN inbound
@@ -54,9 +55,9 @@ type Inbound struct {
 	DNS dnsconfig.Config
 	// DNSListenPort > 0 -> mihomo DNS on 127.0.0.1:port.
 	DNSListenPort int
-	// Auth ("user:pass") for proxy mode ONLY - in bridge mode it would also gate
-	// credential-less tun2socks and break the tunnel.
-	Auth string
+	// Auth gates MixedPort and the force-proxy listener. Empty leaves MixedPort
+	// open, which only a caller's proxy mode without credentials asks for.
+	Auth loopbackauth.Credentials
 }
 
 const forceProxyListenerName = "forceproxy"
@@ -125,8 +126,8 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		raw.MixedPort = in.MixedPort // allow-lan:false forces it onto 127.0.0.1
 		applyBridgeDNS(raw, in.DNS, in.DNSListenPort)
 		applyHosts(raw, in.DNS)
-		if in.Auth != "" {
-			raw.Authentication = []string{in.Auth}
+		if in.Auth.Set() {
+			raw.Authentication = []string{in.Auth.User + ":" + in.Auth.Pass}
 		}
 	}
 	if in.Interface != "" {
@@ -170,11 +171,15 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	// Force-proxy inbound: prepend an IN-NAME rule so this listener always wins,
 	// sending its traffic to the proxy even in direct-all mode.
 	if in.ForceProxyPort > 0 {
+		if !in.Auth.Set() {
+			return nil, fmt.Errorf("force-proxy listener needs credentials")
+		}
 		raw.Listeners = append(raw.Listeners, map[string]any{
 			"name":   forceProxyListenerName,
 			"type":   "mixed",
 			"listen": "127.0.0.1",
 			"port":   in.ForceProxyPort,
+			"users":  []map[string]any{{"username": in.Auth.User, "password": in.Auth.Pass}},
 		})
 		rules = append([]string{"IN-NAME," + forceProxyListenerName + "," + target}, rules...)
 	}

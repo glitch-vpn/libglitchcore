@@ -183,6 +183,11 @@ func startProxyEngine(t *testing.T, links string, extraOpts map[string]string) {
 // traffic through the engine it just started.
 func startProxyEngineDNS(t *testing.T, links string, extraOpts map[string]string, dns *dnsconfig.Config) int {
 	t.Helper()
+	return startEngineInProxyMode(t, "xray", links, extraOpts, dns)
+}
+
+func startEngineInProxyMode(t *testing.T, engine, links string, extraOpts map[string]string, dns *dnsconfig.Config) int {
+	t.Helper()
 	// The default 5s SOCKS-ready budget can expire on a cold first run.
 	t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
 	proxyPort := freePort(t)
@@ -192,7 +197,7 @@ func startProxyEngineDNS(t *testing.T, links string, extraOpts map[string]string
 	for k, v := range extraOpts {
 		opts[k] = v
 	}
-	res := core.EngineStart("xray", core.EngineStartRequest{
+	res := core.EngineStart(engine, core.EngineStartRequest{
 		Config:    links,
 		TunFD:     0,
 		DNS:       "1.1.1.1",
@@ -201,9 +206,9 @@ func startProxyEngineDNS(t *testing.T, links string, extraOpts map[string]string
 		DNSConfig: dns,
 	})
 	if res != core.ResultSuccess {
-		t.Fatalf("EngineStart = %d", res)
+		t.Fatalf("EngineStart %s = %d", engine, res)
 	}
-	t.Cleanup(func() { stopEngine(t, "xray") })
+	t.Cleanup(func() { stopEngine(t, engine) })
 	return proxyPort
 }
 

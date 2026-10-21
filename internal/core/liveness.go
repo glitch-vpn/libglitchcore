@@ -212,15 +212,15 @@ func socksTunnelDial(socksURL string) tunnelDialFunc {
 }
 
 func socksProber(socksURL, probeURL string) func(ctx context.Context) (time.Duration, error) {
+	return tunnelProber(socksTunnelDial(socksURL), probeURL)
+}
+
+func tunnelProber(dial tunnelDialFunc, probeURL string) func(ctx context.Context) (time.Duration, error) {
 	if probeURL == "" {
 		probeURL = defaultLivenessProbeURL
 	}
 	return func(ctx context.Context) (time.Duration, error) {
-		d, err := socksContextDialer(socksURL)
-		if err != nil {
-			return 0, err
-		}
-		return probeOnce(ctx, probeURL, d)
+		return probeOnce(ctx, probeURL, dial)
 	}
 }
 
