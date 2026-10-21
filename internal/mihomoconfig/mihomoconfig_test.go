@@ -11,6 +11,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/listener/inbound"
 
 	// config.ParseRawConfig reaches temporaryUpdateGeneral via //go:linkname,
 	// whose body lives in hub/executor; without it the test binary won't link.
@@ -91,16 +92,21 @@ func TestBuildConfig_ProxyAuth(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildConfig(auth): %v", err)
 	}
-	if len(authed.Users) == 0 {
-		t.Fatal("proxy Auth set but no inbound users parsed")
+	listener, ok := authed.Listeners[ProxyInName]
+	if !ok || authed.General.MixedPort != 0 {
+		t.Fatalf("credentials want the %q listener in place of the open mixed port; have %v, mixed %d", ProxyInName, authed.Listeners, authed.General.MixedPort)
+	}
+	opt, ok := listener.Config().(*inbound.MixedOption)
+	if !ok || opt.UDP || len(opt.Users) != 1 || opt.Users[0].Username != "bob" || opt.Users[0].Password != "secret" {
+		t.Fatalf("the proxy listener must carry the credentials and no UDP, got %+v", listener.Config())
 	}
 
 	open, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatalf("BuildConfig(open): %v", err)
 	}
-	if len(open.Users) != 0 {
-		t.Fatalf("an inbound without credentials must not invent users, got %d", len(open.Users))
+	if len(open.Users) != 0 || len(open.Listeners) != 0 || open.General.MixedPort != 17890 {
+		t.Fatalf("an open proxy is the plain mixed port: users %d, listeners %v, mixed %d", len(open.Users), open.Listeners, open.General.MixedPort)
 	}
 }
 

@@ -75,8 +75,9 @@ when an engine gains an option:
   instead for a loopback SOCKS proxy with no TUN and no elevation (xray and
   mihomo only: an awg start with it fails). Proxy mode is also the easiest way
   to try the library out. `opts.proxyUser` and
-  `opts.proxyPass` put a username and password on that proxy; without them
-  every local app can use it.
+  `opts.proxyPass` put a username and password on that proxy, which then
+  carries TCP only: SOCKS5 UDP cannot be tied to the login. Without them
+  every local app can use it, UDP included.
 * `opts` — flat string map. Routing tiers are evaluated in order, first match
   wins; within a tier block beats direct beats proxy. Matchers are `geoip:nl`,
   `geosite:category-ads-all`, `domain:example.com`, `full:host`, `keyword:str`,

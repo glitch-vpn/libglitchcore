@@ -87,6 +87,8 @@ func findInboundIdx(inbounds []xrayConf.InboundDetourConfig, tag string) int {
 }
 
 // Marshaled (not fmt'd) so credentials containing quotes can't break the JSON.
+// With credentials UDP is off: xray admits SOCKS5 UDP by source address once
+// any client has associated, so the credentials could not cover it.
 func proxyInboundSettings(addr, user, pass string) (*json.RawMessage, error) {
 	type account struct {
 		User string `json:"user"`
@@ -101,6 +103,7 @@ func proxyInboundSettings(addr, user, pass string) (*json.RawMessage, error) {
 	if user != "" && pass != "" {
 		s.Auth = "password"
 		s.Accounts = []account{{User: user, Pass: pass}}
+		s.UDP = false
 	}
 	b, err := json.Marshal(s)
 	if err != nil {

@@ -61,13 +61,17 @@ type Inbound struct {
 	// fake-ip on the bridge, mihomo's resolver answers the :53 the bridge
 	// hands it.
 	DNS dnsconfig.Config
-	// ProxyUser and ProxyPass gate MixedPort. Empty leaves it open, which
-	// only a caller's proxy mode without credentials asks for.
+	// ProxyUser and ProxyPass gate MixedPort, which then carries TCP only.
+	// Empty leaves it open, which only a caller's proxy mode without
+	// credentials asks for.
 	ProxyUser, ProxyPass string
 }
 
 // ForceProxyInName is the inbound name the bridge's force-proxy flows carry.
 const ForceProxyInName = "forceproxy"
+
+// ProxyInName names the proxy-mode listener that carries credentials.
+const ProxyInName = "proxy"
 
 type Options struct {
 	Strategy string // balancer group type ("" = url-test)
@@ -132,9 +136,19 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	}
 
 	if in.MixedPort > 0 {
-		raw.MixedPort = in.MixedPort // allow-lan:false forces it onto 127.0.0.1
 		if in.ProxyUser != "" && in.ProxyPass != "" {
-			raw.Authentication = []string{in.ProxyUser + ":" + in.ProxyPass}
+			// UDP off: SOCKS5 UDP is not bound to the authenticated
+			// connection, so the credentials could not cover it.
+			raw.Listeners = append(raw.Listeners, map[string]any{
+				"name":   ProxyInName,
+				"type":   "mixed",
+				"listen": "127.0.0.1",
+				"port":   in.MixedPort,
+				"users":  []map[string]any{{"username": in.ProxyUser, "password": in.ProxyPass}},
+				"udp":    false,
+			})
+		} else {
+			raw.MixedPort = in.MixedPort // allow-lan:false forces it onto 127.0.0.1
 		}
 	}
 	if in.MixedPort > 0 || in.Bridge {

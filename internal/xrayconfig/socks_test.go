@@ -29,6 +29,7 @@ func TestApplyProxyInbound_Auth(t *testing.T) {
 	}
 	var s struct {
 		Auth     string `json:"auth"`
+		UDP      bool   `json:"udp"`
 		Accounts []struct {
 			User string `json:"user"`
 			Pass string `json:"pass"`
@@ -40,6 +41,9 @@ func TestApplyProxyInbound_Auth(t *testing.T) {
 	}
 	if s.Auth != "password" || len(s.Accounts) != 1 || s.Accounts[0].User != "alice" || s.Accounts[0].Pass != `p"ass` {
 		t.Fatalf("auth settings = %+v, want password alice/p\"ass (quote preserved)", s)
+	}
+	if s.UDP {
+		t.Fatal("an inbound with credentials must not carry UDP, which they cannot cover")
 	}
 	if _, err := authCfg.Build(); err != nil {
 		t.Fatalf("xray rejected authed proxy inbound: %v", err)
