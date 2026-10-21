@@ -21,7 +21,7 @@ var statusVerbosity int32 = -1
 
 var statusCallbackRegistered atomic.Bool
 
-// inFFICall: while an FFI export runs, callbacks must be deferred (goroutine),
+// inFFICall: while an FFI export runs, callbacks must be deferred (deferredStatus),
 // never invoked synchronously - re-entry from a leaf FFI call.
 var inFFICall atomic.Bool
 
@@ -152,8 +152,7 @@ func (x *CoreController) emitStatus(code int32, message string) {
 	if callback == nil {
 		return
 	}
-	if inFFICall.Load() {
-		go callback(code, message)
+	if deferredStatus.offer(statusEvent{callback, code, message}, inFFICall.Load()) {
 		return
 	}
 	callback(code, message)

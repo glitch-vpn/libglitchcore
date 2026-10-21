@@ -66,6 +66,12 @@ is that nothing it produces may escape a superseded session — the generation
 is re-checked under `ipFetchMu` before the state is stored. Copy that shape
 only with the same guarantee.
 
+The deferred event queue (`deferredStatus`, `status_sink.go`) is the second:
+a process-lifetime drain started on demand, with no quit/done, because
+`emitStatus` must never block on it. It delivers in emission order, its lock is
+never held across a callback, and past `maxDeferredStatus` it sheds the oldest
+`LogEvent`/`ConnEvent` only. The status sink it calls must not block.
+
 A start that races a stop is caught by `sessionGen`: the start captures the
 generation, the stop bumps it in `clearSessionState`, and the start's tail
 calls `abortStaleSession` before and after arming. Without it a stop landing
@@ -97,7 +103,8 @@ call inherits the previous session's override.
 
 Everything reaches Dart through `x.emitStatus(code, message)`. Only
 `LogEvent`/`LogError` obey the verbosity gate; never add gating for other
-codes, and never post to the sink directly.
+codes, and never post to the sink directly. During an FFI call `emitStatus`
+defers through `deferredStatus` (§1.2) instead of calling the sink.
 
 Log lines go through `emitLog(level, component, message)`, and the level is the
 writer's: an engine's own severity (xray's message, mihomo's event, zap's level

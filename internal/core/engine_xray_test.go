@@ -68,3 +68,26 @@ func TestXrayLogHandler_MasksLinesNotTheInspector(t *testing.T) {
 		t.Fatalf("inspector record = %v, want the unmasked host", conns)
 	}
 }
+
+func TestXrayLogHandler_AccessRecordNeedsTheInspector(t *testing.T) {
+	captureLogs(t, 2)
+	prev := connInspectEnabled.Load()
+	connInspectEnabled.Store(false)
+	t.Cleanup(func() { connInspectEnabled.Store(prev) })
+	var conns []string
+	setStatusSink(func(code int32, message string) {
+		if code == ConnEvent {
+			conns = append(conns, message)
+		}
+	})
+
+	xrayLogHandler{}.Handle(&xrayCommonLog.AccessMessage{
+		From:   xrayNet.TCPDestination(xrayNet.ParseAddress("127.0.0.1"), 50000),
+		To:     xrayNet.TCPDestination(xrayNet.ParseAddress("203.0.113.9"), 443),
+		Status: xrayCommonLog.AccessAccepted,
+		Detour: "tun2socks >> proxy",
+	})
+	if len(conns) != 0 {
+		t.Fatalf("an access record became a ConnEvent with the inspector off: %v", conns)
+	}
+}

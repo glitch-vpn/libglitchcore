@@ -120,7 +120,11 @@ type Access struct {
 	Outbound string
 }
 
-// ParseAccess: "from <net:src:port> accepted|rejected <net:host:port> [in -> out]".
+// xray's dispatcher writes the detour as "in -> out", "in ==> out" or
+// "in >> out" by how the route was picked, or as the outbound alone.
+var detourSeparators = []string{" -> ", " ==> ", " >> "}
+
+// ParseAccess: "from <net:src:port> accepted|rejected <net:host:port> [detour]".
 // ok=false for non-access lines.
 func ParseAccess(line string) (Access, bool) {
 	s := strings.TrimSpace(line)
@@ -130,13 +134,7 @@ func ParseAccess(line string) (Access, bool) {
 	var a Access
 	if i := strings.Index(s, " ["); i >= 0 {
 		if j := strings.Index(s[i:], "]"); j > 1 {
-			detour := s[i+2 : i+j]
-			if k := strings.Index(detour, " -> "); k >= 0 {
-				a.Inbound = strings.TrimSpace(detour[:k])
-				a.Outbound = strings.TrimSpace(detour[k+4:])
-			} else {
-				a.Outbound = strings.TrimSpace(detour)
-			}
+			a.Inbound, a.Outbound = splitDetour(s[i+2 : i+j])
 			s = strings.TrimSpace(s[:i])
 		}
 	}
@@ -157,6 +155,15 @@ func ParseAccess(line string) (Access, bool) {
 		a.Network, a.Host, a.Port = splitDest(f[3])
 	}
 	return a, true
+}
+
+func splitDetour(detour string) (inbound, outbound string) {
+	for _, sep := range detourSeparators {
+		if k := strings.Index(detour, sep); k >= 0 {
+			return strings.TrimSpace(detour[:k]), strings.TrimSpace(detour[k+len(sep):])
+		}
+	}
+	return "", strings.TrimSpace(detour)
 }
 
 // splitDest breaks a net.Destination string ("tcp:host:port", "udp:[v6]:port",

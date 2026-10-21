@@ -114,9 +114,11 @@ break it.
 ### Controller concurrency
 
 - `coreMutex` guards engine start/stop bodies; quick flags are atomics.
-  `emitStatus` takes no locks and is safe under `coreMutex`.
-- While an FFI export runs (`inFFICall`), callbacks are deferred to
-  goroutines — never invoke the sink synchronously from a leaf FFI call.
+  `emitStatus` takes only the deferred queue's leaf lock, never held across a
+  callback, and is safe under `coreMutex`.
+- While an FFI export runs (`inFFICall`), callbacks are deferred to one
+  goroutine that delivers them in order (`deferredStatus`) — never invoke the
+  sink synchronously from a leaf FFI call, and never drop an event for it.
 - Every background loop follows the quit/done channel pattern (see
   `startLiveness` / `startSelectionWatch`): close(quit), wait done, and stop
   watchers **before** closing the engine instance they read.

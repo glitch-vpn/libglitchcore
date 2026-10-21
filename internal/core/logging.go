@@ -27,7 +27,7 @@ func applyConnInspector(enabled bool) {
 }
 
 func (x *CoreController) emitConn(rec conninspect.Record) {
-	if x == nil || !connInspectEnabled.Load() || inFFICall.Load() {
+	if x == nil || !connInspectEnabled.Load() {
 		return
 	}
 	if js := rec.JSON(); js != "" {
@@ -49,7 +49,7 @@ func emitLog(level logfmt.Level, component, message string) {
 	}
 	line := logfmt.BuildJSON(level, logfmt.Scrub(component), logfmt.Scrub(message))
 	_, _ = os.Stdout.Write(append([]byte(line), '\n'))
-	if globalController == nil || inFFICall.Load() {
+	if globalController == nil {
 		return
 	}
 	code := int32(LogEvent)

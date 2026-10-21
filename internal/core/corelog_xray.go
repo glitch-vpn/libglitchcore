@@ -47,7 +47,11 @@ func (xrayLogHandler) Handle(msg xrayCommonLog.Message) {
 	}
 }
 
+// xray records every connection whatever the config says.
 func handleXrayAccess(m *xrayCommonLog.AccessMessage) {
+	if !connInspectEnabled.Load() {
+		return
+	}
 	a, ok := logfmt.ParseAccess(m.String())
 	if !ok || globalController == nil {
 		return

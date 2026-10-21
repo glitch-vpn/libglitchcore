@@ -23,6 +23,18 @@ func TestParseAccess(t *testing.T) {
 			line: "from tcp:127.0.0.1:6000 rejected tcp:ads.example:443 [tun2socks -> block]",
 			ok:   true, net: "tcp", host: "ads.example", port: "443", out: "block", status: "rejected", inbound: "tun2socks",
 		},
+		{
+			line: "from tcp:127.0.0.1:6001 accepted tcp:example.com:443 [tun2socks ==> proxy-2]",
+			ok:   true, net: "tcp", host: "example.com", port: "443", out: "proxy-2", status: "accepted", inbound: "tun2socks",
+		},
+		{
+			line: "from tcp:127.0.0.1:6002 accepted udp:1.1.1.1:53 [tun2socks >> direct]",
+			ok:   true, net: "udp", host: "1.1.1.1", port: "53", out: "direct", status: "accepted", inbound: "tun2socks",
+		},
+		{
+			line: "from tcp:127.0.0.1:6003 accepted tcp:example.org:80 [proxy]",
+			ok:   true, net: "tcp", host: "example.org", port: "80", out: "proxy", status: "accepted", inbound: "",
+		},
 		{line: "some ordinary [app] log line", ok: false},
 		{line: "from nowhere in particular", ok: false},
 	}

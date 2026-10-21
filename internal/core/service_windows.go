@@ -392,7 +392,7 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
 			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid payload: %v", err)}
 		}
-		connInspectEnabled.Store(payload.Enabled)
+		applyConnInspector(payload.Enabled)
 		return pipeResponse{OK: true}
 	case "set_memory_limit":
 		var payload struct {

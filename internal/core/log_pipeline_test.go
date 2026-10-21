@@ -6,7 +6,9 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	"github.com/glitch-vpn/libglitchcore/internal/conninspect"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
@@ -205,5 +207,100 @@ func TestLogPipeline_ScrubsBeforeThePayload(t *testing.T) {
 	globalController.emitStatus(EngineError, `[Xray] Failed to start: parse "`+link+`": invalid port`)
 	if len(lifecycle) != 1 || lifecycle[0] != `[Xray] Failed to start: parse "vless://[redacted]": invalid port` {
 		t.Fatalf("EngineError text = %q", lifecycle)
+	}
+}
+
+func TestEmitStatus_DefersInOrderDuringFFICall(t *testing.T) {
+	prevCtl := globalController
+	globalController = &CoreController{}
+	t.Cleanup(func() { globalController = prevCtl })
+	prevV := atomic.LoadInt32(&statusVerbosity)
+	atomic.StoreInt32(&statusVerbosity, 2)
+	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, prevV) })
+	prevInspector := connInspectEnabled.Load()
+	connInspectEnabled.Store(true)
+	t.Cleanup(func() { connInspectEnabled.Store(prevInspector) })
+
+	var mu sync.Mutex
+	var codes []int32
+	done := make(chan struct{})
+	setStatusSink(func(code int32, _ string) {
+		mu.Lock()
+		codes = append(codes, code)
+		if code == EngineConnected {
+			close(done)
+		}
+		mu.Unlock()
+	})
+	t.Cleanup(func() { setStatusSink(nil) })
+
+	runFFICall(func() int32 {
+		globalController.emitStatus(EngineConnecting, "[Xray] Connecting")
+		for i := 0; i < 50; i++ {
+			emitLog(logfmt.Info, "Xray", "starting")
+			globalController.emitConn(conninspect.Record{Engine: "xray", Host: "example.com", Port: "443"})
+		}
+		return 0
+	})
+	globalController.emitStatus(EngineConnected, "[Xray] Connected")
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the events never arrived")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if len(codes) != 102 || codes[0] != EngineConnecting || codes[101] != EngineConnected {
+		t.Fatalf("got %d events, first %v, last %v", len(codes), codes[:1], codes[len(codes)-1:])
+	}
+	for i := 1; i <= 100; i++ {
+		want := int32(LogEvent)
+		if i%2 == 0 {
+			want = ConnEvent
+		}
+		if codes[i] != want {
+			t.Fatalf("event %d = %d, want %d", i, codes[i], want)
+		}
+	}
+}
+
+// A sink that stalls behind a burst sheds the oldest log and connection
+// events, never a lifecycle event.
+func TestDeferredStatus_ShedsOnlyLogAndConnEventsWhenFull(t *testing.T) {
+	var q statusQueue
+	release := make(chan struct{})
+	var mu sync.Mutex
+	var got []int32
+	sink := func(code int32, _ string) {
+		<-release
+		mu.Lock()
+		got = append(got, code)
+		mu.Unlock()
+	}
+	q.offer(statusEvent{sink, EngineConnecting, ""}, true)
+	for i := 0; i < maxDeferredStatus+100; i++ {
+		q.offer(statusEvent{sink, LogEvent, ""}, true)
+	}
+	q.offer(statusEvent{sink, EngineConnected, ""}, true)
+	close(release)
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		n := len(got)
+		mu.Unlock()
+		if n > 0 && got[n-1] == EngineConnected {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if got[0] != EngineConnecting || got[len(got)-1] != EngineConnected {
+		t.Fatalf("lifecycle events lost or reordered: first %d, last %d", got[0], got[len(got)-1])
+	}
+	if len(got) > maxDeferredStatus+2 {
+		t.Fatalf("%d events delivered, the queue holds %d", len(got), maxDeferredStatus)
 	}
 }
