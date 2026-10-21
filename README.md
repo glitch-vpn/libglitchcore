@@ -8,7 +8,7 @@ the product are yours.
 
 Three engines are compiled in and one runs at a time: **Xray** (VLESS, VMess,
 Trojan, Shadowsocks with Reality/XTLS/uTLS), **AmneziaWG** (WireGuard with
-obfuscation, AWG 2.0) and **mihomo** (Hysteria2, WireGuard/AWG outbound).
+obfuscation, AWG 2.0) and **mihomo** (Hysteria2, TUIC, WireGuard/AWG outbound).
 Targets are Android (arm64, x86_64), Windows (amd64) and Linux (amd64), behind
 a plain C ABI — so it binds from Dart, Kotlin, Swift, C# or anything else with
 an FFI. Ship only the engines you need: an awg-only build is 11 MB against

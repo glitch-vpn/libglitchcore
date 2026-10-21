@@ -52,6 +52,7 @@ func init() {
 				strings.HasPrefix(lower, "trojan://") ||
 				strings.HasPrefix(lower, "hysteria2://") ||
 				strings.HasPrefix(lower, "hy2://") ||
+				strings.HasPrefix(lower, "tuic://") ||
 				strings.HasPrefix(lower, "awg://") ||
 				strings.Contains(trimmed, "[Interface]")
 		},

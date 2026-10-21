@@ -144,3 +144,13 @@ func TestSelectionJSON_NoSelected(t *testing.T) {
 		t.Fatalf("nil Selected should be omitted: %s", got)
 	}
 }
+
+func TestFromLink_TUIC(t *testing.T) {
+	s := FromLink("tuic://6f4b7a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b:pw@tuic.example.com:8443?congestion_control=bbr#TUIC", 0)
+	if s.Protocol != "tuic" || s.Host != "tuic.example.com" || s.Port != 8443 || s.Name != "TUIC" {
+		t.Fatalf("got %+v", s)
+	}
+	if s := FromLink("tuic://token@tuic.example.com?sni=x", 0); s.Port != 443 {
+		t.Fatalf("port = %d, want 443 for a link that names none", s.Port)
+	}
+}

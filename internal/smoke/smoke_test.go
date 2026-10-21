@@ -25,6 +25,8 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/pinger"
+	C "github.com/metacubex/mihomo/constant"
 	xrayCore "github.com/xtls/xray-core/core"
 )
 
@@ -262,6 +264,116 @@ func socksConnect(port int, host string, dstPort uint16) (byte, error) {
 	}
 	_, _ = io.ReadFull(c, make([]byte, 1))
 	return reply[1], nil
+}
+
+// directTunnel takes what a mihomo server inbound accepts straight to its
+// destination - the role mihomo's own inbound tests give their TestTunnel -
+// and counts the destination ports, so a test can tell its flow reached the
+// server. The server shares nothing with the mihomo the engine runs.
+type directTunnel struct {
+	mu    sync.Mutex
+	dests map[uint16]int
+}
+
+func (d *directTunnel) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
+	defer conn.Close()
+	d.mu.Lock()
+	d.dests[metadata.DstPort]++
+	d.mu.Unlock()
+	upstream, err := net.DialTimeout("tcp", metadata.RemoteAddress(), 5*time.Second)
+	if err != nil {
+		return
+	}
+	defer upstream.Close()
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(upstream, conn); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(conn, upstream); done <- struct{}{} }()
+	<-done
+}
+
+func (*directTunnel) HandleUDPPacket(packet C.UDPPacket, _ *C.Metadata) { packet.Drop() }
+
+func (*directTunnel) NatTable() C.NatTable { return nil }
+
+func (d *directTunnel) reached(port int) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.dests[uint16(port)]
+}
+
+type protocolSession struct {
+	engine   string
+	link     string
+	protocol string // the ServerEvent's protocol
+	port     int
+	name     string
+	// wrongCredentialLink is link with a key the server does not know.
+	wrongCredentialLink string
+	pingEngine          string
+	// server counts the destinations it relayed; nil when the server cannot.
+	server *directTunnel
+}
+
+// assertSessionThrough starts the engine on the link and checks what a
+// protocol has to get right: the ServerEvent names the link, the exit echo
+// travels through the server, and a ping reaches the server with the link's
+// key and not without it.
+func assertSessionThrough(t *testing.T, s protocolSession) {
+	t.Helper()
+	core.Initialize()
+	ev := captureEvents(t)
+	echo := echoBody(t, "198.51.100.47")
+	echoPort := echo.Listener.Addr().(*net.TCPAddr).Port
+
+	startEngineInProxyMode(t, s.engine, s.link, map[string]string{
+		"probeUrl":    echo.URL,
+		"ipv4EchoUrl": echo.URL,
+		"disableIPv6": "1",
+	}, nil)
+	ev.waitFor(t, core.EngineConnected, 30*time.Second)
+
+	var sel struct {
+		Engine   string `json:"engine"`
+		Selected *struct {
+			Name     string `json:"name"`
+			Host     string `json:"host"`
+			Port     int    `json:"port"`
+			Protocol string `json:"protocol"`
+		} `json:"selected"`
+	}
+	if err := json.Unmarshal([]byte(ev.waitFor(t, core.ServerEvent, 15*time.Second)), &sel); err != nil {
+		t.Fatalf("ServerEvent JSON: %v", err)
+	}
+	if sel.Engine != s.engine || sel.Selected == nil || sel.Selected.Protocol != s.protocol ||
+		sel.Selected.Host != "127.0.0.1" || sel.Selected.Port != s.port || sel.Selected.Name != s.name {
+		t.Fatalf("selection = %+v, selected = %+v", sel, sel.Selected)
+	}
+
+	var ip struct {
+		IPv4      string `json:"ipv4"`
+		IPv4Error string `json:"ipv4Error"`
+	}
+	if err := json.Unmarshal([]byte(ev.waitFor(t, core.IPEvent, 30*time.Second)), &ip); err != nil {
+		t.Fatalf("IPEvent JSON: %v", err)
+	}
+	if ip.IPv4 != "198.51.100.47" {
+		t.Fatalf("ipv4 = %q (err %q)", ip.IPv4, ip.IPv4Error)
+	}
+	if s.server != nil && s.server.reached(echoPort) == 0 {
+		t.Fatalf("the echo on port %d never went through the server", echoPort)
+	}
+
+	results := pinger.Measure(pinger.Request{
+		Links:     []string{s.link, s.wrongCredentialLink},
+		ProbeURL:  echo.URL,
+		TimeoutMs: 5000,
+	})
+	if len(results) != 2 || !results[0].Alive || results[0].Engine != s.pingEngine {
+		t.Fatalf("ping = %+v", results)
+	}
+	if results[1].Alive {
+		t.Fatalf("a ping with a key the server does not know came back alive: %+v", results[1])
+	}
 }
 
 // SOCKS inbound -> vless client -> in-process vless server -> freedom ->

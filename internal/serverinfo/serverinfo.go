@@ -19,7 +19,7 @@ type Server struct {
 	Name     string `json:"name,omitempty"` // #fragment remark, "" if none
 	Host     string `json:"host,omitempty"`
 	Port     int    `json:"port,omitempty"`
-	Protocol string `json:"protocol,omitempty"` // vless | trojan | ss | hysteria2 | awg
+	Protocol string `json:"protocol,omitempty"` // vless | trojan | ss | hysteria2 | tuic | awg
 }
 
 // ServerEvent payload. Selected is nil while the pick is per-connection
@@ -92,8 +92,15 @@ func FromLink(link string, idx int) Server {
 	s.Host = u.Hostname()
 	if p, perr := strconv.Atoi(u.Port()); perr == nil && p > 0 && p <= 65535 {
 		s.Port = p
+	} else if u.Port() == "" && defaultsTo443(s.Protocol) {
+		s.Port = 443
 	}
 	return s
+}
+
+// The mihomo builders' portOrDefault: these links may leave the port out.
+func defaultsTo443(protocol string) bool {
+	return protocol == "tuic"
 }
 
 func ssLegacyHostPort(link string) (string, int) {

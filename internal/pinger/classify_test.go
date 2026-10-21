@@ -47,11 +47,12 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 	check("awg://YWJj#tokyo", awg)
 	check("[Interface]\nPrivateKey = k\n[Peer]\nEndpoint = h:51820", awg)
 
-	hy2 := ""
+	mihomoOnly := ""
 	if hasMihomo {
-		hy2 = "mihomo"
+		mihomoOnly = "mihomo"
 	}
-	check("hysteria2://pass@host:443", hy2)
+	check("hysteria2://pass@host:443", mihomoOnly)
+	check("tuic://uuid:pass@host:443", mihomoOnly)
 
 	check("nonsense://whatever", "")
 }

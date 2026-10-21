@@ -467,6 +467,8 @@ func proxyFromLink(link, name string) (map[string]any, error) {
 		return trojanProxy(link, name)
 	case strings.HasPrefix(lower, "hysteria2://"), strings.HasPrefix(lower, "hy2://"):
 		return hysteria2Proxy(link, name)
+	case strings.HasPrefix(lower, "tuic://"):
+		return tuicProxy(link, name)
 	case strings.HasPrefix(lower, awgconfig.LinkScheme), strings.Contains(link, "[Interface]"):
 		return wireguardProxy(link, name)
 	default:
