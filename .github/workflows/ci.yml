@@ -73,6 +73,12 @@ jobs:
           DART_SDK=$(dirname "$(dirname "$(which dart)")")
           CGO_CFLAGS="-I$DART_SDK/include" go vet -tags="${{ matrix.tags }} with_gvisor" ./ ./internal/...
 
+      # The Makefile's release tags: what ships has to compile too.
+      - name: Vet (release tags)
+        run: |
+          DART_SDK=$(dirname "$(dirname "$(which dart)")")
+          CGO_CFLAGS="-I$DART_SDK/include" go vet -tags="${{ matrix.tags }} with_gvisor no_tailscale no_easytier no_zerotier" ./ ./internal/...
+
       - name: Test
         run: CGO_ENABLED=0 go test -tags="${{ matrix.tags }} with_gvisor" ./internal/...
 
