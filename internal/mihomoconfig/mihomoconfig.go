@@ -604,6 +604,9 @@ func vlessProxy(link, name string) (map[string]any, error) {
 	switch q.Get("security") {
 	case "tls":
 		applyTLS(p, q)
+		if err := applyCertChecks(p, q, "vless"); err != nil {
+			return nil, err
+		}
 	case "reality":
 		applyTLS(p, q)
 		reality := map[string]any{}
@@ -691,8 +694,8 @@ func trojanProxy(link, name string) (map[string]any, error) {
 	if alpn := q.Get("alpn"); alpn != "" {
 		p["alpn"] = strings.Split(alpn, ",")
 	}
-	if q.Get("allowInsecure") == "1" {
-		p["skip-cert-verify"] = true
+	if err := applyCertChecks(p, q, "trojan"); err != nil {
+		return nil, err
 	}
 	return p, nil
 }

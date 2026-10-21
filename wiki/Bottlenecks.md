@@ -103,3 +103,5 @@ Domain and IP matchers honour tier order normally.
   on 2026-06-01). A VLESS, VMess or Trojan link that asks for it
   (`allowInsecure`, `insecure` or `allow_insecure`) fails the xray start; pin
   the certificate with `pcs`, and `vcn` for the name to check it against.
+  mihomo still skips verification when a link asks, and reads `pcs` and `vcn`
+  too.
