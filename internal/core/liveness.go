@@ -13,6 +13,7 @@ import (
 	xproxy "golang.org/x/net/proxy"
 
 	"github.com/glitch-vpn/libglitchcore/internal/liveness"
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -77,7 +78,7 @@ func (x *CoreController) startLiveness(p livenessParams) {
 				cancel()
 				if err != nil {
 					if _, changed := tr.ObserveFailure(); changed {
-						log.Printf("[liveness] %s: internet through tunnel is DOWN: %v", p.engine, err)
+						logfmt.Warnf("[liveness] %s: internet through tunnel is DOWN: %v", p.engine, err)
 					}
 				} else {
 					x.linkProbeMs.Store(elapsed.Milliseconds())
@@ -96,7 +97,7 @@ func (x *CoreController) startLiveness(p livenessParams) {
 						return
 					default:
 					}
-					log.Printf("[liveness] %s: passive sample failed: %v", p.engine, err)
+					logfmt.Warnf("[liveness] %s: passive sample failed: %v", p.engine, err)
 				} else if st, changed := tr.ObserveWG(sample); changed {
 					log.Printf("[liveness] %s: internet through tunnel is %s (passive wg)", p.engine, st)
 					if st == liveness.StateUp {

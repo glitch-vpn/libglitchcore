@@ -1,60 +1,74 @@
-// Package logfmt parses and formats core log lines (xray/tun2socks).
+// Package logfmt writes, parses and formats core log lines.
 package logfmt
 
 import (
 	"encoding/json"
+	"fmt"
+	"log"
 	"net"
 	"strings"
 	"time"
 )
 
-// ShouldEmit reports whether a message passes the given verbosity level:
+// Level is a line's severity as its engine reported it. The names are the
+// payload's "level" values.
+type Level string
+
+const (
+	Debug Level = "debug"
+	Info  Level = "info"
+	Warn  Level = "warn"
+	Error Level = "error"
+	Fatal Level = "fatal"
+)
+
+// IsError reports whether the line travels as LogError rather than LogEvent.
+func (l Level) IsError() bool { return l == Error || l == Fatal }
+
+// Passes reports whether a line at level l passes the verbosity gate:
 //
-//	lvl <  0 -> nothing (logging fully off - the default)
-//	lvl == 0 -> only error/failed/panic/fatal messages
-//	lvl == 1 -> everything except debug/trace noise
-//	lvl >= 2 -> everything
-func ShouldEmit(lvl int32, s string) bool {
-	if lvl < 0 {
+//	verbosity <  0 -> nothing (logging fully off - the default)
+//	verbosity == 0 -> error and fatal
+//	verbosity == 1 -> everything but debug
+//	verbosity >= 2 -> everything
+func Passes(verbosity int32, l Level) bool {
+	switch {
+	case verbosity < 0:
 		return false
-	}
-	if lvl >= 2 {
+	case verbosity == 0:
+		return l.IsError()
+	case verbosity == 1:
+		return l != Debug
+	default:
 		return true
 	}
-	lower := strings.ToLower(s)
-	if lvl <= 0 {
-		return strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "panic") || strings.Contains(lower, "fatal")
-	}
-	if strings.Contains(lower, "debug") || strings.Contains(lower, "trace") {
-		return false
-	}
-	return true
 }
 
-// Component extracts leading [COMP]...[COMP] prefixes as a "/"-joined component
-// name and returns the remaining message. A leading severity token (e.g.
-// "DEBUG:", "INFO:") is stripped first. Defaults to "core" when no bracketed
-// component is present.
-func Component(raw string) (component string, msg string) {
+// SplitLine reads a line written through the standard log package: a leading
+// severity token ("ERROR:", "debug:") is its level, Info when it has none, and
+// leading [COMP]...[COMP] prefixes join into a "/"-separated component, "core"
+// when there are none.
+func SplitLine(raw string) (level Level, component string, msg string) {
 	s := strings.TrimSpace(raw)
+	level = Info
 
 	for {
-		if idx := strings.Index(s, ":"); idx > 0 {
-			head := strings.TrimSpace(s[:idx])
-			l := strings.ToLower(head)
-			if l == "debug" || l == "info" || l == "warn" || l == "warning" || l == "error" || l == "fatal" || l == "panic" || l == "trace" {
-				s = strings.TrimSpace(s[idx+1:])
-				continue
-			}
+		idx := strings.Index(s, ":")
+		if idx <= 0 {
+			break
 		}
-		break
+		token, ok := severityTokens[strings.ToLower(strings.TrimSpace(s[:idx]))]
+		if !ok {
+			break
+		}
+		level = token
+		s = strings.TrimSpace(s[idx+1:])
 	}
 
 	var parts []string
 	if !strings.HasPrefix(s, "[") {
 		if i := strings.Index(s, "["); i >= 0 {
-			tail := strings.TrimSpace(s[i:])
-			s = tail
+			s = strings.TrimSpace(s[i:])
 		}
 	}
 
@@ -71,25 +85,28 @@ func Component(raw string) (component string, msg string) {
 	} else {
 		component = strings.Join(parts, "/")
 	}
-	return component, s
+	return level, component, s
 }
 
-func InferLevel(msg string) string {
-	m := strings.ToLower(msg)
-	switch {
-	case strings.Contains(m, " fatal") || strings.HasPrefix(m, "fatal"):
-		return "fatal"
-	case strings.Contains(m, " error") || strings.HasPrefix(m, "error"):
-		return "error"
-	case strings.Contains(m, " warn") || strings.HasPrefix(m, "warn"):
-		return "warn"
-	case strings.Contains(m, " debug") || strings.HasPrefix(m, "debug"):
-		return "debug"
-	case strings.Contains(m, " trace") || strings.HasPrefix(m, "trace"):
-		return "trace"
-	default:
-		return "info"
-	}
+// Warnf and Errorf write through the standard log package with the level as
+// the leading token SplitLine reads; a plain log.Printf line is Info.
+func Warnf(format string, args ...any) {
+	_ = log.Output(2, string(Warn)+": "+fmt.Sprintf(format, args...))
+}
+
+func Errorf(format string, args ...any) {
+	_ = log.Output(2, string(Error)+": "+fmt.Sprintf(format, args...))
+}
+
+var severityTokens = map[string]Level{
+	"trace":   Debug,
+	"debug":   Debug,
+	"info":    Info,
+	"warn":    Warn,
+	"warning": Warn,
+	"error":   Error,
+	"fatal":   Fatal,
+	"panic":   Fatal,
 }
 
 // Access from an xray access-log line (caller maps into conninspect.Record).
@@ -159,10 +176,10 @@ func splitDest(d string) (network, host, port string) {
 	return network, rest, ""
 }
 
-func BuildJSON(level, component, message string) string {
+func BuildJSON(level Level, component, message string) string {
 	entry := map[string]string{
 		"ts":        time.Now().UTC().Format(time.RFC3339Nano),
-		"level":     level,
+		"level":     string(level),
 		"component": component,
 		"message":   message,
 	}

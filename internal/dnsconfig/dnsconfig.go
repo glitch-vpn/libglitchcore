@@ -2,9 +2,10 @@
 package dnsconfig
 
 import (
-	"log"
 	"net"
 	"strings"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -77,12 +78,12 @@ func (c Config) NormalizedHosts() map[string][]string {
 				if net.ParseIP(v) != nil {
 					ips = append(ips, v)
 				} else {
-					log.Printf("[DNS] hosts %q: dropping non-IP %q from a multi-value entry", k, v)
+					logfmt.Warnf("[DNS] hosts %q: dropping non-IP %q from a multi-value entry", k, v)
 				}
 			}
 			clean = ips
 		} else if len(clean) == 1 && net.ParseIP(clean[0]) == nil && !isHostName(clean[0]) {
-			log.Printf("[DNS] hosts %q: dropping unusable value %q", k, clean[0])
+			logfmt.Warnf("[DNS] hosts %q: dropping unusable value %q", k, clean[0])
 			clean = nil
 		}
 		if len(clean) > 0 {

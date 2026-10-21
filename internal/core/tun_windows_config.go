@@ -13,6 +13,8 @@ import (
 
 	"golang.org/x/sys/windows"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -41,7 +43,7 @@ func setAddressWithRetry(luid winipcfg.LUID, pfx netip.Prefix) bool {
 			time.Sleep(400 * time.Millisecond)
 			continue
 		} else {
-			log.Printf("%s SetIPAddressesForFamily: %v", logPrefix, err)
+			logfmt.Errorf("%s SetIPAddressesForFamily: %v", logPrefix, err)
 			return false
 		}
 	}
@@ -205,16 +207,16 @@ func providerLookupIPv4(ctx context.Context, host string) (string, error) {
 func setDNS(tunIfIndex uint32, dnsAddr string) {
 	luidTun, err := winipcfg.LUIDFromIndex(tunIfIndex)
 	if err != nil {
-		log.Printf("%s: cannot get LUID from tun ifIndex=%d: %v", logPrefix, tunIfIndex, err)
+		logfmt.Errorf("%s: cannot get LUID from tun ifIndex=%d: %v", logPrefix, tunIfIndex, err)
 		return
 	}
 	servers := parseDNSListToAddrs(dnsAddr)
 	if len(servers) == 0 {
-		log.Printf("%s: no valid IPv4 DNS in %q; TUN DNS unchanged", logPrefix, dnsAddr)
+		logfmt.Warnf("%s: no valid IPv4 DNS in %q; TUN DNS unchanged", logPrefix, dnsAddr)
 		return
 	}
 	if err := setDnsServersForLuid(luidTun, servers); err != nil {
-		log.Printf("%s: SetDNS(TUN if=%d) failed: %v", logPrefix, tunIfIndex, err)
+		logfmt.Errorf("%s: SetDNS(TUN if=%d) failed: %v", logPrefix, tunIfIndex, err)
 	} else {
 		log.Printf("%s: SetDNS(TUN if=%d) = %v", logPrefix, tunIfIndex, servers)
 	}
@@ -243,7 +245,7 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 			continue
 		}
 		if assigned = setAddressWithRetry(luidTun, tunPfx); !assigned {
-			log.Printf("%s: failed to assign %s to LUID=%v (retry %d/%d)", logPrefix, tunPfx, luidTun, i+1, 50)
+			logfmt.Warnf("%s: failed to assign %s to LUID=%v (retry %d/%d)", logPrefix, tunPfx, luidTun, i+1, 50)
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -265,7 +267,7 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 		if err := luidTun.AddRoute(pfx, nextHop, 1); err != nil {
 			l := strings.ToLower(err.Error())
 			if !strings.Contains(l, "exists") {
-				log.Printf("%s route: add %s via %s failed: %v", logPrefix, cidr, nextHop, err)
+				logfmt.Errorf("%s route: add %s via %s failed: %v", logPrefix, cidr, nextHop, err)
 			}
 		}
 	}
@@ -277,7 +279,7 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 				pfx := netip.MustParsePrefix(cidr)
 				if err := phyLuid.AddRoute(pfx, gw, 1); err != nil {
 					if !strings.Contains(strings.ToLower(err.Error()), "exists") {
-						log.Printf("%s route: add exclude %s via %s(if=%d) failed: %v", logPrefix, cidr, gw, ifIdx, err)
+						logfmt.Errorf("%s route: add exclude %s via %s(if=%d) failed: %v", logPrefix, cidr, gw, ifIdx, err)
 					}
 				}
 			}
@@ -310,7 +312,7 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 				serverIPv4Addr = netip.MustParseAddr(ipStr)
 				log.Printf("%s server pre-resolve (system): %s -> %s", logPrefix, serverHostOrIPv4, ipStr)
 			} else {
-				log.Printf("%s server pre-resolve FAILED for %q: %v", logPrefix, serverHostOrIPv4, rerr)
+				logfmt.Errorf("%s server pre-resolve FAILED for %q: %v", logPrefix, serverHostOrIPv4, rerr)
 			}
 		}
 		if !serverIPv4Addr.IsValid() {
@@ -334,7 +336,7 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 				if strings.Contains(e, "exists") {
 					log.Printf("%s: host route already exists %s via %s(if=%d)", logPrefix, host, gw, gwIfIdx)
 				} else {
-					log.Printf("%s route: add host %s via %s(if=%d) failed: %v", logPrefix, host, gw, gwIfIdx, err)
+					logfmt.Errorf("%s route: add host %s via %s(if=%d) failed: %v", logPrefix, host, gw, gwIfIdx, err)
 				}
 			}
 			lastServerIPv4s = append(lastServerIPv4s, serverIPv4Addr)

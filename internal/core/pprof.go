@@ -7,6 +7,8 @@ import (
 	"os"
 	"runtime"
 	"sync"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 var pprofOnce sync.Once
@@ -25,7 +27,7 @@ func maybeStartPprof() {
 		go func() {
 			log.Printf("[pprof] listening on http://%s/debug/pprof/", addr)
 			if err := http.ListenAndServe(addr, nil); err != nil {
-				log.Printf("[pprof] server error: %v", err)
+				logfmt.Errorf("[pprof] server error: %v", err)
 			}
 		}()
 	})

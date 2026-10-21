@@ -1,7 +1,8 @@
 package core
 
 import (
-	"strings"
+	"encoding/json"
+	"log"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -9,97 +10,120 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
-func TestStartupLogPipeline(t *testing.T) {
+type capturedLog struct {
+	code      int32
+	Level     string `json:"level"`
+	Component string `json:"component"`
+	Message   string `json:"message"`
+}
+
+// collectEvents keeps one code and drops it; a log line needs both codes and
+// which one it travelled as.
+//
+// captureLogs wires the standard log package the way Initialize does, points
+// the status sink at a recorder, and sets the verbosity atomic directly:
+// applyStatusVerbosity would take the service-IPC branch on Windows.
+func captureLogs(t *testing.T, verbosity int32) func() []capturedLog {
+	t.Helper()
 	prevCtl := globalController
 	globalController = &CoreController{}
 	globalController.initEngineState()
 	t.Cleanup(func() { globalController = prevCtl })
 
 	var mu sync.Mutex
-	type ev struct {
-		code int32
-		msg  string
-	}
-	var got []ev
+	var got []capturedLog
 	setStatusSink(func(code int32, message string) {
+		if code != LogEvent && code != LogError {
+			return
+		}
+		entry := capturedLog{code: code}
+		if err := json.Unmarshal([]byte(message), &entry); err != nil {
+			t.Errorf("log payload is not JSON: %q", message)
+		}
 		mu.Lock()
-		got = append(got, ev{code, message})
+		got = append(got, entry)
 		mu.Unlock()
 	})
 	t.Cleanup(func() { setStatusSink(nil) })
 
-	logSink = routeLogToFFI
-	t.Cleanup(func() { logSink = nil })
-
-	// Verbosity 2 = forward everything. Set the atomic directly to avoid the
-	// service-IPC branch in applyStatusVerbosity on Windows.
 	prevV := atomic.LoadInt32(&statusVerbosity)
-	atomic.StoreInt32(&statusVerbosity, 2)
+	atomic.StoreInt32(&statusVerbosity, verbosity)
 	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, prevV) })
 
-	// Drive the writer that log.SetOutput(sinkWriter{}) installs.
-	sw := sinkWriter{}
-	_, _ = sw.Write([]byte("[Xray] Connecting\n"))
-	_, _ = sw.Write([]byte("[AWG] some error occurred\n"))
-	// The explicit log-event emit used in awgStart/awgStop.
-	globalController.emitStatus(LogEvent, logfmt.BuildJSON("info", "AWG", "AWG started"))
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(sinkWriter{})
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+	})
 
-	mu.Lock()
-	defer mu.Unlock()
-
-	if len(got) != 3 {
-		t.Fatalf("expected 3 delivered events, got %d: %#v", len(got), got)
-	}
-	for i, e := range got {
-		if !strings.HasPrefix(e.msg, "{") || !strings.Contains(e.msg, `"message":`) {
-			t.Fatalf("event %d is not a JSON log line: %q", i, e.msg)
-		}
-	}
-	if got[0].code != LogEvent {
-		t.Errorf("info line -> code %d, want LogEvent (%d)", got[0].code, LogEvent)
-	}
-	if got[1].code != LogError {
-		t.Errorf("error line -> code %d, want LogError (%d)", got[1].code, LogError)
-	}
-	if !strings.Contains(got[1].msg, `"level":"error"`) || !strings.Contains(got[1].msg, `"component":"AWG"`) {
-		t.Errorf("error line JSON malformed: %q", got[1].msg)
-	}
-	if got[2].code != LogEvent {
-		t.Errorf("explicit emit -> code %d, want LogEvent (%d)", got[2].code, LogEvent)
+	return func() []capturedLog {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]capturedLog(nil), got...)
 	}
 }
 
-func TestStartupLogPipeline_VerbosityFilter(t *testing.T) {
-	prevCtl := globalController
-	globalController = &CoreController{}
-	globalController.initEngineState()
-	t.Cleanup(func() { globalController = prevCtl })
+func assertLogs(t *testing.T, got, want []capturedLog) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("line %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
 
-	var mu sync.Mutex
-	var got int
-	setStatusSink(func(code int32, message string) {
-		mu.Lock()
-		got++
-		mu.Unlock()
-	})
-	t.Cleanup(func() { setStatusSink(nil) })
+func TestLogPipeline_LevelIsTheWritersNotTheWords(t *testing.T) {
+	logs := captureLogs(t, 2)
 
-	logSink = routeLogToFFI
-	t.Cleanup(func() { logSink = nil })
+	log.Printf("[Xray] Connecting")
+	log.Printf("[AWG] some error occurred, handshake failed")
+	logfmt.Errorf("[AWG] tunnel broke")
+	logfmt.Warnf("[IPC] set verbosity failed: %v", "pipe closed")
+	emitLog(logfmt.Info, "mihomo", "fatal-looking words in an info line")
 
-	prevV := atomic.LoadInt32(&statusVerbosity)
-	atomic.StoreInt32(&statusVerbosity, 0) // errors only
-	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, prevV) })
+	want := []capturedLog{
+		{LogEvent, "info", "Xray", "Connecting"},
+		{LogEvent, "info", "AWG", "some error occurred, handshake failed"},
+		{LogError, "error", "AWG", "tunnel broke"},
+		{LogEvent, "warn", "IPC", "set verbosity failed: pipe closed"},
+		{LogEvent, "info", "mihomo", "fatal-looking words in an info line"},
+	}
+	assertLogs(t, logs(), want)
+}
 
-	sw := sinkWriter{}
-	_, _ = sw.Write([]byte("[Xray] Connecting\n"))             // info -> dropped
-	_, _ = sw.Write([]byte("[Xray] Starting core\n"))          // info -> dropped
-	_, _ = sw.Write([]byte("[Xray] tun2socks start failed\n")) // error -> forwarded
+func TestLogPipeline_VerbosityGatesByLevel(t *testing.T) {
+	logs := captureLogs(t, 0)
 
-	mu.Lock()
-	defer mu.Unlock()
-	if got != 1 {
-		t.Fatalf("at verbosity 0 expected only the error line forwarded, got %d events", got)
+	log.Printf("[Xray] Connecting")
+	log.Printf("[Xray] tun2socks start failed")
+	logfmt.Warnf("[Xray] retrying")
+	logfmt.Errorf("[Xray] Failed to start Xray: boom")
+	emitLog(logfmt.Fatal, "tun2socks", "engine died")
+
+	got := logs()
+	if len(got) != 2 || got[0].Level != "error" || got[1].Level != "fatal" {
+		t.Fatalf("verbosity 0 forwards error and fatal only, got %+v", got)
+	}
+	for _, l := range got {
+		if l.code != LogError {
+			t.Errorf("%+v travelled as %d, want LogError", l, l.code)
+		}
+	}
+}
+
+func TestLogPipeline_OffDropsEverything(t *testing.T) {
+	logs := captureLogs(t, -1)
+
+	logfmt.Errorf("[Xray] Failed to start Xray: boom")
+	emitLog(logfmt.Fatal, "tun2socks", "engine died")
+
+	if got := logs(); len(got) != 0 {
+		t.Fatalf("verbosity -1 must drop every line, got %+v", got)
 	}
 }
 
@@ -113,7 +137,7 @@ func TestApplyStatusVerbosity_RuntimeChange(t *testing.T) {
 	if got := atomic.LoadInt32(&statusVerbosity); got != 2 {
 		t.Fatalf("after applyStatusVerbosity(2): statusVerbosity=%d, want 2", got)
 	}
-	if !shouldEmitStatusMessage("[Xray] some debug detail") {
+	if !logEnabled(logfmt.Debug) {
 		t.Error("verbosity 2 should forward a debug line")
 	}
 
@@ -121,10 +145,10 @@ func TestApplyStatusVerbosity_RuntimeChange(t *testing.T) {
 	if got := atomic.LoadInt32(&statusVerbosity); got != 0 {
 		t.Fatalf("after applyStatusVerbosity(0): statusVerbosity=%d, want 0", got)
 	}
-	if shouldEmitStatusMessage("[Xray] some debug detail") {
+	if logEnabled(logfmt.Debug) {
 		t.Error("verbosity 0 should drop a debug line")
 	}
-	if !shouldEmitStatusMessage("[Xray] fatal: boom") {
+	if !logEnabled(logfmt.Fatal) {
 		t.Error("verbosity 0 must still forward fatal")
 	}
 
@@ -136,7 +160,33 @@ func TestApplyStatusVerbosity_RuntimeChange(t *testing.T) {
 	if got := atomic.LoadInt32(&statusVerbosity); got != -1 {
 		t.Errorf("applyStatusVerbosity(-5) clamped to %d, want -1", got)
 	}
-	if shouldEmitStatusMessage("[Xray] fatal: boom") {
+	if logEnabled(logfmt.Fatal) {
 		t.Error("verbosity -1 (off) must drop even fatal lines")
+	}
+}
+
+// A line the service sends is held to this process's verbosity, which may be
+// lower than the one another client left the service at.
+func TestRelayedLogPasses_HoldsServiceLinesToTheLocalGate(t *testing.T) {
+	prevV := atomic.LoadInt32(&statusVerbosity)
+	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, prevV) })
+
+	info := logfmt.BuildJSON(logfmt.Info, "Xray", "Connecting")
+	failure := logfmt.BuildJSON(logfmt.Error, "Xray", "Failed to start")
+
+	atomic.StoreInt32(&statusVerbosity, -1)
+	if relayedLogPasses(LogError, failure) {
+		t.Error("verbosity -1 let a relayed error line through")
+	}
+	if !relayedLogPasses(EngineConnected, "[Xray] Connected") {
+		t.Error("the gate held back a lifecycle event")
+	}
+
+	atomic.StoreInt32(&statusVerbosity, 0)
+	if relayedLogPasses(LogEvent, info) || !relayedLogPasses(LogError, failure) {
+		t.Error("verbosity 0 must pass the error line and drop the info line")
+	}
+	if relayedLogPasses(LogEvent, "not json") {
+		t.Error("a relayed log payload that does not parse must be dropped")
 	}
 }

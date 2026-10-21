@@ -99,7 +99,7 @@ mode the same pairs traverse the event pipe unmodified. The registry:
 | 301 | StatsError | text |
 | 302 | ServerEvent | `serverinfo.Selection` JSON — connected server + pool; re-emitted on change and on replay |
 | 303 | IPEvent | `{"ipv4","ipv6","ipv4Error","ipv6Error"}` — external IPs fetched through the tunnel |
-| 400/401 | LogEvent/LogError | logfmt JSON; the only codes gated by verbosity |
+| 400/401 | LogEvent/LogError | logfmt JSON `{ts,level,component,message}`; 401 is level error or fatal; the only codes gated by verbosity |
 | 402 | ConnEvent | connection inspector record |
 | 500–507 | Engine lifecycle | text; `[<engine>] <what>` |
 

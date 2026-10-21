@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"runtime/metrics"
 	"time"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 // goRuntimeMemBytes is the Go runtime's OS footprint (mapped, not yet released),
@@ -40,7 +42,7 @@ func (x *CoreController) startStats(interval time.Duration) {
 	// engine, the service's loop otherwise.
 	if useServiceIPC && !x.anyLocalEngineRunning() {
 		if err := serviceListenStats(interval); err != nil {
-			log.Printf("[IPC] listen stats failed: %v", err)
+			logfmt.Warnf("[IPC] listen stats failed: %v", err)
 		}
 		return
 	}
@@ -113,7 +115,7 @@ func (x *CoreController) stopStats() {
 func (x *CoreController) stopStatsLocked() {
 	if useServiceIPC && !x.anyLocalEngineRunning() {
 		if err := serviceStopStats(); err != nil {
-			log.Printf("[IPC] stop stats failed: %v", err)
+			logfmt.Warnf("[IPC] stop stats failed: %v", err)
 		}
 		return
 	}
@@ -158,9 +160,9 @@ func (x *CoreController) startHealthCheck(interval time.Duration) {
 				socksAddress, _ := x.xraySocksAddress.Load().(string)
 				if socksAddress == "" {
 					failCount++
-					log.Printf("[HealthCheck] SOCKS5 probe skipped: session address is empty (%d/%d)", failCount, maxFails)
+					logfmt.Warnf("[HealthCheck] SOCKS5 probe skipped: session address is empty (%d/%d)", failCount, maxFails)
 					if failCount >= maxFails {
-						log.Printf("[HealthCheck] Tunnel appears dead after %d failures", maxFails)
+						logfmt.Errorf("[HealthCheck] Tunnel appears dead after %d failures", maxFails)
 						x.emitStatus(EngineError, "Tunnel health check failed: SOCKS5 session address missing")
 						return
 					}
@@ -169,9 +171,9 @@ func (x *CoreController) startHealthCheck(interval time.Duration) {
 				conn, err := net.DialTimeout("tcp", socksAddress, 2*time.Second)
 				if err != nil {
 					failCount++
-					log.Printf("[HealthCheck] SOCKS5 probe failed (%d/%d): %v", failCount, maxFails, err)
+					logfmt.Warnf("[HealthCheck] SOCKS5 probe failed (%d/%d): %v", failCount, maxFails, err)
 					if failCount >= maxFails {
-						log.Printf("[HealthCheck] Tunnel appears dead after %d failures", maxFails)
+						logfmt.Errorf("[HealthCheck] Tunnel appears dead after %d failures", maxFails)
 						x.emitStatus(EngineError, "Tunnel health check failed: SOCKS5 unreachable")
 						return
 					}

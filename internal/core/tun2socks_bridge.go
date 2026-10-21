@@ -14,6 +14,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/proxy/reject"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
@@ -83,7 +84,10 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 		TCPReceiveBufferSize:     "4m",
 	}
 	engine.Insert(key)
-	go engine.Start()
+	go func() {
+		engine.Start()
+		useTun2socksSink(p.logLevel)
+	}()
 	x.isTun2socksRunning.Store(true)
 	x.tun2socksKey = key
 	x.maybeInstallBridgeProxy(p.routing, p.forceProxyURL, p.dnsRedirectAddr)
@@ -110,7 +114,7 @@ func (x *CoreController) stopTun2socks() {
 	case <-done:
 		log.Println("[tun2socks] stopped gracefully")
 	case <-time.After(5 * time.Second):
-		log.Println("[tun2socks] WARNING: stop timed out after 5s, forcing cleanup")
+		logfmt.Warnf("[tun2socks] stop timed out after 5s, forcing cleanup")
 	}
 	x.tun2socksKey = nil
 	x.isTun2socksRunning.Store(false)

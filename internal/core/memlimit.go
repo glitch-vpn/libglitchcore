@@ -4,6 +4,8 @@ import (
 	"log"
 	"math"
 	"runtime/debug"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 // noMemoryLimit is debug.SetMemoryLimit's "unlimited" sentinel.
@@ -15,7 +17,7 @@ const noMemoryLimit = math.MaxInt64
 func applyMemoryLimit(bytes int64) {
 	if useServiceIPC {
 		if err := serviceSetMemoryLimit(bytes); err != nil {
-			log.Printf("[mem] service set memory limit failed: %v", err)
+			logfmt.Warnf("[mem] service set memory limit failed: %v", err)
 		}
 		return
 	}

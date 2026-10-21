@@ -32,7 +32,7 @@ func (x *CoreController) platformAwgStart(ifName string, _ int, settings string)
 	awgDev := device.NewDevice(
 		tunDev,
 		conn.NewDefaultBind(),
-		device.NewLogger(awgDeviceLogLevel(), "[AWG] "),
+		awgDeviceLogger(),
 	)
 	awgDev.DisableSomeRoamingForBrokenMobileSemantics()
 

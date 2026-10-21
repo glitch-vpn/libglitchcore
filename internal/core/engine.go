@@ -3,7 +3,6 @@ package core
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/url"
 	"path/filepath"
 	"sort"
@@ -11,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
@@ -121,7 +121,7 @@ func geoAssetsDirOpt(s string) string {
 		return ""
 	}
 	if !filepath.IsAbs(s) {
-		log.Printf("[Engine] ignoring relative geoAssetsDir %q (want an absolute path)", s)
+		logfmt.Warnf("[Engine] ignoring relative geoAssetsDir %q (want an absolute path)", s)
 		return ""
 	}
 	return s
@@ -135,7 +135,7 @@ func probeURLOpt(s string) string {
 	}
 	u, err := url.Parse(s)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
-		log.Printf("[Engine] ignoring invalid probeUrl %q (want http(s)://...)", s)
+		logfmt.Warnf("[Engine] ignoring invalid probeUrl %q (want http(s)://...)", s)
 		return ""
 	}
 	return s
@@ -249,12 +249,12 @@ func (x *CoreController) localRunningEngineID() string {
 func (x *CoreController) engineStart(id string, req EngineStartRequest) int32 {
 	e, ok := engineRegistry[id]
 	if !ok {
-		log.Printf("[Engine] start rejected: unknown engine %q", id)
+		logfmt.Errorf("[Engine] start rejected: unknown engine %q", id)
 		return glitchCoreResultError
 	}
 	if useServiceIPC && proxyPortFromOpts(req.Opts) <= 0 {
 		if err := serviceEngineStart(id, req); err != nil {
-			log.Printf("[Engine] service start failed for %q: %v", id, err)
+			logfmt.Errorf("[Engine] service start failed for %q: %v", id, err)
 			if x != nil {
 				x.emitStatus(EngineError, fmt.Sprintf("[%s] Failed to start: %v", id, err))
 			}
@@ -270,12 +270,12 @@ func (x *CoreController) engineStart(id string, req EngineStartRequest) int32 {
 func (x *CoreController) engineStop(id string) int32 {
 	e, ok := engineRegistry[id]
 	if !ok {
-		log.Printf("[Engine] stop rejected: unknown engine %q", id)
+		logfmt.Errorf("[Engine] stop rejected: unknown engine %q", id)
 		return glitchCoreResultError
 	}
 	if useServiceIPC && !x.localEngineRunning(e) {
 		if err := serviceEngineStop(id); err != nil {
-			log.Printf("[Engine] service stop failed for %q: %v", id, err)
+			logfmt.Errorf("[Engine] service stop failed for %q: %v", id, err)
 			return glitchCoreResultError
 		}
 		return glitchCoreResultSuccess
@@ -294,7 +294,7 @@ func (x *CoreController) engineIsRunning(id string) int32 {
 	if useServiceIPC {
 		running, err := serviceEngineStatus(id)
 		if err != nil {
-			log.Printf("[Engine] service status failed for %q: %v", id, err)
+			logfmt.Warnf("[Engine] service status failed for %q: %v", id, err)
 			return glitchCoreResultError
 		}
 		if running {

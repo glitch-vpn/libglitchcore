@@ -7,6 +7,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 func newTestController() *CoreController {
@@ -175,40 +177,36 @@ func TestEmitStatus_DeferredDuringFFICall(t *testing.T) {
 	}
 }
 
-func TestLogSink_NilWhenDisabled(t *testing.T) {
-	ctl := newTestController()
+// Hot restart: a line written while no isolate is registered goes nowhere,
+// and the next registration receives lines again.
+func TestEmitLog_FollowsSinkRegistration(t *testing.T) {
+	prevCtl := globalController
+	globalController = newTestController()
+	t.Cleanup(func() { globalController = prevCtl })
 
-	// Logs are OFF by default (statusVerbosity -1), so shouldEmitStatusMessage
-	// drops everything. Raise to "all" to exercise the delivery path. Set the
-	// atomic directly to avoid applyStatusVerbosity's Windows service-IPC branch.
 	prevV := atomic.LoadInt32(&statusVerbosity)
 	atomic.StoreInt32(&statusVerbosity, 2)
 	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, prevV) })
 
 	var callCount atomic.Int32
-	setStatusSink(func(code int32, message string) {
-		callCount.Add(1)
-	})
+	count := func(code int32, message string) { callCount.Add(1) }
+	setStatusSink(count)
+	defer setStatusSink(nil)
 
-	// Set up logSink the same way InitializeController does.
-	logSink = func(msg string) {
-		if !shouldEmitStatusMessage(msg) {
-			return
-		}
-		ctl.emitStatus(LogEvent, msg)
-	}
-	defer func() { logSink = nil }()
-
-	logSink("test log message with error")
+	emitLog(logfmt.Info, "core", "delivered")
 	if c := callCount.Load(); c != 1 {
-		t.Fatalf("logSink delivered: count = %d, want 1", c)
+		t.Fatalf("emitLog delivered: count = %d, want 1", c)
 	}
 
-	// Disable sink (simulates hot restart).
 	setStatusSink(nil)
-
-	logSink("should be dropped error")
+	emitLog(logfmt.Error, "core", "dropped")
 	if c := callCount.Load(); c != 1 {
-		t.Fatalf("logSink after disable: count = %d, want 1 (unchanged)", c)
+		t.Fatalf("emitLog with no sink: count = %d, want 1 (unchanged)", c)
+	}
+
+	setStatusSink(count)
+	emitLog(logfmt.Info, "core", "delivered again")
+	if c := callCount.Load(); c != 2 {
+		t.Fatalf("emitLog after re-registration: count = %d, want 2", c)
 	}
 }

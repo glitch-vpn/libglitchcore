@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"sync/atomic"
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/conninspect"
@@ -72,19 +71,31 @@ func mihomoConfigLinks(raw string) []string {
 
 var mihomoLogSub observable.Subscription[mihomoLog.Event]
 
+// mihomo publishes every event to its subscribers whatever its own level;
+// that level only gates its stdout printer, which the core keeps off so the
+// bridge is the one way out.
 func startMihomoLogBridge() {
 	stopMihomoLogBridge()
-	mihomoLog.SetLevel(mihomoLogLevel())
 	sub := mihomoLog.Subscribe()
 	mihomoLogSub = sub
 	go func(s observable.Subscription[mihomoLog.Event]) {
 		for ev := range s {
-			if logSink == nil || inFFICall.Load() || !shouldEmitStatusMessage(ev.Payload) {
-				continue
-			}
-			logSink(logfmt.BuildJSON(ev.Type(), "mihomo", ev.Payload))
+			emitLog(mihomoEventLevel(ev.LogLevel), "mihomo", ev.Payload)
 		}
 	}(sub)
+}
+
+func mihomoEventLevel(l mihomoLog.LogLevel) logfmt.Level {
+	switch l {
+	case mihomoLog.DEBUG:
+		return logfmt.Debug
+	case mihomoLog.WARNING:
+		return logfmt.Warn
+	case mihomoLog.ERROR:
+		return logfmt.Error
+	default:
+		return logfmt.Info
+	}
 }
 
 func stopMihomoLogBridge() {
@@ -94,19 +105,10 @@ func stopMihomoLogBridge() {
 	}
 }
 
-func applyMihomoLogLevel() {
-	mihomoLog.SetLevel(mihomoLogLevel())
-}
-
-func mihomoLogLevel() mihomoLog.LogLevel {
-	switch v := atomic.LoadInt32(&statusVerbosity); {
-	case v < 0:
-		return mihomoLog.SILENT
-	case v >= 2:
-		return mihomoLog.DEBUG
-	default:
-		return mihomoLog.INFO
-	}
+// ApplyConfig sets the printer to the config's level, so every config the core
+// applies says silent too (mihomoconfig.BuildConfig, mihomoTeardown).
+func silenceMihomoPrinter() {
+	mihomoLog.SetLevel(mihomoLog.SILENT)
 }
 
 var mihomoConnQuit chan struct{}
@@ -247,7 +249,7 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	go func() {
 		mark := x.sessionGen.Load()
 		if err := x.mihomoStart(req.Config, req.TunFD, o); err != nil {
-			log.Printf("[mihomo] start failed: %v", err)
+			logfmt.Errorf("[mihomo] start failed: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
 			return
@@ -439,9 +441,11 @@ func (x *CoreController) initMihomoServerState(links []string, o engineOpts) {
 	})
 }
 
+const mihomoTeardownConfig = "log-level: silent"
+
 // Safe under coreMutex - no controller re-entry.
 func mihomoTeardown() {
-	if empty, err := mihomoCfg.Parse([]byte("{}")); err == nil {
+	if empty, err := mihomoCfg.Parse([]byte(mihomoTeardownConfig)); err == nil {
 		executor.ApplyConfig(empty, true)
 	}
 	executor.Shutdown()
@@ -464,7 +468,7 @@ func (x *CoreController) HandleMihomoStop() int32 {
 	x.emitStatus(EngineDisconnecting, "[mihomo] Disconnecting")
 	go func() {
 		if err := x.mihomoStop(); err != nil {
-			log.Printf("[mihomo] stop failed: %v", err)
+			logfmt.Errorf("[mihomo] stop failed: %v", err)
 			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to stop: %v", err))
 			return
 		}

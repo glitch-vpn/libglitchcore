@@ -7,11 +7,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log"
 	"sync"
 	"time"
 
 	"github.com/Microsoft/go-winio"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -47,7 +48,7 @@ func serviceEventLoop() {
 	for {
 		conn, err := winio.DialPipe(serviceEventPipe, nil)
 		if err != nil {
-			log.Printf("[IPC] dial event pipe failed: %v", err)
+			logfmt.Warnf("[IPC] dial event pipe failed: %v", err)
 			time.Sleep(retryDelay)
 			continue
 		}
@@ -57,15 +58,15 @@ func serviceEventLoop() {
 			line := scanner.Bytes()
 			var evt serviceStatusEvent
 			if err := json.Unmarshal(line, &evt); err != nil {
-				log.Printf("[IPC] parse event failed: %v", err)
+				logfmt.Warnf("[IPC] parse event failed: %v", err)
 				continue
 			}
-			if globalController != nil {
+			if globalController != nil && relayedLogPasses(evt.Code, evt.Message) {
 				globalController.emitStatus(evt.Code, evt.Message)
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			log.Printf("[IPC] event pipe read error: %v", err)
+			logfmt.Warnf("[IPC] event pipe read error: %v", err)
 		}
 		_ = conn.Close()
 		time.Sleep(retryDelay)

@@ -3,9 +3,9 @@ package core
 import (
 	"errors"
 	"fmt"
-	"log"
 	"time"
 
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 )
 
@@ -17,7 +17,7 @@ var selectionWatchInterval = 5 * time.Second
 func (x *CoreController) setServerSelection(sel *serverinfo.Selection) {
 	msg, err := sel.JSON()
 	if err != nil {
-		log.Printf("[server] selection marshal failed: %v", err)
+		logfmt.Errorf("[server] selection marshal failed: %v", err)
 		return
 	}
 	prev, _ := x.serverSelJSON.Load().(string)

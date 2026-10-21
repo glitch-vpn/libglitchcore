@@ -56,6 +56,7 @@ import (
 	"unsafe"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/pinger"
 )
 
@@ -124,7 +125,7 @@ func EngineStart(cEngineID *C.char, cRequestJSON *C.char) C.int {
 	engineID := C.GoString(cEngineID)
 	var req core.EngineStartRequest
 	if err := json.Unmarshal([]byte(C.GoString(cRequestJSON)), &req); err != nil {
-		log.Printf("[Engine] start rejected: bad request for %q: %v", engineID, err)
+		logfmt.Errorf("[Engine] start rejected: bad request for %q: %v", engineID, err)
 		return C.int(core.ResultError)
 	}
 	return C.int(core.EngineStart(engineID, req))

@@ -99,6 +99,15 @@ Everything reaches Dart through `x.emitStatus(code, message)`. Only
 `LogEvent`/`LogError` obey the verbosity gate; never add gating for other
 codes, and never post to the sink directly.
 
+Log lines go through `emitLog(level, component, message)`, and the level is the
+writer's: an engine's own severity (xray's message, mihomo's event, zap's level
+in tun2socks, the AmneziaWG device logger's two functions), or
+`logfmt.Warnf`/`logfmt.Errorf` for the core's own lines, a plain `log.Printf`
+being info. Those two write the level as the line's leading token ("warn: ",
+"error: "), which is the one place the standard log path reads a level from
+text; nothing reads one out of the message's words. The level alone picks the
+verbosity gate and `LogEvent` versus `LogError`.
+
 ### 2.2 Payloads: marshal structs, dedupe before emit
 
 Event payloads are small structs with json tags, marshaled — see

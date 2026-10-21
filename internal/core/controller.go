@@ -1,13 +1,14 @@
 package core
 
 import (
-	"log"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 var globalController *CoreController
@@ -140,10 +141,6 @@ func (x *CoreController) awgRunning() bool {
 
 func (x *CoreController) emitStatus(code int32, message string) {
 	x.updateConnectedAt(code)
-	// Only Log events obey the verbosity gate; status/stats/conn are never gated.
-	if (code == int32(LogEvent) || code == int32(LogError)) && !shouldEmitStatusMessage(message) {
-		return
-	}
 	if !statusCallbackRegistered.Load() {
 		return
 	}
@@ -174,7 +171,7 @@ func (x *CoreController) updateConnectedAt(code int32) {
 
 func setEnvVar(key, value string) {
 	if err := os.Setenv(key, value); err != nil {
-		log.Printf("[core][env] error setting env %s: %v", key, err)
+		logfmt.Errorf("[core][env] error setting env %s: %v", key, err)
 	}
 }
 
@@ -187,12 +184,10 @@ func applyStatusVerbosity(level int) {
 	}
 	if useServiceIPC {
 		if err := serviceSetVerbosity(level); err != nil {
-			log.Printf("[IPC] set verbosity failed: %v", err)
+			logfmt.Warnf("[IPC] set verbosity failed: %v", err)
 		}
 	}
 	atomic.StoreInt32(&statusVerbosity, int32(level))
-	// Reaches mihomo's logger even with no engine running (pinger adapters).
-	applyMihomoLogLevel()
 }
 
 func applyTun2SocksConfig(mtu int, udpTimeoutSec int) {

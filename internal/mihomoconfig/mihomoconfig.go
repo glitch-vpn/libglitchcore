@@ -98,7 +98,9 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	raw := config.DefaultRawConfig()
 	raw.AllowLan = false
 	raw.Mode = T.Rule
-	raw.LogLevel = log.WARNING
+	// The core reads mihomo's events through its subscription; its own printer
+	// stays off, from the moment ApplyConfig sets this level.
+	raw.LogLevel = log.SILENT
 	if prof.DisableIPv6 {
 		// Resolver stops returning AAAA; the ::/0 REJECT (buildRules) kills v6
 		// flows that arrive as literals.

@@ -16,6 +16,8 @@ import (
 
 	"github.com/Microsoft/go-winio"
 	"golang.org/x/sys/windows/svc"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -184,7 +186,7 @@ func serveCommandPipe(ctx context.Context, hub *serviceEventHub) {
 	for {
 		listener, err := winio.ListenPipe(commandPipeName, cfg)
 		if err != nil {
-			log.Printf("[service] command pipe listen error: %v", err)
+			logfmt.Errorf("[service] command pipe listen error: %v", err)
 			select {
 			case <-ctx.Done():
 				return
@@ -206,7 +208,7 @@ func serveCommandPipe(ctx context.Context, hub *serviceEventHub) {
 				if acceptCtx.Err() != nil {
 					break
 				}
-				log.Printf("[service] command pipe accept error: %v", err)
+				logfmt.Errorf("[service] command pipe accept error: %v", err)
 				continue
 			}
 			wg.Add(1)
@@ -236,7 +238,7 @@ func serveEventPipe(ctx context.Context, hub *serviceEventHub) {
 	for {
 		listener, err := winio.ListenPipe(eventPipeName, cfg)
 		if err != nil {
-			log.Printf("[service] event pipe listen error: %v", err)
+			logfmt.Errorf("[service] event pipe listen error: %v", err)
 			select {
 			case <-ctx.Done():
 				return
@@ -257,7 +259,7 @@ func serveEventPipe(ctx context.Context, hub *serviceEventHub) {
 				if acceptCtx.Err() != nil {
 					break
 				}
-				log.Printf("[service] event pipe accept error: %v", err)
+				logfmt.Errorf("[service] event pipe accept error: %v", err)
 				continue
 			}
 			sessionCtx, sessionCancel := context.WithCancel(acceptCtx)
@@ -289,7 +291,7 @@ func handleCommandConnection(ctx context.Context, conn net.Conn) {
 
 	emit := func(resp pipeResponse) bool {
 		if err := emitter.Encode(resp); err != nil {
-			log.Printf("[service] write response error: %v", err)
+			logfmt.Errorf("[service] write response error: %v", err)
 			return false
 		}
 		return true

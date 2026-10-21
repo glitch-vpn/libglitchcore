@@ -1,7 +1,8 @@
 package core
 
 import (
-	"log"
+	"encoding/json"
+	"fmt"
 	"os"
 	"strings"
 	"sync/atomic"
@@ -10,29 +11,23 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
-var logSink func(string)
-
 // connInspectEnabled gates the inspector: off = xray access-log lines are
 // dropped as per-connection noise; on = each becomes a ConnEvent instead.
 var connInspectEnabled atomic.Bool
-
-func shouldEmitStatusMessage(s string) bool {
-	return logfmt.ShouldEmit(atomic.LoadInt32(&statusVerbosity), s)
-}
 
 // applyConnInspector forwards to the service in Windows library mode - the
 // engines (and thus their access log / tracker) run there.
 func applyConnInspector(enabled bool) {
 	if useServiceIPC {
 		if err := serviceSetConnInspector(enabled); err != nil {
-			log.Printf("[IPC] set conn inspector failed: %v", err)
+			logfmt.Warnf("[IPC] set conn inspector failed: %v", err)
 		}
 	}
 	connInspectEnabled.Store(enabled)
 }
 
 func (x *CoreController) emitConn(rec conninspect.Record) {
-	if x == nil || !connInspectEnabled.Load() || logSink == nil || inFFICall.Load() {
+	if x == nil || !connInspectEnabled.Load() || inFFICall.Load() {
 		return
 	}
 	if js := rec.JSON(); js != "" {
@@ -40,65 +35,64 @@ func (x *CoreController) emitConn(rec conninspect.Record) {
 	}
 }
 
-// handleCoreLogLine turns an xray access-log line into a ConnEvent (when the
-// inspector is on) instead of a log entry; everything else is JSON-formatted,
-// mirrored to stdout, and sent through logSink under the verbosity filter.
-func handleCoreLogLine(raw string) {
-	if a, ok := logfmt.ParseAccess(raw); ok {
-		if globalController != nil {
-			globalController.emitConn(conninspect.Record{
-				Engine:   "xray",
-				Src:      a.Src,
-				Status:   a.Status,
-				Network:  a.Network,
-				Host:     a.Host,
-				Port:     a.Port,
-				Inbound:  a.Inbound,
-				Outbound: a.Outbound,
-			})
-		}
-		return
-	}
-
-	component, msg := logfmt.Component(raw)
-	if len(strings.TrimSpace(msg)) == 0 {
-		return
-	}
-	if !shouldEmitStatusMessage(msg) {
-		return
-	}
-	level := logfmt.InferLevel(msg)
-	line := logfmt.BuildJSON(level, component, msg)
-	_, _ = os.Stdout.Write(append([]byte(line), '\n'))
-	if logSink != nil && !inFFICall.Load() {
-		logSink(line)
-	}
+func logEnabled(level logfmt.Level) bool {
+	return logfmt.Passes(atomic.LoadInt32(&statusVerbosity), level)
 }
 
-// routeLogToFFI is the default logSink; it routes through emitStatus so the
-// callback-registered guard and inFFICall deferral apply.
-func routeLogToFFI(msg string) {
-	if !shouldEmitStatusMessage(msg) {
+// emitLog is the one sink for every engine's lines and the core's own: the
+// level is the one its writer reported, and it alone decides the verbosity
+// gate and LogEvent versus LogError.
+func emitLog(level logfmt.Level, component, message string) {
+	if !logEnabled(level) || strings.TrimSpace(message) == "" {
 		return
 	}
-	if globalController == nil {
+	line := logfmt.BuildJSON(level, component, message)
+	_, _ = os.Stdout.Write(append([]byte(line), '\n'))
+	if globalController == nil || inFFICall.Load() {
 		return
 	}
 	code := int32(LogEvent)
-	lower := strings.ToLower(msg)
-	if strings.Contains(lower, "error") || strings.Contains(lower, "failed") || strings.Contains(lower, "panic") || strings.Contains(lower, "fatal") {
-		code = int32(LogError)
+	if level.IsError() {
+		code = LogError
 	}
-	globalController.emitStatus(code, msg)
+	globalController.emitStatus(code, line)
 }
 
+// relayedLogPasses holds a log line relayed from the service to this
+// process's own gate: the service's verbosity is whatever its last client set.
+func relayedLogPasses(code int32, payload string) bool {
+	if code != LogEvent && code != LogError {
+		return true
+	}
+	var line struct {
+		Level logfmt.Level `json:"level"`
+	}
+	if err := json.Unmarshal([]byte(payload), &line); err != nil {
+		return false
+	}
+	return logEnabled(line.Level)
+}
+
+// emitLogf formats only once the line has passed the gate: engines call it on
+// paths where a dropped line must cost nothing.
+func emitLogf(level logfmt.Level, component, format string, args ...any) {
+	if !logEnabled(level) {
+		return
+	}
+	emitLog(level, component, fmt.Sprintf(format, args...))
+}
+
+// sinkWriter is the standard log package's output: the core's own lines
+// (logfmt.Warnf and logfmt.Errorf carry their level) and whatever a dependency
+// writes there.
 type sinkWriter struct{}
 
-func (sw sinkWriter) Write(p []byte) (n int, err error) {
+func (sinkWriter) Write(p []byte) (n int, err error) {
 	raw := strings.TrimRight(string(p), "\n")
 	if len(raw) == 0 {
 		return len(p), nil
 	}
-	handleCoreLogLine(raw)
+	level, component, msg := logfmt.SplitLine(raw)
+	emitLog(level, component, msg)
 	return len(p), nil
 }

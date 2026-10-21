@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
 	xrayNet "github.com/xtls/xray-core/common/net"
@@ -76,7 +77,7 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 	go func() {
 		mark := x.sessionGen.Load()
 		if err := x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o); err != nil {
-			log.Printf("[Xray] Failed to start Xray: %v", err)
+			logfmt.Errorf("[Xray] Failed to start Xray: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to start: %v", err))
 			return
@@ -109,7 +110,7 @@ func (x *CoreController) HandleXrayStop() int32 {
 
 	go func() {
 		if err := x.xrayStop(); err != nil {
-			log.Printf("[Xray] Failed to stop Xray: %v", err)
+			logfmt.Errorf("[Xray] Failed to stop Xray: %v", err)
 			x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to stop: %v", err))
 			return
 		}
@@ -303,7 +304,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 				x.xrayCoreInstance = nil
 			}
 			if attempt < socksStartAttempts {
-				log.Printf("[Xray] Startup failed on local SOCKS %s, retrying with a new port: %v", proxyAddress, err)
+				logfmt.Warnf("[Xray] Startup failed on local SOCKS %s, retrying with a new port: %v", proxyAddress, err)
 				continue
 			}
 			return fmt.Errorf("[Xray] Startup failed: %w", err)
@@ -335,7 +336,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		time.Sleep(100 * time.Millisecond)
 	}
 	if !socksReady {
-		log.Printf("[Xray] ERROR: SOCKS5 inbound (%s) not ready within %.1fs", proxyAddress, time.Since(startWait).Seconds())
+		logfmt.Errorf("[Xray] SOCKS5 inbound (%s) not ready within %.1fs", proxyAddress, time.Since(startWait).Seconds())
 		return fmt.Errorf("[Xray] Socks inbound not ready in time budget")
 	}
 
@@ -361,7 +362,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 
 	if x.xrayStatsManager != nil {
 		if err := x.xrayStatsManager.Start(); err != nil {
-			log.Printf("[Xray] Stats manager start error: %v", err)
+			logfmt.Errorf("[Xray] Stats manager start error: %v", err)
 		}
 	}
 
@@ -396,14 +397,14 @@ func (x *CoreController) xrayStop() error {
 		done := make(chan struct{})
 		go func() {
 			if cerr := x.xrayCoreInstance.Close(); cerr != nil {
-				log.Printf("[Xray] Core shutdown error: %v", cerr)
+				logfmt.Errorf("[Xray] Core shutdown error: %v", cerr)
 			}
 			close(done)
 		}()
 		select {
 		case <-done:
 		case <-time.After(5 * time.Second):
-			log.Println("[Xray] WARNING: Xray core close timed out after 5s")
+			logfmt.Warnf("[Xray] Xray core close timed out after 5s")
 		}
 		x.xrayCoreInstance = nil
 		x.isXrayRunning.Store(false)
@@ -445,7 +446,7 @@ func forceProxyInboundURL(cfg *xrayConf.Config, prof routing.Profile) string {
 	}
 	u, err := xrayconfig.ApplyForceProxyInbound(cfg)
 	if err != nil {
-		log.Printf("[Xray] force-proxy inbound: %v", err)
+		logfmt.Errorf("[Xray] force-proxy inbound: %v", err)
 		return ""
 	}
 	return u

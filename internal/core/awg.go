@@ -9,7 +9,7 @@ import (
 	"net"
 	"runtime"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/device"
@@ -46,16 +46,37 @@ func init() {
 	registerEngineVersion("amneziawg", func() string { return builtAmneziawgVersion })
 }
 
-// amneziawg-go writes to its own os.Stdout - LogLevelSilent is the only mute.
-func awgDeviceLogLevel() int {
-	switch v := atomic.LoadInt32(&statusVerbosity); {
-	case v < 0:
-		return device.LogLevelSilent
-	case v >= 2:
-		return device.LogLevelVerbose
-	default:
-		return device.LogLevelError
+// The gate is read per line, so a verbosity change reaches a running device.
+// The device writes a verbose line for every packet it cannot parse, before
+// any authentication, so those lines are held to a budget a sender cannot
+// flood the event stream past.
+func awgDeviceLogger() *device.Logger {
+	budget := &lineBudget{perSecond: 20}
+	return &device.Logger{
+		Verbosef: func(format string, args ...any) {
+			if logEnabled(logfmt.Debug) && budget.take(time.Now()) {
+				emitLogf(logfmt.Debug, "AWG", format, args...)
+			}
+		},
+		Errorf: func(format string, args ...any) { emitLogf(logfmt.Error, "AWG", format, args...) },
 	}
+}
+
+type lineBudget struct {
+	perSecond int
+	mu        sync.Mutex
+	second    int64
+	used      int
+}
+
+func (b *lineBudget) take(now time.Time) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if s := now.Unix(); s != b.second {
+		b.second, b.used = s, 0
+	}
+	b.used++
+	return b.used <= b.perSecond
 }
 
 // Android liveness via UAPI counters - our package is excluded from the VPN there.
@@ -128,7 +149,7 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 		chosen, idx, links := x.pickAwgConfig(req.Config, o)
 		// awg (L3) takes only a plain resolver; empty -> INI DNS field.
 		if err := x.awgStart(ifaceName, req.TunFD, chosen, o.dns.FirstPlainServer()); err != nil {
-			log.Printf("[AWG] Failed to start AWG: %v", err)
+			logfmt.Errorf("[AWG] Failed to start AWG: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[AWG] Failed to start: %v", err))
 			return
@@ -146,7 +167,6 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 			log.Println("[AWG] stopped while arming; session state torn down")
 			return
 		}
-		x.emitStatus(LogEvent, logfmt.BuildJSON("info", "AWG", "AWG started"))
 		x.startStats(time.Second)
 		x.emitStatus(EngineConnected, "[AWG] Connected")
 	}()
@@ -174,8 +194,6 @@ func (x *CoreController) pickAwgConfig(raw string, o engineOpts) (string, int, [
 		delay = fmt.Sprintf("%dms", res[idx].DelayMs)
 	}
 	log.Printf("[AWG] multilink: %d links, strategy=%q -> picked #%d (%s)", len(links), o.strategy, idx, delay)
-	x.emitStatus(LogEvent, logfmt.BuildJSON("info", "AWG",
-		fmt.Sprintf("multilink: picked server %d of %d (%s)", idx+1, len(links), delay)))
 	return links[idx], idx, links
 }
 
@@ -266,7 +284,7 @@ func (x *CoreController) HandleAwgStop() int32 {
 
 	go func() {
 		if err := x.awgStop(); err != nil {
-			log.Printf("[AWG] Failed to stop AWG: %v", err)
+			logfmt.Errorf("[AWG] Failed to stop AWG: %v", err)
 			x.emitStatus(EngineError, fmt.Sprintf("[AWG] Failed to stop: %v", err))
 			return
 		}
@@ -343,7 +361,6 @@ func (x *CoreController) awgStart(ifName string, tunFd int, rawConfig string, dn
 	success = true
 	x.isAwgRunning.Store(true)
 	log.Println("[AWG] Started successfully")
-	x.emitStatus(LogEvent, logfmt.BuildJSON("info", "AWG", "Started successfully"))
 	return nil
 }
 
@@ -360,7 +377,7 @@ func (x *CoreController) awgStop() error {
 	}
 	x.isAwgRunning.Store(false)
 	x.setCurrentAwgHandle(0)
-	x.emitStatus(LogEvent, logfmt.BuildJSON("info", "AWG", "Stopped"))
+	log.Println("[AWG] Stopped")
 	return nil
 }
 
@@ -420,7 +437,7 @@ func (x *CoreController) getAwgTraffic() (uint64, uint64) {
 	}
 	dump, err := x.awgGetConfig(handle)
 	if err != nil {
-		log.Printf("[Generic] Failed to get AWG config for stats: %v", err)
+		logfmt.Warnf("[Generic] Failed to get AWG config for stats: %v", err)
 		return 0, 0
 	}
 	rx, tx := awgconfig.SumRxTx(dump)

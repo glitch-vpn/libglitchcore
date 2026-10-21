@@ -19,6 +19,7 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/proxy/reject"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/procname"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
@@ -43,7 +44,7 @@ func (p *processSplitProxy) decide(m *M.Metadata) string {
 	name, err := procname.FindProcessName(m.Network.String(), m.SrcIP, int(m.SrcPort))
 	if err != nil || name == "" {
 		if _, seen := p.logged.LoadOrStore("ERR", true); !seen {
-			log.Printf("[bridge] process-split: FindProcessName(%s %s:%d) failed: %v - per-process won't match", m.Network.String(), m.SrcIP, m.SrcPort, err)
+			logfmt.Warnf("[bridge] process-split: FindProcessName(%s %s:%d) failed: %v - per-process won't match", m.Network.String(), m.SrcIP, m.SrcPort, err)
 		}
 		return ""
 	}
@@ -113,7 +114,7 @@ func installBridgeProxy(rules map[string]string, forceProxyURL, dnsRedirectAddr 
 			if fp, perr := t2sproxy.Parse(u); perr == nil {
 				forceProxy = fp
 			} else {
-				log.Printf("[bridge] force-proxy parse: %v", perr)
+				logfmt.Errorf("[bridge] force-proxy parse: %v", perr)
 			}
 		}
 	}
@@ -138,7 +139,7 @@ func installBridgeProxy(rules map[string]string, forceProxyURL, dnsRedirectAddr 
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	log.Printf("[bridge] base proxy not ready in time, skipped")
+	logfmt.Warnf("[bridge] base proxy not ready in time, skipped")
 }
 
 func isRejectProxy(p t2sproxy.Proxy) bool {

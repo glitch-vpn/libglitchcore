@@ -2,7 +2,6 @@ package xrayconfig
 
 import (
 	"encoding/json"
-	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -11,6 +10,7 @@ import (
 	xrayConf "github.com/xtls/xray-core/infra/conf"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
@@ -69,7 +69,7 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfi
 			if domains := tierDomains(prof, routing.TargetDirect); len(domains) > 0 {
 				nsList = append(append(proxyScoped, scopedCopies(direct, domains)...), general...)
 			} else {
-				log.Printf("[Xray][DNS] directServers ignored in normal mode: no direct domain rules to scope them to")
+				logfmt.Warnf("[Xray][DNS] directServers ignored in normal mode: no direct domain rules to scope them to")
 			}
 		}
 	}
@@ -95,7 +95,7 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 	}
 	var fd xrayConf.FakeDNSConfig
 	if err := json.Unmarshal([]byte(pool), &fd); err != nil {
-		log.Printf("[Xray][DNS] fake-ip pool build failed, falling back to plain DNS: %v", err)
+		logfmt.Warnf("[Xray][DNS] fake-ip pool build failed, falling back to plain DNS: %v", err)
 		applyPlainDNS(cfg, dns, prof)
 		return
 	}
@@ -198,12 +198,12 @@ func hostsWrapper(hosts map[string][]string) *xrayConf.HostsWrapper {
 	}
 	b, err := json.Marshal(hosts)
 	if err != nil {
-		log.Printf("[Xray][DNS] hosts dropped: %v", err)
+		logfmt.Warnf("[Xray][DNS] hosts dropped: %v", err)
 		return nil
 	}
 	var hw xrayConf.HostsWrapper
 	if err := json.Unmarshal(b, &hw); err != nil {
-		log.Printf("[Xray][DNS] hosts dropped: %v", err)
+		logfmt.Warnf("[Xray][DNS] hosts dropped: %v", err)
 		return nil
 	}
 	return &hw
@@ -214,7 +214,7 @@ func plainNameServers(servers []string) []*xrayConf.NameServerConfig {
 	for _, s := range servers {
 		xs, ok := toXrayServer(s)
 		if !ok {
-			log.Printf("[Xray][DNS] skipping %q: xray has no DoT (use https:// or a plain IP)", s)
+			logfmt.Warnf("[Xray][DNS] skipping %q: xray has no DoT (use https:// or a plain IP)", s)
 			continue
 		}
 		ns := &xrayConf.NameServerConfig{}

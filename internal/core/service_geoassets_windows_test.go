@@ -77,7 +77,7 @@ func TestServiceDispatch_EngineStart_GeoAssetsDir(t *testing.T) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		// The teardown goroutine keeps logging after the running flag drops,
-		// and logSink is package-global: without settling here those lines land
+		// and the status sink is package-global: without settling here those lines land
 		// in the next test's sink and break its event count.
 		time.Sleep(500 * time.Millisecond)
 	})

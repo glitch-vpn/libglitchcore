@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"log"
 	"time"
+
+	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
 const (
@@ -73,7 +75,7 @@ func SetStatusSink(fn func(code int32, message string)) {
 			// The session and its cached state live in the service process;
 			// the replay arrives through the event pipe.
 			if err := serviceReplaySession(); err != nil {
-				log.Printf("[IPC] replay session failed: %v", err)
+				logfmt.Warnf("[IPC] replay session failed: %v", err)
 			}
 		}
 	}()
@@ -88,20 +90,19 @@ func Initialize() {
 		ensureServiceIPC()
 	}
 	platformInit("")
-	log.SetFlags(log.LstdFlags | log.Lmicroseconds)
+	// The payload carries its own ts.
+	log.SetFlags(0)
 	log.SetOutput(sinkWriter{})
 	registerCoreLogHandler()
-	applyMihomoLogLevel()
+	silenceMihomoPrinter()
 	controller := &CoreController{}
 	controller.initEngineState()
-	logSink = routeLogToFFI
 	globalController = controller
 }
 
 // OnDartApiInit drops delivery state on hot restart until the new isolate re-registers.
 func OnDartApiInit() {
 	setStatusSink(nil)
-	logSink = nil
 	if globalController != nil {
 		globalController.stopStats()
 	}

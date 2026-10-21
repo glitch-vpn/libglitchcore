@@ -41,67 +41,58 @@ func TestParseAccess(t *testing.T) {
 	}
 }
 
-func TestShouldEmit(t *testing.T) {
+func TestPasses_GatesByLevel(t *testing.T) {
 	cases := []struct {
-		lvl  int32
-		msg  string
-		want bool
+		verbosity int32
+		level     Level
+		want      bool
 	}{
-		{2, "anything debug trace", true},
-		{1, "normal info message", true},
-		{1, "a debug line", false},
-		{1, "a trace line", false},
-		{0, "connection error here", true},
-		{0, "operation failed", true},
-		{0, "panic: boom", true},
-		{0, "fatal shutdown", true},
-		{0, "ordinary info message", false},
+		{-1, Fatal, false},
+		{-1, Error, false},
+		{0, Fatal, true},
+		{0, Error, true},
+		{0, Warn, false},
+		{0, Info, false},
+		{1, Warn, true},
+		{1, Info, true},
+		{1, Debug, false},
+		{2, Debug, true},
 	}
 	for _, c := range cases {
-		if got := ShouldEmit(c.lvl, c.msg); got != c.want {
-			t.Errorf("ShouldEmit(%d, %q) = %v, want %v", c.lvl, c.msg, got, c.want)
+		if got := Passes(c.verbosity, c.level); got != c.want {
+			t.Errorf("Passes(%d, %q) = %v, want %v", c.verbosity, c.level, got, c.want)
 		}
 	}
 }
 
-func TestComponent(t *testing.T) {
+// The words in a message never set its level; only a leading token does.
+func TestSplitLine_LevelFromLeadingTokenOnly(t *testing.T) {
 	cases := []struct {
-		raw      string
-		wantComp string
-		wantMsg  string
+		raw       string
+		wantLevel Level
+		wantComp  string
+		wantMsg   string
 	}{
-		{"[Xray] Connected", "Xray", "Connected"},
-		{"[App][DNS] resolved", "App/DNS", "resolved"},
-		{"DEBUG: [core] hello", "core", "hello"},
-		{"no brackets here", "core", "no brackets here"},
-		{"prefix [tag] tail", "tag", "tail"},
+		{"[Xray] Connected", Info, "Xray", "Connected"},
+		{"[App][DNS] resolved", Info, "App/DNS", "resolved"},
+		{"DEBUG: [core] hello", Debug, "core", "hello"},
+		{"WARNING: low disk", Warn, "core", "low disk"},
+		{"no brackets here", Info, "core", "no brackets here"},
+		{"prefix [tag] tail", Info, "tag", "tail"},
+		{"[Xray] upstream error: connection failed", Info, "Xray", "upstream error: connection failed"},
+		{"[AWG] fatal-looking text, panic included", Info, "AWG", "fatal-looking text, panic included"},
 	}
 	for _, c := range cases {
-		comp, msg := Component(c.raw)
-		if comp != c.wantComp || msg != c.wantMsg {
-			t.Errorf("Component(%q) = (%q, %q), want (%q, %q)", c.raw, comp, msg, c.wantComp, c.wantMsg)
-		}
-	}
-}
-
-func TestInferLevel(t *testing.T) {
-	cases := map[string]string{
-		"fatal crash":           "fatal",
-		"some error occurred":   "error",
-		"warn: low disk":        "warn",
-		"debug details":         "debug",
-		"trace span":            "trace",
-		"just an ordinary line": "info",
-	}
-	for msg, want := range cases {
-		if got := InferLevel(msg); got != want {
-			t.Errorf("InferLevel(%q) = %q, want %q", msg, got, want)
+		level, comp, msg := SplitLine(c.raw)
+		if level != c.wantLevel || comp != c.wantComp || msg != c.wantMsg {
+			t.Errorf("SplitLine(%q) = (%q, %q, %q), want (%q, %q, %q)",
+				c.raw, level, comp, msg, c.wantLevel, c.wantComp, c.wantMsg)
 		}
 	}
 }
 
 func TestBuildJSON(t *testing.T) {
-	out := BuildJSON("error", "Xray", "boom")
+	out := BuildJSON(Error, "Xray", "boom")
 	var decoded struct {
 		TS        string `json:"ts"`
 		Level     string `json:"level"`

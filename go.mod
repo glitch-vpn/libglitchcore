@@ -8,6 +8,7 @@ require (
 	github.com/metacubex/mihomo v1.19.32
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 	github.com/xtls/xray-core v1.260327.0
+	go.uber.org/zap v1.28.0
 	golang.org/x/net v0.56.0
 	golang.org/x/sys v0.46.0
 	golang.zx2c4.com/wireguard/windows v0.5.3
@@ -159,7 +160,6 @@ require (
 	gitlab.com/yawning/bsaes.git v0.0.0-20190805113838-0a714cd429ec // indirect
 	go.uber.org/atomic v1.11.0 // indirect
 	go.uber.org/multierr v1.11.0 // indirect
-	go.uber.org/zap v1.28.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
 	go4.org/mem v0.0.0-20240501181205-ae6ca9944745 // indirect
 	go4.org/netipx v0.0.0-20260823151212-3075585bcbeb // indirect
