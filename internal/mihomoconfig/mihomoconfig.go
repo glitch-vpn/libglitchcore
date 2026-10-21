@@ -470,11 +470,22 @@ func Target(links []string) string {
 	return GroupTag
 }
 
+// Names mihomo's parser defines in every config (config.parseProxies), plus
+// the balancer group. A proxy taking one of the outbounds' names fails the
+// start; one named GLOBAL is replaced by mihomo's selector, which picks DIRECT.
+var reservedNames = []string{
+	"DIRECT", "REJECT", "REJECT-DROP", "COMPATIBLE", "PASS", "PASS-RULE", "GLOBAL",
+	GroupTag,
+}
+
 // Must match BuildConfig's naming exactly - callers map the group's Now()
 // back to a link index through it.
 func ProxyNames(links []string) []string {
 	var names []string
-	used := map[string]bool{}
+	used := make(map[string]bool, len(reservedNames))
+	for _, name := range reservedNames {
+		used[name] = true
+	}
 	for i, link := range links {
 		trimmed := strings.TrimSpace(link)
 		if trimmed == "" {

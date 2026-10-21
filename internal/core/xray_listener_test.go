@@ -54,6 +54,7 @@ func TestXrayLoopbackInbounds_RefuseAnonymousClient(t *testing.T) {
 		}
 		requireSocksRefusesAnonymous(t, u.Host)
 		requireSocks4RefusesAnonymous(t, u.Host)
+		requireHTTPConnectRefusesAnonymous(t, u.Host)
 		requireSocksAcceptsURL(t, socksURL)
 	}
 }
