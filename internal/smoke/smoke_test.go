@@ -25,6 +25,7 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
 	"github.com/glitch-vpn/libglitchcore/internal/pinger"
 	C "github.com/metacubex/mihomo/constant"
 	xrayCore "github.com/xtls/xray-core/core"
@@ -40,27 +41,13 @@ func TestMain(m *testing.M) {
 
 const testUUID = "b831381d-6324-4d53-ad4f-8cda48b30811"
 
-// freePort probes UDP as well: xray binds both, and a TCP-only probe can hand
-// back a port inside a Windows Hyper-V/WinNAT UDP exclusion range, which then
-// fails the engine start.
 func freePort(t *testing.T) int {
 	t.Helper()
-	for i := 0; i < 20; i++ {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			t.Fatal(err)
-		}
-		port := l.Addr().(*net.TCPAddr).Port
-		_ = l.Close()
-		u, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
-		if err != nil {
-			continue
-		}
-		_ = u.Close()
-		return port
+	port, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
 	}
-	t.Fatal("no port free on both TCP and UDP")
-	return 0
+	return port
 }
 
 func startVlessServer(t *testing.T) int {

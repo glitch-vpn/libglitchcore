@@ -82,6 +82,7 @@ internal/
   pinger/                  # MeasurePings (standalone per-engine probes)
   liveness/                # up/down debounce tracker
   smoke/                   # end-to-end self-verification (integration tag)
+  loopbackport/            # loopback ports free on TCP and UDP, for the tests
   routing/ dnsconfig/ logfmt/ conninspect/ procname/
 Makefile, Dockerfile       # deploy builds (Docker)
 .github/workflows/         # ci (tag matrix + license guards), release

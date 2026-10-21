@@ -8,13 +8,14 @@ import (
 	"net"
 	"os"
 	"path/filepath"
-	"strconv"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/xtls/xray-core/app/router"
 	"google.golang.org/protobuf/proto"
+
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
 )
 
 // The service build never talks to a real pipe here: dispatchCommand is called
@@ -43,11 +44,11 @@ func TestServiceDispatch_EngineStart_GeoAssetsDir(t *testing.T) {
 	writeServiceGeoFixtures(t, dir)
 
 	t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
-	port, err := pickLoopbackPort()
+	port, err := loopbackport.Pick()
 	if err != nil {
 		t.Fatal(err)
 	}
-	proxyPort, err := pickLoopbackPort()
+	proxyPort, err := loopbackport.Pick()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -139,24 +140,4 @@ func writeServiceGeoFixtures(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "geoip.dat"), ip, 0o644); err != nil {
 		t.Fatal(err)
 	}
-}
-
-// pickLoopbackPort finds a 127.0.0.1 port bindable on both TCP and UDP - a mixed
-// inbound needs both, and Windows WinNAT reserves ephemeral UDP ranges.
-func pickLoopbackPort() (int, error) {
-	for i := 0; i < 128; i++ {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			continue
-		}
-		port := l.Addr().(*net.TCPAddr).Port
-		uc, uerr := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-		_ = l.Close()
-		if uerr != nil {
-			continue
-		}
-		_ = uc.Close()
-		return port, nil
-	}
-	return 0, fmt.Errorf("no bindable loopback port")
 }
