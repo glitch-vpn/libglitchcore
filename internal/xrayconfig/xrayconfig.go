@@ -87,7 +87,7 @@ func linkHasVision(link string) bool {
 	return strings.Contains(strings.ToLower(u.Query().Get("flow")), "vision")
 }
 
-// BuildConfig: tun2socks inbound is added later by ApplyLocalSocksInbound.
+// BuildConfig adds no inbound: the TUN path dials in process as AppTrafficTag, and proxy mode adds its own (ApplyProxyInbound).
 func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, xrayLogLevel string) (*BuildResult, error) {
 	clean := make([]string, 0, len(links))
 	for _, l := range links {

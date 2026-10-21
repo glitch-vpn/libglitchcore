@@ -8,14 +8,13 @@ import (
 	"log"
 	"net"
 	"os"
-	"runtime"
 	"strconv"
 	"sync/atomic"
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
-	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
+	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 	xrayNet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
 	xrayCore "github.com/xtls/xray-core/core"
@@ -103,7 +102,6 @@ func (x *CoreController) HandleXrayStop() int32 {
 	}
 
 	x.stopStats()
-	x.stopHealthCheck()
 	x.stopLiveness()
 	x.clearSessionState()
 	x.emitStatus(EngineDisconnecting, "[Xray] Disconnecting")
@@ -154,10 +152,6 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		effectiveLogLevel = 0
 	}
 	xrayLogLevel, tun2socksLogLevel := xrayconfig.LogLevels(effectiveLogLevel)
-	tun2socksLogLevel = xrayconfig.CapTun2socksLogLevel(tun2socksLogLevel)
-	var proxyAddress string
-	var proxyURL string
-	var forceProxyURL string
 	var cfg xrayConf.Config
 
 	log.Printf("[Xray] Parsing link(s)")
@@ -231,25 +225,13 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		x.xrayStatsManager = x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
 		x.isXrayRunning.Store(true)
 		if err = x.xrayCoreInstance.Start(); err != nil {
-			x.isXrayRunning.Store(false)
-			x.xrayStatsManager = nil
-			_ = x.xrayCoreInstance.Close()
-			x.xrayCoreInstance = nil
+			x.xrayRollback()
 			return fmt.Errorf("[Xray] Startup failed: %w", err)
 		}
-		ready := false
-		for i := 0; i < 50; i++ {
-			if c, derr := net.DialTimeout("tcp", endpoint, 300*time.Millisecond); derr == nil {
-				_ = c.Close()
-				ready = true
-				break
-			}
-			time.Sleep(100 * time.Millisecond)
-		}
-		if !ready {
+		if !waitSocksReady(endpoint) {
+			x.xrayRollback()
 			return fmt.Errorf("[Xray] proxy SOCKS not ready at %s", endpoint)
 		}
-		x.xraySocksAddress.Store(endpoint)
 		if x.xrayStatsManager != nil {
 			_ = x.xrayStatsManager.Start()
 		}
@@ -264,102 +246,56 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 			urlV4:   o.ipEchoV4,
 			urlV6:   o.ipEchoV6,
 			skipV6:  o.dns.DisableIPv6,
-			dial:    x.xrayExitEchoDial(x.xrayCoreInstance, mark),
+			dial:    x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
 		})
 		log.Printf("[Xray] Proxy mode: SOCKS5 at %s (no TUN)", endpoint)
 		return nil
 	}
 
-	const socksStartAttempts = 2
-	for attempt := 1; attempt <= socksStartAttempts; attempt++ {
-		socksSession, sessionProxyURL, sessionErr := xrayconfig.ApplyLocalSocksInbound(&cfg)
-		if sessionErr != nil {
-			return fmt.Errorf("[Xray] Failed to apply local SOCKS bridge: %w", sessionErr)
-		}
-		proxyAddress = socksSession.Endpoint()
-		proxyURL = sessionProxyURL
-		// force-proxy inbound so process->proxy apps tunnel even in direct-all
-		// mode; idempotent across retries (findInboundIdx replaces).
-		forceProxyURL = forceProxyInboundURL(&cfg, routing)
-		xrayconfig.ApplySniffing(&cfg, o.sniffing)
+	builtCfg, err := cfg.Build()
+	if err != nil {
+		return fmt.Errorf("[Xray] Config build failed: %w", err)
+	}
+	x.xrayCoreInstance, err = xrayCore.New(builtCfg)
+	if err != nil {
+		return fmt.Errorf("[Xray] Core init failed: %w", err)
+	}
+	x.xrayStatsManager = x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
 
-		log.Printf("[Xray] Ensuring authenticated tun2socks inbound at %s", proxyAddress)
-		builtCfg, err := cfg.Build()
-		if err != nil {
-			return fmt.Errorf("[Xray] Config build failed: %w", err)
-		}
-
-		x.xrayCoreInstance, err = xrayCore.New(builtCfg)
-		if err != nil {
-			return fmt.Errorf("[Xray] Core init failed: %w", err)
-		}
-
-		x.xrayStatsManager = x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
-
-		log.Println("[Xray] Starting core")
-		x.isXrayRunning.Store(true)
-
-		if err := x.xrayCoreInstance.Start(); err != nil {
-			x.isXrayRunning.Store(false)
-			x.xrayStatsManager = nil
-			if x.xrayCoreInstance != nil {
-				_ = x.xrayCoreInstance.Close()
-				x.xrayCoreInstance = nil
-			}
-			if attempt < socksStartAttempts {
-				logfmt.Warnf("[Xray] Startup failed on local SOCKS %s, retrying with a new port: %v", proxyAddress, err)
-				continue
-			}
-			return fmt.Errorf("[Xray] Startup failed: %w", err)
-		}
-		break
+	log.Println("[Xray] Starting core")
+	x.isXrayRunning.Store(true)
+	if err := x.xrayCoreInstance.Start(); err != nil {
+		x.xrayRollback()
+		return fmt.Errorf("[Xray] Startup failed: %w", err)
 	}
 	log.Println("[Xray] Core initialized")
 
-	log.Println("[Xray] Waiting for SOCKS5 proxy to be ready")
-	var socksReady bool
-	startWait := time.Now()
-	attempts := 0
-	timeoutEnv := os.Getenv("GLITCH_SOCKS_READY_TIMEOUT_SEC")
-	maxWait := 5 * time.Second
-	if timeoutEnv != "" {
-		if v, err := strconv.Atoi(timeoutEnv); err == nil && v > 0 && v <= 60 {
-			maxWait = time.Duration(v) * time.Second
+	sniffing := xrayconfig.AppSniffing(o.sniffing)
+	appProxy, err := x.newXrayBridgeProxy(x.xrayCoreInstance, xrayconfig.AppTrafficTag, sniffing, mark)
+	if err != nil {
+		x.xrayRollback()
+		return fmt.Errorf("[Xray] bridge: %w", err)
+	}
+	var forceProxy t2sproxy.Proxy
+	if routingHasForceProxy(routing) {
+		if forceProxy, err = x.newXrayBridgeProxy(x.xrayCoreInstance, xrayconfig.ForceProxyTag, sniffing, mark); err != nil {
+			x.xrayRollback()
+			return fmt.Errorf("[Xray] bridge: %w", err)
 		}
 	}
-	for time.Since(startWait) < maxWait {
-		attempts++
-		c, err := net.DialTimeout("tcp", proxyAddress, 300*time.Millisecond)
-		if err == nil {
-			_ = c.Close()
-			socksReady = true
-			log.Printf("[Xray] SOCKS5 proxy is ready at %s (after %d attempts, %.1fs)", proxyAddress, attempts, time.Since(startWait).Seconds())
-			break
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	if !socksReady {
-		logfmt.Errorf("[Xray] SOCKS5 inbound (%s) not ready within %.1fs", proxyAddress, time.Since(startWait).Seconds())
-		return fmt.Errorf("[Xray] Socks inbound not ready in time budget")
-	}
-
-	log.Println("[Xray] SOCKS5 proxy is ready")
-	x.xraySocksAddress.Store(proxyAddress)
 
 	log.Println("[Xray] Starting tun2socks")
 	if err := x.startTun2socks(tun2socksParams{
-		proxyURL:      proxyURL,
-		tunFd:         tunFd,
-		serverIPv4s:   serverDialIPv4s,
-		dnsServer:     dnsServer,
-		logLevel:      tun2socksLogLevel,
-		routing:       routing,
-		forceProxyURL: forceProxyURL,
+		proxy:       appProxy,
+		forceProxy:  forceProxy,
+		tunFd:       tunFd,
+		serverIPv4s: serverDialIPv4s,
+		dnsServer:   dnsServer,
+		logLevel:    tun2socksLogLevel,
+		routing:     routing,
 	}); err != nil {
-		// tun2socks failed but the core is already up - roll back.
-		_ = x.xrayCoreInstance.Close()
-		x.xrayCoreInstance = nil
-		x.isXrayRunning.Store(false)
+		x.stopTun2socks()
+		x.xrayRollback()
 		return fmt.Errorf("[Xray] %w", err)
 	}
 
@@ -371,13 +307,12 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 
 	log.Println("[Xray] Started successfully, running")
 
-	x.startHealthCheck(15 * time.Second)
-	// Probe via the loopback SOCKS (the same path as user traffic) so liveness
-	// works on Android, where our own sockets bypass the VPN.
+	// Probe inside xray as app traffic, so liveness follows the user's path
+	// and works on Android, where our own sockets bypass the VPN.
 	x.startLiveness(livenessParams{
 		engine:   "xray",
 		interval: livenessInterval(o.livenessSec),
-		probe:    socksProber(proxyURL, o.probeURL),
+		probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.AppTrafficTag, mark), o.probeURL),
 	})
 	x.initXrayServerState(res, links, o)
 	x.configureIPResolve(ipResolveConfig{
@@ -385,11 +320,38 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		urlV4:   o.ipEchoV4,
 		urlV6:   o.ipEchoV6,
 		skipV6:  o.dns.DisableIPv6,
-		dial:    x.xrayExitEchoDial(x.xrayCoreInstance, mark),
+		dial:    x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
 	})
 
 	return nil
 }
+
+// waitSocksReady waits for the proxy-mode inbound to accept, for
+// GLITCH_SOCKS_READY_TIMEOUT_SEC (SetSocksReadyTimeoutSec) or 5s.
+func waitSocksReady(endpoint string) bool {
+	budget := 5 * time.Second
+	if v, err := strconv.Atoi(os.Getenv("GLITCH_SOCKS_READY_TIMEOUT_SEC")); err == nil && v > 0 && v <= 60 {
+		budget = time.Duration(v) * time.Second
+	}
+	for start := time.Now(); time.Since(start) < budget; time.Sleep(100 * time.Millisecond) {
+		if c, err := net.DialTimeout("tcp", endpoint, 300*time.Millisecond); err == nil {
+			_ = c.Close()
+			return true
+		}
+	}
+	return false
+}
+
+// xrayRollback undoes a start that got as far as creating the instance.
+func (x *CoreController) xrayRollback() {
+	x.isXrayRunning.Store(false)
+	x.xrayStatsManager = nil
+	if x.xrayCoreInstance != nil {
+		_ = x.xrayCoreInstance.Close()
+		x.xrayCoreInstance = nil
+	}
+}
+
 func (x *CoreController) xrayStop() error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
@@ -419,10 +381,11 @@ func (x *CoreController) xrayStop() error {
 	return nil
 }
 
-// xrayExitEchoDial dials inside the instance as the exit-echo inbound, so the
-// flow takes the proxy ahead of the routing tiers with no listener. Like
-// mihomoTunnelDial it refuses once the session that started at mark has ended.
-func (x *CoreController) xrayExitEchoDial(inst *xrayCore.Instance, mark int64) tunnelDialFunc {
+// xrayTunnelDial dials inside the instance as the inbound tag names:
+// ExitEchoTag takes the proxy ahead of the routing tiers,
+// AppTrafficTag routes like the user's traffic. Like mihomoTunnelDial it
+// refuses once the session that started at mark has ended.
+func (x *CoreController) xrayTunnelDial(inst *xrayCore.Instance, tag string, mark int64) tunnelDialFunc {
 	return func(ctx context.Context, _, addr string) (net.Conn, error) {
 		if x.sessionGen.Load() != mark {
 			return nil, errSessionEnded
@@ -435,23 +398,9 @@ func (x *CoreController) xrayExitEchoDial(inst *xrayCore.Instance, mark int64) t
 		if err != nil {
 			return nil, err
 		}
-		ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: xrayconfig.ExitEchoTag})
+		ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: tag})
 		return xrayCore.Dial(ctx, inst, xrayNet.TCPDestination(xrayNet.ParseAddress(host), port))
 	}
-}
-
-// process:->proxy needs an always-tunnel inbound so the rule holds in direct-all
-// mode; Android routes per-app via VpnService, not here.
-func forceProxyInboundURL(cfg *xrayConf.Config, prof routing.Profile) string {
-	if runtime.GOOS == "android" || !routingHasForceProxy(prof) {
-		return ""
-	}
-	u, err := xrayconfig.ApplyForceProxyInbound(cfg)
-	if err != nil {
-		logfmt.Errorf("[Xray] force-proxy inbound: %v", err)
-		return ""
-	}
-	return u
 }
 
 func (x *CoreController) getXrayTraffic() (uint64, uint64) {

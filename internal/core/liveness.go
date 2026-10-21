@@ -176,9 +176,8 @@ func loopbackSocksURL(hostPort, user, pass string) string {
 	return u.String()
 }
 
-// socksContextDialer dials TCP through the loopback SOCKS inbound (the same
-// path as user traffic after tun2socks), so connections traverse the tunnel
-// even on Android, where our own sockets bypass the VPN.
+// socksContextDialer dials TCP through xray's proxy-mode SOCKS inbound with
+// the caller's credentials, the path the caller's own clients take.
 func socksContextDialer(socksURL string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
 	u, err := url.Parse(socksURL)
 	if err != nil {

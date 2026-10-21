@@ -8,11 +8,9 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
-	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/listener/inbound"
 
 	// config.ParseRawConfig reaches temporaryUpdateGeneral via //go:linkname,
 	// whose body lives in hub/executor; without it the test binary won't link.
@@ -20,35 +18,27 @@ import (
 	_ "github.com/metacubex/mihomo/hub/executor"
 )
 
-func TestBuildConfig_ForceProxyListener(t *testing.T) {
+// The bridge hands mihomo its flows in process: no listener, no DNS server
+// port, and force-proxy flows win through their IN-NAME rule.
+func TestBuildConfig_BridgeOpensNoListener(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&encryption=none&sni=www.bing.com&fp=chrome&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f9e232c6fb72d&flow=xtls-rprx-vision#r"
 	prof := routing.Profile{Mode: routing.ModeDirectAll, Tiers: []routing.Tier{{Proxy: []string{"process:chrome.exe"}}}}
-	auth := loopbackauth.Credentials{User: "u", Pass: "p"}
-	cfg, err := BuildConfig([]string{link},
-		Inbound{MixedPort: 17890, ForceProxyPort: 17891, Auth: auth},
-		Options{}, prof)
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
+	cfg, err := BuildConfig([]string{link}, Inbound{Bridge: true, ForceProxy: true, DNS: dns}, Options{}, prof)
 	if err != nil {
-		t.Fatalf("BuildConfig with ForceProxyPort: %v", err)
+		t.Fatalf("BuildConfig(bridge): %v", err)
 	}
-	listener, ok := cfg.Listeners[forceProxyListenerName]
-	if !ok {
-		t.Fatalf("forceproxy listener missing; have %v", cfg.Listeners)
+	if cfg.General.MixedPort != 0 || cfg.General.Port != 0 || cfg.General.SocksPort != 0 {
+		t.Fatalf("bridge opened a port: mixed %d, http %d, socks %d", cfg.General.MixedPort, cfg.General.Port, cfg.General.SocksPort)
 	}
-	opt, ok := listener.Config().(*inbound.MixedOption)
-	if !ok || len(opt.Users) != 1 || opt.Users[0].Username != "u" || opt.Users[0].Password != "p" {
-		t.Fatalf("forceproxy listener must carry the credentials, got %+v", listener.Config())
+	if len(cfg.Listeners) != 0 {
+		t.Fatalf("bridge opened listeners: %v", cfg.Listeners)
 	}
-	if _, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890, ForceProxyPort: 17891}, Options{}, prof); err == nil {
-		t.Fatal("a force-proxy listener without credentials must be refused")
+	if cfg.DNS == nil || !cfg.DNS.Enable || cfg.DNS.Listen != "" {
+		t.Fatalf("bridge fake-ip wants mihomo's resolver with no listener, got %+v", cfg.DNS)
 	}
-	var found bool
-	for _, r := range cfg.Rules {
-		if r.RuleType() == C.InName && strings.Contains(r.Payload(), forceProxyListenerName) {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatal("IN-NAME,forceproxy rule missing")
+	if r := cfg.Rules[0]; r.RuleType() != C.InName || r.Payload() != ForceProxyInName {
+		t.Fatalf("first rule = %s %q, want IN-NAME %s", r.RuleType(), r.Payload(), ForceProxyInName)
 	}
 }
 
@@ -97,7 +87,7 @@ func TestBuildConfig_SnifferToggle(t *testing.T) {
 func TestBuildConfig_ProxyAuth(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
 
-	authed, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890, Auth: loopbackauth.Credentials{User: "bob", Pass: "secret"}}, Options{}, routing.Profile{})
+	authed, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890, ProxyUser: "bob", ProxyPass: "secret"}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatalf("BuildConfig(auth): %v", err)
 	}
@@ -712,8 +702,7 @@ func TestBuildConfig_HostsAndDirectNameServer(t *testing.T) {
 		t.Fatal("tun hosts entry missing")
 	}
 
-	bridge, err := BuildConfig([]string{link},
-		Inbound{MixedPort: 17890, DNS: dns, DNSListenPort: 17899}, Options{}, routing.Profile{})
+	bridge, err := BuildConfig([]string{link}, Inbound{Bridge: true, DNS: dns}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatalf("bridge: %v", err)
 	}
@@ -729,28 +718,23 @@ func TestBuildConfig_BridgeFakeIP(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com&flow=xtls-rprx-vision"
 	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"https://dns.google/dns-query"}}
 
-	cfg, err := BuildConfig([]string{link},
-		Inbound{MixedPort: 17890, DNS: dns, DNSListenPort: 17899}, Options{}, routing.Profile{})
+	cfg, err := BuildConfig([]string{link}, Inbound{Bridge: true, DNS: dns}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatalf("BuildConfig(bridge fake-ip): %v", err)
 	}
 	if cfg.DNS == nil || !cfg.DNS.Enable {
-		t.Fatalf("bridge DNS server not enabled: %+v", cfg.DNS)
-	}
-	if cfg.DNS.Listen != "127.0.0.1:17899" {
-		t.Fatalf("DNS listen = %q, want 127.0.0.1:17899", cfg.DNS.Listen)
+		t.Fatalf("bridge DNS not enabled: %+v", cfg.DNS)
 	}
 	if got := cfg.DNS.FakeIPRange.String(); got != fakeIPRangeBridge {
 		t.Fatalf("fake-ip range = %q, want %q", got, fakeIPRangeBridge)
 	}
 
-	plain, err := BuildConfig([]string{link},
-		Inbound{MixedPort: 17890, DNS: dnsconfig.Config{Mode: dnsconfig.ModeNormal}, DNSListenPort: 17899}, Options{}, routing.Profile{})
+	plain, err := BuildConfig([]string{link}, Inbound{Bridge: true, DNS: dnsconfig.Config{Mode: dnsconfig.ModeNormal}}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatalf("BuildConfig(bridge normal): %v", err)
 	}
-	if plain.DNS != nil && plain.DNS.Listen == "127.0.0.1:17899" {
-		t.Fatalf("normal mode must not run the bridge DNS server on our port: %+v", plain.DNS)
+	if plain.DNS != nil && plain.DNS.Enable {
+		t.Fatalf("normal mode must not run mihomo's DNS on the bridge: %+v", plain.DNS)
 	}
 }
 

@@ -13,11 +13,11 @@ import (
 // Stubs: mihomo-only builds never link tun2socks (native sing-tun everywhere).
 func (x *CoreController) mihomoUsesBridge(int) bool { return false }
 
-func (x *CoreController) mihomoBuildBridgeInbound(*dnsconfig.Config, routing.Profile) (mihomoconfig.Inbound, *bridgeSetup, error) {
-	return mihomoconfig.Inbound{}, nil, fmt.Errorf("tun2socks bridge not linked in this build")
+func mihomoBridgeInbound(*dnsconfig.Config, routing.Profile) (mihomoconfig.Inbound, *bridgeSetup) {
+	return mihomoconfig.Inbound{}, nil
 }
 
-func (x *CoreController) mihomoStartBridge(*bridgeSetup, routing.Profile, dnsconfig.Config, int) error {
+func (x *CoreController) mihomoStartBridge(*bridgeSetup, routing.Profile, dnsconfig.Config, int, int64) error {
 	return fmt.Errorf("tun2socks bridge not linked in this build")
 }
 

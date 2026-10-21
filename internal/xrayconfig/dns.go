@@ -143,8 +143,9 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 		Settings: &dnsSettings,
 	})
 
-	// Scoped to app inbounds so it doesn't also grab the module's own queries.
-	dnsRule := fieldRule{Port: "53", InboundTag: []string{"tun2socks", forceProxyTag}, OutboundTag: dnsOutboundTag}
+	// Scoped to the app traffic tags so it doesn't also grab the module's own
+	// queries.
+	dnsRule := fieldRule{Port: "53", InboundTag: []string{AppTrafficTag, ForceProxyTag}, OutboundTag: dnsOutboundTag}
 	rules := []json.RawMessage{dnsRule.raw()}
 	// Internal queries go direct when that outbound exists; pure proxy-all has
 	// none, so they fall to the default and resolve through the tunnel.

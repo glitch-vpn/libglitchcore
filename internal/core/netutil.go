@@ -2,17 +2,14 @@ package core
 
 import (
 	"errors"
-	"fmt"
-	"net"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
-// process:->proxy rules need a mode-independent always-tunnel inbound; lives
+// process:->proxy rules need a mode-independent always-tunnel dialer; lives
 // here (not with xray) because the mihomo bridge checks it too.
 func routingHasForceProxy(prof routing.Profile) bool {
 	for _, t := range routing.ProcessRules(prof) {
@@ -81,24 +78,4 @@ func splitEngineLinks(raw string) ([]string, error) {
 		}
 	}
 	return out, nil
-}
-
-// pickLoopbackPort finds a 127.0.0.1 port bindable on both TCP and UDP - a mixed
-// inbound needs both, and Windows WinNAT reserves ephemeral UDP ranges.
-func pickLoopbackPort() (int, error) {
-	for i := 0; i < 128; i++ {
-		l, err := net.Listen("tcp", "127.0.0.1:0")
-		if err != nil {
-			continue
-		}
-		port := l.Addr().(*net.TCPAddr).Port
-		uc, uerr := net.ListenPacket("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
-		_ = l.Close()
-		if uerr != nil {
-			continue
-		}
-		_ = uc.Close()
-		return port, nil
-	}
-	return 0, fmt.Errorf("no bindable loopback port")
 }

@@ -118,7 +118,7 @@ func TestApplyDNS_FakeIPWiring(t *testing.T) {
 	if first.Port != "53" || first.OutboundTag != dnsOutboundTag {
 		t.Fatalf("first rule = %+v, want port 53 -> %s", first, dnsOutboundTag)
 	}
-	if len(first.InboundTag) == 0 || first.InboundTag[0] != "tun2socks" {
+	if len(first.InboundTag) == 0 || first.InboundTag[0] != AppTrafficTag {
 		t.Fatalf("first rule inboundTag = %v, want app inbounds", first.InboundTag)
 	}
 	if cfg.DNSConfig.Tag != dnsInternalTag {
@@ -168,8 +168,8 @@ func TestApplyDNS_FakeIPBuilds(t *testing.T) {
 	}
 	cfg := res.Config
 	ApplyDNS(cfg, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, RoutingProfile{})
-	if _, _, err := ApplyLocalSocksInbound(cfg); err != nil {
-		t.Fatalf("ApplyLocalSocksInbound: %v", err)
+	if _, err := ApplyProxyInbound(cfg, 10808, "", ""); err != nil {
+		t.Fatalf("ApplyProxyInbound: %v", err)
 	}
 	if _, err := cfg.Build(); err != nil {
 		t.Fatalf("cfg.Build() with fakedns failed: %v", err)
@@ -192,8 +192,8 @@ func TestApplyDNS_DisableIPv6(t *testing.T) {
 	if cfg.DNSConfig.QueryStrategy != "UseIPv4" {
 		t.Fatalf("fake-ip QueryStrategy = %q, want UseIPv4", cfg.DNSConfig.QueryStrategy)
 	}
-	if _, _, err := ApplyLocalSocksInbound(cfg); err != nil {
-		t.Fatalf("ApplyLocalSocksInbound: %v", err)
+	if _, err := ApplyProxyInbound(cfg, 10808, "", ""); err != nil {
+		t.Fatalf("ApplyProxyInbound: %v", err)
 	}
 	if _, err := cfg.Build(); err != nil {
 		t.Fatalf("cfg.Build() with v4-only fake pool failed: %v", err)
@@ -254,8 +254,8 @@ func TestApplyDNS_Hosts(t *testing.T) {
 			t.Fatalf("hosts %s missing %q", b, want)
 		}
 	}
-	if _, _, err := ApplyLocalSocksInbound(cfg); err != nil {
-		t.Fatalf("ApplyLocalSocksInbound: %v", err)
+	if _, err := ApplyProxyInbound(cfg, 10808, "", ""); err != nil {
+		t.Fatalf("ApplyProxyInbound: %v", err)
 	}
 	if _, err := cfg.Build(); err != nil {
 		t.Fatalf("cfg.Build() with hosts failed: %v", err)
@@ -350,8 +350,8 @@ func TestApplyDNS_DirectServers_FakeIP(t *testing.T) {
 	if direct := cfg.DNSConfig.Servers[2]; len(direct.Domains) != 0 || direct.SkipFallback {
 		t.Fatalf("direct server must stay unscoped and fallback-able: %+v", direct)
 	}
-	if _, _, err := ApplyLocalSocksInbound(cfg); err != nil {
-		t.Fatalf("ApplyLocalSocksInbound: %v", err)
+	if _, err := ApplyProxyInbound(cfg, 10808, "", ""); err != nil {
+		t.Fatalf("ApplyProxyInbound: %v", err)
 	}
 	if _, err := cfg.Build(); err != nil {
 		t.Fatalf("cfg.Build() with direct servers failed: %v", err)
@@ -411,8 +411,8 @@ func TestSniffing_FakednsHarmlessWithoutPool(t *testing.T) {
 	}
 	cfg := res.Config
 	ApplyDNS(cfg, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, RoutingProfile{}) // normal mode, no pool
-	if _, _, err := ApplyLocalSocksInbound(cfg); err != nil {
-		t.Fatalf("ApplyLocalSocksInbound: %v", err)
+	if _, err := ApplyProxyInbound(cfg, 10808, "", ""); err != nil {
+		t.Fatalf("ApplyProxyInbound: %v", err)
 	}
 	if cfg.FakeDNS != nil {
 		t.Fatal("normal mode must not set a fake pool")

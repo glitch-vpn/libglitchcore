@@ -43,7 +43,7 @@ func TestApply_ProxyAllDefault(t *testing.T) {
 		t.Fatalf("default profile: want the exit-echo rule and the catch-all, got %d: %+v", len(rules), rules)
 	}
 	r := rules[1]
-	if r.OutboundTag != "proxy" || len(r.InboundTag) != 1 || r.InboundTag[0] != "tun2socks" {
+	if r.OutboundTag != "proxy" || len(r.InboundTag) != 1 || r.InboundTag[0] != AppTrafficTag {
 		t.Fatalf("catch-all = %+v, want tun2socks->proxy", r)
 	}
 	if hasOutbound(cfg, directTag) || hasOutbound(cfg, blockTag) {
@@ -152,10 +152,10 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 	var forceRule, catchAll *ruleView
 	for i := range rules {
 		for _, tag := range rules[i].InboundTag {
-			if tag == "forceproxy" {
+			if tag == ForceProxyTag {
 				forceRule = &rules[i]
 			}
-			if tag == "tun2socks" {
+			if tag == AppTrafficTag {
 				catchAll = &rules[i]
 			}
 		}
@@ -171,7 +171,7 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 	_, plain := applyTo(t, RoutingProfile{Tiers: []routing.Tier{{Direct: []string{"process:App.exe"}}}}, "proxy", false)
 	for _, r := range plain {
 		for _, tag := range r.InboundTag {
-			if tag == "forceproxy" {
+			if tag == ForceProxyTag {
 				t.Fatalf("forceproxy rule must not appear without a process->proxy rule")
 			}
 		}
@@ -257,7 +257,7 @@ func TestApply_TwoTierOrdering(t *testing.T) {
 		t.Errorf("tier 1 proxy rule (%d) must precede tier 2 direct rule (%d)", proxyIdx, directIdx)
 	}
 	last := rules[len(rules)-1]
-	if len(last.InboundTag) == 0 || last.InboundTag[0] != "tun2socks" {
+	if len(last.InboundTag) == 0 || last.InboundTag[0] != AppTrafficTag {
 		t.Errorf("catch-all must stay last: %+v", last)
 	}
 	if _, err := cfg.Build(); err != nil {

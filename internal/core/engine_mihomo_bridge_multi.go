@@ -3,14 +3,14 @@
 package core
 
 import (
-	"fmt"
 	"log"
 	"os"
 	"runtime"
 	"strings"
 
+	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
+
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
-	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
@@ -27,69 +27,57 @@ func (x *CoreController) mihomoUsesBridge(proxyPort int) bool {
 	return runtime.GOOS == "windows"
 }
 
-// Loopback mixed inbound + bridge plan; defaults dns to fake-ip (like native path).
-func (x *CoreController) mihomoBuildBridgeInbound(dns *dnsconfig.Config, prof routing.Profile) (mihomoconfig.Inbound, *bridgeSetup, error) {
-	p, perr := pickLoopbackPort()
-	if perr != nil {
-		return mihomoconfig.Inbound{}, nil, fmt.Errorf("[mihomo] pick bridge port: %w", perr)
-	}
-	auth := loopbackauth.New()
-	b := &bridgeSetup{
-		mixedPort: p,
-		proxyURL:  loopbackSocksURL(fmt.Sprintf("127.0.0.1:%d", p), auth.User, auth.Pass),
-	}
-	in := mihomoconfig.Inbound{MixedPort: p, Interface: physicalInterfaceName(), Auth: auth}
-
+// Bridge inbound + plan; defaults dns to fake-ip (like native path).
+func mihomoBridgeInbound(dns *dnsconfig.Config, prof routing.Profile) (mihomoconfig.Inbound, *bridgeSetup) {
 	if strings.TrimSpace(dns.Mode) == "" {
 		dns.Mode = dnsconfig.ModeFakeIP
 	}
 	if len(dns.NormalizedServers("")) == 0 {
 		dns.Servers = []string{xrayDefaultDnsServer}
 	}
-	// mihomo can't dns-hijack without a TUN, so run its DNS server on loopback and
-	// have the tun2socks bridge redirect the app's :53 to it.
-	if dns.FakeIP() {
-		dp, derr := pickLoopbackPort()
-		if derr != nil {
-			return mihomoconfig.Inbound{}, nil, fmt.Errorf("[mihomo] pick dns port: %w", derr)
-		}
-		in.DNS = *dns
-		in.DNSListenPort = dp
-		b.dnsRedirect = fmt.Sprintf("127.0.0.1:%d", dp)
+	b := &bridgeSetup{
+		hijackDNS:  dns.FakeIP(),
+		forceProxy: routingHasForceProxy(prof),
 	}
-	// process->proxy needs a mode-independent force-proxy inbound so "route only
-	// this app via VPN" holds even in direct-all mode.
-	if routingHasForceProxy(prof) {
-		fp, ferr := pickLoopbackPort()
-		if ferr != nil {
-			return mihomoconfig.Inbound{}, nil, fmt.Errorf("[mihomo] pick force-proxy port: %w", ferr)
-		}
-		in.ForceProxyPort = fp
-		b.forceProxyURL = loopbackSocksURL(fmt.Sprintf("127.0.0.1:%d", fp), auth.User, auth.Pass)
+	in := mihomoconfig.Inbound{
+		Bridge:     true,
+		Interface:  physicalInterfaceName(),
+		DNS:        *dns,
+		ForceProxy: b.forceProxy,
 	}
-	return in, b, nil
+	return in, b
 }
 
 // serverIPv4s empty: Windows binds by interface, Android excludes our package.
-func (x *CoreController) mihomoStartBridge(b *bridgeSetup, prof routing.Profile, dns dnsconfig.Config, tunFd int) error {
+func (x *CoreController) mihomoStartBridge(b *bridgeSetup, prof routing.Profile, dns dnsconfig.Config, tunFd int, mark int64) error {
 	dnsServer := dns.FirstPlainServer()
 	if dnsServer == "" {
 		dnsServer = xrayDefaultDnsServer
 	}
+	app, forceProxy := mihomoBridgeProxies(x, b, mark)
 	if err := x.startTun2socks(tun2socksParams{
-		proxyURL:        b.proxyURL,
-		tunFd:           tunFd,
-		dnsServer:       dnsServer,
-		logLevel:        "warning",
-		routing:         prof,
-		forceProxyURL:   b.forceProxyURL,
-		dnsRedirectAddr: b.dnsRedirect,
+		proxy:      app,
+		forceProxy: forceProxy,
+		tunFd:      tunFd,
+		dnsServer:  dnsServer,
+		logLevel:   "warning",
+		routing:    prof,
 	}); err != nil {
 		x.stopTun2socks()
 		return err
 	}
-	log.Printf("[mihomo] bridge (%s): mixed proxy 127.0.0.1:%d + tun2socks TUN", runtime.GOOS, b.mixedPort)
+	log.Printf("[mihomo] bridge (%s): tun2socks TUN into mihomo's tunnel", runtime.GOOS)
 	return nil
+}
+
+// mihomoBridgeProxies are what tun2socks hands flows to; force is nil when
+// no process->proxy rule needs flows that always tunnel.
+func mihomoBridgeProxies(x *CoreController, b *bridgeSetup, mark int64) (app, force t2sproxy.Proxy) {
+	app = &mihomoBridgeProxy{x: x, mark: mark, hijackDNS: b.hijackDNS}
+	if b.forceProxy {
+		force = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceProxyInName}
+	}
+	return app, force
 }
 
 func (x *CoreController) mihomoStopBridge() { x.stopTun2socks() }

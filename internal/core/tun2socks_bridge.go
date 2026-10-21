@@ -3,14 +3,18 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"net/url"
 	"os"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/xjasonlyu/tun2socks/v2/engine"
+	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xjasonlyu/tun2socks/v2/proxy/reject"
 	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 
@@ -18,22 +22,46 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
-// tun2socksParams configures the shared TUN->loopback-proxy bridge used by xray
-// and Windows-desktop mihomo. One wireguard/Wintun TUN fronting a local proxy
+// tun2socksParams configures the shared TUN bridge used by xray and
+// Windows-desktop mihomo. One wireguard/Wintun TUN in front of the engine
 // avoids the Wintun cross-binding conflict mihomo's own sing-tun caused on
-// Windows ("duplicate name" / device-installation-mutex).
+// Windows ("duplicate name" / device-installation-mutex). The bridge hands
+// each flow to the engine in process, so the TUN path opens no listener.
 type tun2socksParams struct {
-	proxyURL      string   // socks5://[user:pass@]host:port
-	tunFd         int      // fd path (non-Windows)
-	serverIPv4s   []string // proxy server IPs pinned off the TUN (Windows)
-	dnsServer     string
-	logLevel      string
-	routing       routing.Profile
-	forceProxyURL string // xray force-proxy inbound URL (empty for mihomo)
-	// dnsRedirectAddr diverts the app's :53 to a local resolver. Used by
-	// mihomo fake-ip on Windows: it runs its own DNS server but can't dns-hijack
-	// without a TUN, so the bridge redirects DNS to it. xray leaves this empty.
-	dnsRedirectAddr string
+	proxy       t2sproxy.Proxy
+	forceProxy  t2sproxy.Proxy // always tunnels: where process->proxy flows go (may be nil)
+	tunFd       int            // fd path (non-Windows)
+	serverIPv4s []string       // proxy server IPs pinned off the TUN (Windows)
+	dnsServer   string
+	logLevel    string
+	routing     routing.Profile
+}
+
+// tun2socks builds its proxy from Key.Proxy before it creates the stack, so
+// the session's proxy rides a scheme only the core registers: no flow ever
+// meets a default.
+const bridgeProxyURL = "inprocess://engine"
+
+var (
+	bridgeProxyMu sync.Mutex
+	bridgeProxy   t2sproxy.Proxy
+)
+
+func init() {
+	t2sproxy.RegisterProtocol("inprocess", func(*url.URL) (t2sproxy.Proxy, error) {
+		bridgeProxyMu.Lock()
+		defer bridgeProxyMu.Unlock()
+		if bridgeProxy == nil {
+			return nil, errors.New("no session proxy")
+		}
+		return bridgeProxy, nil
+	})
+}
+
+func setBridgeProxy(p t2sproxy.Proxy) {
+	bridgeProxyMu.Lock()
+	bridgeProxy = p
+	bridgeProxyMu.Unlock()
 }
 
 func tun2socksMTU() int {
@@ -56,7 +84,7 @@ func tun2socksUDPTimeout() time.Duration {
 	return udpTimeout
 }
 
-// startTun2socks bridges the platform TUN to params.proxyURL. On the fd path it
+// startTun2socks bridges the platform TUN to params.proxy. On the fd path it
 // dup's the fd so Go owns its own copy - disconnect must not double-close the
 // platform-owned (ParcelFileDescriptor) fd.
 func (x *CoreController) startTun2socks(p tun2socksParams) error {
@@ -72,10 +100,12 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 		log.Printf("[tun2socks] dup'd TUN fd %d -> %d", p.tunFd, dupFd)
 	}
 
+	logLevel := capTun2socksLogLevel(p.logLevel)
+	setBridgeProxy(sessionBridgeProxy(p))
 	key := &engine.Key{
 		Device:                   devURI,
-		Proxy:                    p.proxyURL,
-		LogLevel:                 p.logLevel,
+		Proxy:                    bridgeProxyURL,
+		LogLevel:                 logLevel,
 		MTU:                      tun2socksMTU(),
 		UDPTimeout:               tun2socksUDPTimeout(),
 		Interface:                "",
@@ -86,11 +116,10 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 	engine.Insert(key)
 	go func() {
 		engine.Start()
-		useTun2socksSink(p.logLevel)
+		useTun2socksSink(logLevel)
 	}()
 	x.isTun2socksRunning.Store(true)
 	x.tun2socksKey = key
-	x.maybeInstallBridgeProxy(p.routing, p.forceProxyURL, p.dnsRedirectAddr)
 	log.Println("[tun2socks] started")
 
 	if runtime.GOOS == "windows" {
@@ -118,11 +147,10 @@ func (x *CoreController) stopTun2socks() {
 	}
 	x.tun2socksKey = nil
 	x.isTun2socksRunning.Store(false)
-	x.xraySocksAddress.Store("")
-	// Reset the tunnel proxy so the next connect's installBridgeProxy doesn't see
-	// our stale wrapper (base points at the now-dead SOCKS) and bail - it must
-	// wait for engine.Start to install the fresh base, then re-wrap.
+	// The tunnel outlives the engine: a flow tun2socks still holds must not
+	// reach the session's engine once it is stopped.
 	tunnel.T().SetProxy(&reject.Reject{})
+	setBridgeProxy(nil)
 	if runtime.GOOS == "windows" {
 		cleanupTun("GlitchVPN")
 	}

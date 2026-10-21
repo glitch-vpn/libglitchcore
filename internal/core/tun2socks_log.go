@@ -10,9 +10,19 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
+// capTun2socksLogLevel holds tun2socks at warnings and worse: its info lines
+// name every flow's full source and destination, which xray's own lines mask.
+func capTun2socksLogLevel(level string) string {
+	switch level {
+	case "info", "debug", "trace":
+		return "warn"
+	default:
+		return level
+	}
+}
+
 // useTun2socksSink replaces the stderr logger tun2socks builds for itself on
-// every engine start. Lines it writes before the swap stay on its own logger,
-// which is why the key's level is capped (xrayconfig.CapTun2socksLogLevel).
+// every engine start. Lines it writes before the swap stay on its own logger.
 // It runs after engine.Start on the start goroutine, outside coreMutex: the
 // swap must follow Start's own, and the logger is tun2socks's to guard.
 func useTun2socksSink(level string) {

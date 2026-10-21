@@ -158,15 +158,16 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		rules = append(rules, r.raw())
 	}
 
-	// Force-proxy inbound (per-process process->proxy): always tunnels, so
-	// "route only this app through the VPN" holds even in direct-all mode.
+	// Force-proxy flows (ForceProxyTag, per-process process->proxy) always
+	// tunnel, so "route only this app through the VPN" holds even in
+	// direct-all mode.
 	if hasProcessProxy(p) {
-		forceRule := fieldRule{InboundTag: []string{forceProxyTag}}
+		forceRule := fieldRule{InboundTag: []string{ForceProxyTag}}
 		proxy.apply(&forceRule)
 		rules = append(rules, forceRule.raw())
 	}
 
-	catchAll := fieldRule{InboundTag: []string{"tun2socks"}}
+	catchAll := fieldRule{InboundTag: []string{AppTrafficTag}}
 	if p.ResolvedMode() == ModeDirectAll {
 		direct.apply(&catchAll)
 	} else {

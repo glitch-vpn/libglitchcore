@@ -17,7 +17,6 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/conninspect"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
-	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 	"github.com/metacubex/mihomo/common/observable"
@@ -40,13 +39,10 @@ func (mihomoEngine) Start(x *CoreController, req EngineStartRequest) int32 {
 	return x.HandleMihomoStart(req)
 }
 
-// Compiles without the tun2socks bridge (plain fields only). The URLs carry
-// the session's credentials.
+// Compiles without the tun2socks bridge (plain fields only).
 type bridgeSetup struct {
-	mixedPort     int
-	proxyURL      string
-	forceProxyURL string
-	dnsRedirect   string
+	forceProxy bool // process->proxy rules need flows that always tunnel
+	hijackDNS  bool // fake-ip: mihomo's resolver answers the TUN's :53
 }
 
 func (mihomoEngine) Stop(x *CoreController) int32 { return x.HandleMihomoStop() }
@@ -334,7 +330,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 	}
 
 	// Inbound: proxyPort>0 = loopback mixed, no TUN. Bridge (when tun2socks is
-	// linked; Windows + Android via env) = mihomo as a loopback proxy behind a
+	// linked; Windows + Android via env) = mihomo's tunnel fed in process by a
 	// tun2socks-bridged platform TUN, avoiding mihomo's sing-tun (Wintun
 	// conflict / Android packages.xml block). Else native sing-tun.
 	var inbound mihomoconfig.Inbound
@@ -347,14 +343,11 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 		inbound = mihomoconfig.Inbound{
 			MixedPort: proxyPort,
 			DNS:       dns,
-			Auth:      loopbackauth.Credentials{User: o.proxyUser, Pass: o.proxyPass},
+			ProxyUser: o.proxyUser,
+			ProxyPass: o.proxyPass,
 		}
 	case x.mihomoUsesBridge(proxyPort):
-		in, b, berr := x.mihomoBuildBridgeInbound(&dns, prof)
-		if berr != nil {
-			return berr
-		}
-		inbound, bridge = in, b
+		inbound, bridge = mihomoBridgeInbound(&dns, prof)
 	default:
 		if strings.TrimSpace(dns.Mode) == "" {
 			dns.Mode = dnsconfig.ModeFakeIP
@@ -410,7 +403,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 		return fmt.Errorf("[mihomo] TUN listener failed to start (see mihomo logs)")
 	}
 	if bridge != nil {
-		if err := x.mihomoStartBridge(bridge, prof, dns, tunFd); err != nil {
+		if err := x.mihomoStartBridge(bridge, prof, dns, tunFd, mark); err != nil {
 			mihomoTeardown()
 			return fmt.Errorf("[mihomo] tun2socks bridge: %w", err)
 		}
@@ -439,11 +432,10 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 
 // mihomoTunnelDial dials inside mihomo's tunnel, so the core's own probes need
 // no loopback listener: proxy "" follows the rules like user traffic, a proxy
-// name pins the flow to that proxy or group ahead of every rule. xray's
-// liveness probe uses its tun2socks inbound instead, which its TUN path opens
-// anyway. The dial refuses once the session that started at mark has ended:
-// mihomo's tunnel outlives the session with only DIRECT left, and an echo
-// retried then would leave from the user's own address.
+// name pins the flow to that proxy or group ahead of every rule. The dial
+// refuses once the session that started at mark has ended: mihomo's tunnel
+// outlives the session with only DIRECT left, and an echo retried then would
+// leave from the user's own address.
 func (x *CoreController) mihomoTunnelDial(proxy string, mark int64) tunnelDialFunc {
 	return func(_ context.Context, _, addr string) (net.Conn, error) {
 		if x.sessionGen.Load() != mark {

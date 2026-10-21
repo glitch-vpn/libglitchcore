@@ -3,7 +3,6 @@ package core
 import (
 	"fmt"
 	"log"
-	"net"
 	"runtime"
 	"runtime/metrics"
 	"time"
@@ -134,68 +133,5 @@ func (x *CoreController) stopStatsLocked() {
 	x.statsMu.Unlock()
 	if done != nil {
 		<-done
-	}
-	x.stopHealthCheck()
-}
-
-func (x *CoreController) startHealthCheck(interval time.Duration) {
-	x.stopHealthCheck()
-	quit := make(chan struct{})
-	x.healthCheckQuit = quit
-	log.Printf("[HealthCheck] Started with interval %s", interval)
-	go func(q <-chan struct{}) {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		failCount := 0
-		const maxFails = 3
-		for {
-			select {
-			case <-q:
-				log.Println("[HealthCheck] Stopped")
-				return
-			case <-ticker.C:
-				if !x.isXrayRunning.Load() || !x.isTun2socksRunning.Load() {
-					return
-				}
-				socksAddress, _ := x.xraySocksAddress.Load().(string)
-				if socksAddress == "" {
-					failCount++
-					logfmt.Warnf("[HealthCheck] SOCKS5 probe skipped: session address is empty (%d/%d)", failCount, maxFails)
-					if failCount >= maxFails {
-						logfmt.Errorf("[HealthCheck] Tunnel appears dead after %d failures", maxFails)
-						x.emitStatus(EngineError, "Tunnel health check failed: SOCKS5 session address missing")
-						return
-					}
-					continue
-				}
-				conn, err := net.DialTimeout("tcp", socksAddress, 2*time.Second)
-				if err != nil {
-					failCount++
-					logfmt.Warnf("[HealthCheck] SOCKS5 probe failed (%d/%d): %v", failCount, maxFails, err)
-					if failCount >= maxFails {
-						logfmt.Errorf("[HealthCheck] Tunnel appears dead after %d failures", maxFails)
-						x.emitStatus(EngineError, "Tunnel health check failed: SOCKS5 unreachable")
-						return
-					}
-				} else {
-					conn.Close()
-					if failCount > 0 {
-						log.Printf("[HealthCheck] SOCKS5 probe recovered after %d failures", failCount)
-					}
-					failCount = 0
-				}
-			}
-		}
-	}(quit)
-}
-
-func (x *CoreController) stopHealthCheck() {
-	if x.healthCheckQuit != nil {
-		select {
-		case <-x.healthCheckQuit:
-		default:
-			close(x.healthCheckQuit)
-		}
-		x.healthCheckQuit = nil
 	}
 }

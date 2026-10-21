@@ -7,17 +7,13 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"net/url"
 	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
-	"time"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
-	"github.com/xjasonlyu/tun2socks/v2/proxy/reject"
-	"github.com/xjasonlyu/tun2socks/v2/tunnel"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/procname"
@@ -26,12 +22,11 @@ import (
 
 var _ t2sproxy.Proxy = (*processSplitProxy)(nil)
 
-// The proxy's own `process` matcher is useless behind tun2socks (every flow
-// looks like the bridge), so the owning process is resolved by source port
-// before the SOCKS hop; unmatched flows fall through to base.
+// The owning process is resolved by source port before the flow reaches the
+// engine; unmatched flows fall through to base.
 type processSplitProxy struct {
 	base        t2sproxy.Proxy
-	forceProxy  t2sproxy.Proxy // always-tunnel inbound (may be nil)
+	forceProxy  t2sproxy.Proxy // always tunnels (may be nil)
 	rules       map[string]string
 	directIface string
 	logged      sync.Map
@@ -56,7 +51,7 @@ func (p *processSplitProxy) decide(m *M.Metadata) string {
 	return target
 }
 
-// proxyFor uses the dedicated always-tunnel inbound when present, else base
+// proxyFor uses the always-tunnel proxy when present, else base
 // (correct in proxy-all, where base's catch-all already proxies).
 func (p *processSplitProxy) proxyFor() t2sproxy.Proxy {
 	if p.forceProxy != nil {
@@ -93,64 +88,20 @@ func (p *processSplitProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 	}
 }
 
-// Desktop-only wrap of tun2socks with DNS redirect and/or per-process split.
-func (x *CoreController) maybeInstallBridgeProxy(prof routing.Profile, forceProxyURL, dnsRedirectAddr string) {
+// sessionBridgeProxy adds the desktop per-process split in front of the
+// engine; Android routes per app in VpnService instead.
+func sessionBridgeProxy(p tun2socksParams) t2sproxy.Proxy {
 	var rules map[string]string
 	if runtime.GOOS != "android" {
-		rules = routing.ProcessRules(prof)
+		rules = routing.ProcessRules(p.routing)
 	}
-	if len(rules) == 0 && dnsRedirectAddr == "" {
-		return
+	if len(rules) == 0 {
+		return p.proxy
 	}
-	go installBridgeProxy(rules, forceProxyURL, dnsRedirectAddr)
-}
-
-// Wait for real SOCKS (not reject), then wrap SOCKS -> dnsRedirect -> processSplit
-// so process->direct :53 is served before fake-ip redirect can rewrite it.
-func installBridgeProxy(rules map[string]string, forceProxyURL, dnsRedirectAddr string) {
-	var forceProxy t2sproxy.Proxy
-	if forceProxyURL != "" {
-		if u, err := url.Parse(forceProxyURL); err == nil {
-			if fp, perr := t2sproxy.Parse(u); perr == nil {
-				forceProxy = fp
-			} else {
-				logfmt.Errorf("[bridge] force-proxy parse: %v", perr)
-			}
-		}
+	return &processSplitProxy{
+		base:        p.proxy,
+		forceProxy:  p.forceProxy,
+		rules:       rules,
+		directIface: physicalInterfaceName(),
 	}
-	for i := 0; i < 150; i++ {
-		base := tunnel.T().Proxy()
-		if base != nil && !isRejectProxy(base) && !isBridgeWrapper(base) {
-			wrapped := base
-			if dnsRedirectAddr != "" {
-				wrapped = &dnsRedirectProxy{base: wrapped, dnsAddr: dnsRedirectAddr}
-			}
-			if len(rules) > 0 {
-				wrapped = &processSplitProxy{
-					base:        wrapped,
-					forceProxy:  forceProxy,
-					rules:       rules,
-					directIface: physicalInterfaceName(),
-				}
-			}
-			tunnel.T().SetProxy(wrapped)
-			log.Printf("[bridge] proxy installed (process rules=%d, dnsRedirect=%v, forceProxy=%v)", len(rules), dnsRedirectAddr != "", forceProxy != nil)
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
-	logfmt.Warnf("[bridge] base proxy not ready in time, skipped")
-}
-
-func isRejectProxy(p t2sproxy.Proxy) bool {
-	_, ok := p.(*reject.Reject)
-	return ok
-}
-
-func isBridgeWrapper(p t2sproxy.Proxy) bool {
-	switch p.(type) {
-	case *processSplitProxy, *dnsRedirectProxy:
-		return true
-	}
-	return false
 }

@@ -14,7 +14,6 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
-	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
 	"github.com/metacubex/mihomo/component/geodata"
@@ -45,25 +44,30 @@ type TunInbound struct {
 	DNS            dnsconfig.Config
 }
 
-// Inbound: loopback mixed (proxy mode, tun2socks bridge) or native TUN.
+// Inbound: loopback mixed (proxy mode), the core's tun2socks bridge, or
+// native TUN.
 type Inbound struct {
 	MixedPort int         // > 0 -> loopback socks/http on 127.0.0.1
 	Tun       *TunInbound // non-nil -> native TUN inbound
+	// Bridge: the core's tun2socks bridge hands mihomo's tunnel the TUN's
+	// flows in process.
+	Bridge bool
 	// Windows bridge: bind outbounds to the physical NIC, not our TUN.
 	Interface string
-	// Second "forceproxy" listener - always tunnels (process->proxy dialer).
-	ForceProxyPort int
-	// Bridge-path DNS (native TUN uses TunInbound.DNS). With fake-ip + DNSListenPort,
-	// mihomo runs a standalone DNS server the bridge redirects :53 to.
+	// ForceProxy adds the rule that always tunnels flows named
+	// ForceProxyInName (the bridge's process->proxy dialer).
+	ForceProxy bool
+	// Proxy-mode and bridge DNS (native TUN uses TunInbound.DNS). With
+	// fake-ip on the bridge, mihomo's resolver answers the :53 the bridge
+	// hands it.
 	DNS dnsconfig.Config
-	// DNSListenPort > 0 -> mihomo DNS on 127.0.0.1:port.
-	DNSListenPort int
-	// Auth gates MixedPort and the force-proxy listener. Empty leaves MixedPort
-	// open, which only a caller's proxy mode without credentials asks for.
-	Auth loopbackauth.Credentials
+	// ProxyUser and ProxyPass gate MixedPort. Empty leaves it open, which
+	// only a caller's proxy mode without credentials asks for.
+	ProxyUser, ProxyPass string
 }
 
-const forceProxyListenerName = "forceproxy"
+// ForceProxyInName is the inbound name the bridge's force-proxy flows carry.
+const ForceProxyInName = "forceproxy"
 
 type Options struct {
 	Strategy string // balancer group type ("" = url-test)
@@ -92,8 +96,8 @@ func ValidFingerprint(fp string) bool {
 
 // BuildConfig: one link -> that proxy; multiple -> balancer group.
 func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile) (*config.Config, error) {
-	if in.MixedPort <= 0 && in.Tun == nil {
-		return nil, fmt.Errorf("no inbound: set MixedPort or Tun")
+	if in.MixedPort <= 0 && in.Tun == nil && !in.Bridge {
+		return nil, fmt.Errorf("no inbound: set MixedPort, Tun or Bridge")
 	}
 
 	raw := config.DefaultRawConfig()
@@ -129,11 +133,15 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 
 	if in.MixedPort > 0 {
 		raw.MixedPort = in.MixedPort // allow-lan:false forces it onto 127.0.0.1
-		applyBridgeDNS(raw, in.DNS, in.DNSListenPort)
-		applyHosts(raw, in.DNS)
-		if in.Auth.Set() {
-			raw.Authentication = []string{in.Auth.User + ":" + in.Auth.Pass}
+		if in.ProxyUser != "" && in.ProxyPass != "" {
+			raw.Authentication = []string{in.ProxyUser + ":" + in.ProxyPass}
 		}
+	}
+	if in.MixedPort > 0 || in.Bridge {
+		applyHosts(raw, in.DNS)
+	}
+	if in.Bridge {
+		applyBridgeDNS(raw, in.DNS)
 	}
 	if in.Interface != "" {
 		raw.Interface = in.Interface
@@ -172,20 +180,10 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	}
 
 	rules := buildRules(prof, target)
-	// Force-proxy inbound: prepend an IN-NAME rule so this listener always wins,
-	// sending its traffic to the proxy even in direct-all mode.
-	if in.ForceProxyPort > 0 {
-		if !in.Auth.Set() {
-			return nil, fmt.Errorf("force-proxy listener needs credentials")
-		}
-		raw.Listeners = append(raw.Listeners, map[string]any{
-			"name":   forceProxyListenerName,
-			"type":   "mixed",
-			"listen": "127.0.0.1",
-			"port":   in.ForceProxyPort,
-			"users":  []map[string]any{{"username": in.Auth.User, "password": in.Auth.Pass}},
-		})
-		rules = append([]string{"IN-NAME," + forceProxyListenerName + "," + target}, rules...)
+	// The IN-NAME rule goes first so force-proxy flows always win, reaching
+	// the proxy even in direct-all mode.
+	if in.ForceProxy {
+		rules = append([]string{"IN-NAME," + ForceProxyInName + "," + target}, rules...)
 	}
 	raw.Rule = rules
 
@@ -370,13 +368,13 @@ func balancerGroup(names []string, strategy, probe string) (map[string]any, erro
 	return g, nil
 }
 
-// Windows bridge DNS (no TUN hijack). v4-only fake IPs - AAAA would leak real v6.
-func applyBridgeDNS(raw *config.RawConfig, dns dnsconfig.Config, listenPort int) {
-	if !dns.FakeIP() || listenPort <= 0 {
+// Bridge DNS: mihomo's resolver, which the bridge hands the TUN's :53.
+// v4-only fake IPs - AAAA would leak real v6.
+func applyBridgeDNS(raw *config.RawConfig, dns dnsconfig.Config) {
+	if !dns.FakeIP() {
 		return
 	}
 	raw.DNS.Enable = true
-	raw.DNS.Listen = fmt.Sprintf("127.0.0.1:%d", listenPort)
 	raw.DNS.IPv6 = false
 	raw.DNS.EnhancedMode = C.DNSFakeIP
 	raw.DNS.FakeIPRange = fakeIPRangeBridge

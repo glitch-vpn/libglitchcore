@@ -5,9 +5,6 @@ const (
 	tun2socksLogInfoLevel   = "info"
 	tun2socksLogDebugLevel  = "debug"
 	tun2socksLogErrorLevel  = "error"
-	tun2socksLogFatalLevel  = "fatal"
-	tun2socksLogPanicLevel  = "panic"
-	tun2socksLogTraceLevel  = "trace"
 	tun2socksLogSilentLevel = "silent"
 )
 
@@ -33,16 +30,4 @@ func LogLevels(level int) (xrayLevel, tun2socksLevel string) {
 		return xrayLogErrorLevel, tun2socksLogErrorLevel
 	}
 	return xrayLogSilentLevel, tun2socksLogSilentLevel
-}
-
-// CapTun2socksLogLevel caps the tun2socks log level so that the proxy URL
-// (which carries ephemeral SOCKS credentials) is never logged. tun2socks logs
-// engine.Key.Proxy at info level, so info/debug/trace are clamped to warn.
-func CapTun2socksLogLevel(level string) string {
-	switch level {
-	case tun2socksLogInfoLevel, tun2socksLogDebugLevel, tun2socksLogTraceLevel:
-		return tun2socksLogWarnLevel
-	default:
-		return level
-	}
 }
