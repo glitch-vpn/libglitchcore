@@ -154,3 +154,10 @@ func TestFromLink_TUIC(t *testing.T) {
 		t.Fatalf("port = %d, want 443 for a link that names none", s.Port)
 	}
 }
+
+func TestFromLink_AnyTLS(t *testing.T) {
+	s := FromLink("anytls://pw@anytls.example.com/?sni=x#Any%20TLS", 2)
+	if s.Protocol != "anytls" || s.Host != "anytls.example.com" || s.Port != 443 || s.Name != "Any TLS" || s.Index != 2 {
+		t.Fatalf("got %+v", s)
+	}
+}

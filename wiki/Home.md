@@ -10,7 +10,7 @@ Three engines are compiled in and one runs at a time:
 |---|---|
 | Xray | VLESS, VMess, Trojan, Shadowsocks (Reality, XTLS, uTLS) |
 | AmneziaWG | WireGuard with obfuscation, AWG 2.0 |
-| mihomo | Hysteria2, TUIC, WireGuard/AWG outbound |
+| mihomo | Hysteria2, TUIC, AnyTLS, WireGuard/AWG outbound |
 
 Targets: Android (arm64, x86_64), Windows (amd64), Linux (amd64). The API is a
 plain C ABI, so it binds from Dart, Kotlin/Java, Swift, C#, Python or anything

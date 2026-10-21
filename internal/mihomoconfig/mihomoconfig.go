@@ -446,7 +446,7 @@ func applyProxyFingerprint(proxy map[string]any, fp string) {
 		return
 	}
 	switch proxy["type"] {
-	case "vless", "trojan":
+	case "vless", "trojan", "anytls":
 		proxy["client-fingerprint"] = fp
 	}
 }
@@ -469,6 +469,8 @@ func proxyFromLink(link, name string) (map[string]any, error) {
 		return hysteria2Proxy(link, name)
 	case strings.HasPrefix(lower, "tuic://"):
 		return tuicProxy(link, name)
+	case strings.HasPrefix(lower, "anytls://"):
+		return anytlsProxy(link, name)
 	case strings.HasPrefix(lower, awgconfig.LinkScheme), strings.Contains(link, "[Interface]"):
 		return wireguardProxy(link, name)
 	default:

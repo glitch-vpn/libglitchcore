@@ -53,6 +53,7 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 	}
 	check("hysteria2://pass@host:443", mihomoOnly)
 	check("tuic://uuid:pass@host:443", mihomoOnly)
+	check("anytls://pass@host:443", mihomoOnly)
 
 	check("nonsense://whatever", "")
 }

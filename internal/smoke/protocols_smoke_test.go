@@ -57,6 +57,23 @@ func startTuicServer(t *testing.T) (server *directTunnel, port int, pin string) 
 	return listenInbound(t, in), port, pin
 }
 
+// startAnytlsServer runs mihomo's AnyTLS inbound on loopback.
+func startAnytlsServer(t *testing.T) (server *directTunnel, port int, pin string) {
+	t.Helper()
+	cert, key, pin := testCertificate(t)
+	port = freePort(t)
+	in, err := inbound.NewAnyTLS(&inbound.AnyTLSOption{
+		BaseOption:  inboundOn("anytls-smoke", port),
+		Users:       map[string]string{"smoke": testProtocolPassword},
+		Certificate: cert,
+		PrivateKey:  key,
+	})
+	if err != nil {
+		t.Fatalf("anytls server: %v", err)
+	}
+	return listenInbound(t, in), port, pin
+}
+
 func TestSmoke_Mihomo_TUIC(t *testing.T) {
 	server, port, pin := startTuicServer(t)
 	link := func(password string) string {
@@ -65,6 +82,18 @@ func TestSmoke_Mihomo_TUIC(t *testing.T) {
 	}
 	assertSessionThrough(t, protocolSession{
 		engine: "mihomo", link: link(testProtocolPassword), protocol: "tuic", port: port, name: "TUIC Smoke",
+		wrongCredentialLink: link("wrong"), pingEngine: "mihomo", server: server,
+	})
+}
+
+func TestSmoke_Mihomo_AnyTLS(t *testing.T) {
+	server, port, pin := startAnytlsServer(t)
+	link := func(password string) string {
+		return "anytls://" + password + "@127.0.0.1:" + strconv.Itoa(port) +
+			"/?sni=localhost&fp=chrome&pcs=" + pin + "#AnyTLS%20Smoke"
+	}
+	assertSessionThrough(t, protocolSession{
+		engine: "mihomo", link: link(testProtocolPassword), protocol: "anytls", port: port, name: "AnyTLS Smoke",
 		wrongCredentialLink: link("wrong"), pingEngine: "mihomo", server: server,
 	})
 }
