@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
 )
 
 type Server struct {
@@ -19,7 +20,7 @@ type Server struct {
 	Name     string `json:"name,omitempty"` // #fragment remark, "" if none
 	Host     string `json:"host,omitempty"`
 	Port     int    `json:"port,omitempty"`
-	Protocol string `json:"protocol,omitempty"` // vless | trojan | ss | hysteria2 | tuic | anytls | awg
+	Protocol string `json:"protocol,omitempty"` // vless | vmess | trojan | ss | hysteria2 | tuic | anytls | awg
 }
 
 // ServerEvent payload. Selected is nil while the pick is per-connection
@@ -63,6 +64,12 @@ func FromLink(link string, idx int) Server {
 		if ini, err := awgconfig.NormalizeToINI(link); err == nil {
 			s.Host, s.Port = awgconfig.EndpointHostPort(ini)
 		}
+		return s
+	}
+
+	if vmesslink.IsLink(link) {
+		l, _ := vmesslink.Parse(link)
+		s.Protocol, s.Name, s.Host, s.Port = "vmess", l.Name, l.Host, l.Port
 		return s
 	}
 

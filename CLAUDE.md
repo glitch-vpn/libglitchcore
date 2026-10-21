@@ -5,9 +5,9 @@ Rules for agents working in this repository. These override default behaviour.
 ## 1. What this project is
 
 libglitchcore is a Go library built as a C shared library (`-buildmode=c-shared`)
-that runs VPN engines behind one FFI surface: **xray** (VLESS / Trojan /
-Shadowsocks), **awg** (AmneziaWG) and **mihomo** (Hysteria2, TUIC, AnyTLS, plus the bridge
-paths). It is consumed by the Flutter plugin
+that runs VPN engines behind one FFI surface: **xray** (VLESS / VMess /
+Trojan / Shadowsocks), **awg** (AmneziaWG) and **mihomo** (Hysteria2, TUIC,
+AnyTLS, plus the bridge paths). It is consumed by the Flutter plugin
 `glitch-vpn/glitch_vpn_core_plugin`, which downloads release binaries pinned by
 version + sha256. Platforms: Android, Windows, Linux.
 
@@ -75,6 +75,7 @@ internal/
   awgconfig/               # awg:// / INI parsing -> UAPI
   serverinfo/              # link -> display identity for ServerEvent
   sharelink/               # URL-shaped links parsed with credentials kept out of errors
+  vmesslink/               # vmess:// (base64 JSON and URI) -> one shape
   pinger/                  # MeasurePings (standalone per-engine probes)
   liveness/                # up/down debounce tracker
   smoke/                   # end-to-end self-verification (integration tag)

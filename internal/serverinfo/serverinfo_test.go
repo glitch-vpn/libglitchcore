@@ -161,3 +161,13 @@ func TestFromLink_AnyTLS(t *testing.T) {
 		t.Fatalf("got %+v", s)
 	}
 }
+
+func TestFromLink_VMess(t *testing.T) {
+	payload := base64.StdEncoding.EncodeToString([]byte(`{"v":"2","ps":"VM+1","add":"vm.example.com","port":8443,"id":"6f4b7a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b"}`))
+	if s := FromLink("vmess://"+payload, 1); s.Protocol != "vmess" || s.Host != "vm.example.com" || s.Port != 8443 || s.Name != "VM+1" {
+		t.Fatalf("shared JSON form: got %+v", s)
+	}
+	if s := FromLink("vmess://6f4b7a3e-1c2d-4e5f-8a9b-0c1d2e3f4a5b@vm.example.com:443?type=ws#VM+2", 0); s.Protocol != "vmess" || s.Host != "vm.example.com" || s.Port != 443 || s.Name != "VM 2" {
+		t.Fatalf("URI form: got %+v", s)
+	}
+}

@@ -1,4 +1,4 @@
-// Package xrayconfig builds Xray configs from vless://|ss://|trojan:// links.
+// Package xrayconfig builds Xray configs from vless://|vmess://|ss://|trojan:// links.
 // Multiple links -> balancer + Observatory (every balancing strategy requires it).
 package xrayconfig
 
@@ -15,6 +15,8 @@ import (
 
 	xrayNet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/infra/conf/cfgcommon/duration"
+
+	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
 
 	xrayConf "github.com/xtls/xray-core/infra/conf"
 )
@@ -169,6 +171,10 @@ func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 
 // outboundFromLink also returns the server host and its pre-resolved IPv4 dial address.
 func outboundFromLink(link, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
+	// Most vmess:// links are base64 JSON, which url.Parse would misread.
+	if vmesslink.IsLink(link) {
+		return outboundFromVMess(link, tag)
+	}
 	u, err := url.Parse(link)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("parse link: %w", err)

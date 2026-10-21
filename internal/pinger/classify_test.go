@@ -37,6 +37,7 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 		vless = "mihomo"
 	}
 	check("vless://uuid@host:443?type=tcp", vless)
+	check("vmess://eyJhZGQiOiJob3N0In0", vless)
 	check("ss://YWVzOnB3QGhvc3Q6ODM4OA", vless)
 	check("trojan://pass@host:443", vless)
 

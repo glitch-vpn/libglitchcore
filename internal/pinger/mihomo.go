@@ -48,6 +48,7 @@ func init() {
 		engine: "mihomo",
 		match: func(trimmed, lower string) bool {
 			return strings.HasPrefix(lower, "vless://") ||
+				strings.HasPrefix(lower, "vmess://") ||
 				strings.HasPrefix(lower, "ss://") ||
 				strings.HasPrefix(lower, "trojan://") ||
 				strings.HasPrefix(lower, "hysteria2://") ||

@@ -156,7 +156,9 @@ months because of exactly this.
   it is imported by untagged code and must not reach `xrayconfig` /
   `mihomoconfig`. The mirrors (legacy `ss://` base64, the `+`-as-space rule in
   remarks) move together — a change to link parsing lands in both, or a link
-  the engine accepts reports an empty host in the ServerEvent.
+  the engine accepts reports an empty host in the ServerEvent. `vmess://` is
+  the exception: `internal/vmesslink` imports no engine, so the builders and
+  serverinfo read it through that one parser instead of mirroring it.
 
 ## 5. Opts
 

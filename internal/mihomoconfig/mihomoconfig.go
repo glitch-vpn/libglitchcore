@@ -15,6 +15,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/loopbackauth"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
+	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
@@ -446,7 +447,7 @@ func applyProxyFingerprint(proxy map[string]any, fp string) {
 		return
 	}
 	switch proxy["type"] {
-	case "vless", "trojan", "anytls":
+	case "vless", "vmess", "trojan", "anytls":
 		proxy["client-fingerprint"] = fp
 	}
 }
@@ -471,6 +472,8 @@ func proxyFromLink(link, name string) (map[string]any, error) {
 		return tuicProxy(link, name)
 	case strings.HasPrefix(lower, "anytls://"):
 		return anytlsProxy(link, name)
+	case vmesslink.IsLink(link):
+		return vmessProxy(link, name)
 	case strings.HasPrefix(lower, awgconfig.LinkScheme), strings.Contains(link, "[Interface]"):
 		return wireguardProxy(link, name)
 	default:
@@ -521,6 +524,13 @@ func linkName(link string, idx int) string {
 	var frag string
 	if strings.HasPrefix(strings.ToLower(link), awgconfig.LinkScheme) {
 		frag = awgconfig.LinkName(link)
+	} else if vmesslink.IsLink(link) {
+		// ps is written as is; only the comma rule applies to it.
+		l, _ := vmesslink.Parse(link)
+		if name := strings.TrimSpace(strings.ReplaceAll(l.Name, ",", " ")); name != "" {
+			return name
+		}
+		return fmt.Sprintf("proxy-%d", idx)
 	} else if u, err := url.Parse(link); err == nil {
 		frag = u.Fragment // url.Parse already %-decodes
 	}
