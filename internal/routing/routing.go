@@ -104,7 +104,9 @@ func (p Profile) HasBlock() bool {
 	return false
 }
 
-// Validate refuses what mihomo's comma-split rule lines would cut or re-target.
+// Validate refuses what the engines would cut, re-target or drop: a comma that
+// splits a mihomo rule line, a geo code neither engine can look up, and a keyword
+// that xray would read as another matcher.
 func (p Profile) Validate() error {
 	for i, t := range p.Tiers {
 		for _, list := range [][]string{t.Block, t.Direct, t.Proxy} {
@@ -128,9 +130,39 @@ func validateMatcher(m string) error {
 		if strings.Contains(val, ",") {
 			return errors.New("a domain cannot contain a comma")
 		}
+		if kind == KindDomainKeyword {
+			if err := ValidKeyword(val); err != nil {
+				return err
+			}
+		}
+	case KindGeoSite:
+		if !ValidGeoCode(val) {
+			return errors.New("invalid geosite code: ASCII letters, digits, '-', '_', '!' and '@' only, no leading '!'")
+		}
+	case KindGeoIP:
+		if !ValidGeoIPCode(val) {
+			return errors.New("invalid geoip code: ASCII letters, digits, '-' and '_' only, with an optional leading '!'")
+		}
 	case KindDomainRegex:
 		if strings.Contains(val, " ,") || strings.Contains(val, ", ") {
 			return errors.New("a regexp cannot have a space beside a comma")
+		}
+	}
+	return nil
+}
+
+// xrayMatcherPrefixes are the prefixes xray's domain rule parser reads as a
+// matcher type; a bare value starting with one is no longer a plain keyword.
+var xrayMatcherPrefixes = []string{
+	"regexp:", "domain:", "full:", "keyword:", "dotless:",
+	"geosite:", "ext:", "ext-domain:", "ext-site:",
+}
+
+// ValidKeyword refuses a keyword xray would read as another matcher.
+func ValidKeyword(val string) error {
+	for _, prefix := range xrayMatcherPrefixes {
+		if strings.HasPrefix(val, prefix) {
+			return fmt.Errorf("a keyword cannot start with %q, which xray reads as another matcher", prefix)
 		}
 	}
 	return nil

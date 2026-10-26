@@ -311,7 +311,6 @@ func TestMatcherRules_Classification(t *testing.T) {
 			"keyword:ads", "regexp:.*\\.cn$", "48.123.243.123", "10.0.0.0/8",
 			"geosite:geolocation-!cn", "geosite:cn@ads", "geoip:!ru",
 			"domain:.ru.", // zone dots stripped -> domain:ru
-			"geoip:рф",    // invalid geo code -> dropped
 		}}},
 	}
 	_, rules := applyTo(t, p, "proxy", false)
@@ -344,11 +343,11 @@ func TestMatcherRules_Classification(t *testing.T) {
 	}
 	for _, ip := range ips {
 		if !wantIP[ip] {
-			t.Errorf("unexpected ip matcher %q (geoip:рф must be dropped)", ip)
+			t.Errorf("unexpected ip matcher %q", ip)
 		}
 	}
 	if len(ips) != 4 {
-		t.Errorf("want 4 ip matchers (geoip:рф dropped), got %v", ips)
+		t.Errorf("want 4 ip matchers, got %v", ips)
 	}
 }
 

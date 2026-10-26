@@ -61,7 +61,8 @@ func TestSmoke_DomainStrategyInvalidFailsStart(t *testing.T) {
 
 // Rules a start cannot carry intact fail it on every engine, before anything
 // is armed: malformed tiers, the CSV rule keys, and a comma in a domain value,
-// which would split a mihomo rule line and re-target it.
+// which would split a mihomo rule line and re-target it, a geo code no engine
+// can look up, and a keyword xray would read as another matcher.
 func TestSmoke_RulesItCannotCarryFailStart(t *testing.T) {
 	core.Initialize()
 
@@ -73,6 +74,9 @@ func TestSmoke_RulesItCannotCarryFailStart(t *testing.T) {
 		{"malformed tiers", "routingTiers", `{"not":"an array"}`, "routingTiers"},
 		{"legacy key", "directRules", "geoip:ru", "directRules"},
 		{"domain comma", "routingTiers", `[{"block":["domain:example.com,DIRECT"]}]`, "cannot contain a comma"},
+		{"geoip code", "routingTiers", `[{"direct":["geoip:рф"]}]`, "invalid geoip code"},
+		{"geosite code", "routingTiers", `[{"direct":["geosite:a,b"]}]`, "invalid geosite code"},
+		{"keyword like a matcher", "routingTiers", `[{"block":["keyword:domain:example.com"]}]`, "another matcher"},
 	}
 	for _, engine := range []string{"xray", "mihomo"} {
 		for _, c := range cases {

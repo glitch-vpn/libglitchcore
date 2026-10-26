@@ -1,6 +1,9 @@
 package routing
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestClassify(t *testing.T) {
 	cases := []struct {
@@ -125,5 +128,41 @@ func TestProcessRules_AcrossTiers(t *testing.T) {
 	}
 	if got["tool.exe"] != TargetDirect {
 		t.Errorf("tool.exe = %q, want direct", got["tool.exe"])
+	}
+}
+
+func TestValidateRefusesWhatEnginesWouldDrop(t *testing.T) {
+	cases := []struct {
+		matcher, want string
+	}{
+		{"geoip:рф", "invalid geoip code"},
+		{"geoip:r,u", "invalid geoip code"},
+		{"geosite:рф", "invalid geosite code"},
+		{"geosite:a,b", "invalid geosite code"},
+		{"geosite:!cn", "invalid geosite code"},
+		{"keyword:domain:example.com", `cannot start with "domain:"`},
+		{"keyword:full:example.com", `cannot start with "full:"`},
+		{"keyword:regexp:^a", `cannot start with "regexp:"`},
+		{"keyword:geosite:cn", `cannot start with "geosite:"`},
+		{"keyword:ext:file.dat:tag", `cannot start with "ext:"`},
+		{"keyword:keyword:ads", `cannot start with "keyword:"`},
+	}
+	for _, c := range cases {
+		for _, tier := range []Tier{{Block: []string{c.matcher}}, {Direct: []string{c.matcher}}, {Proxy: []string{c.matcher}}} {
+			err := Profile{Tiers: []Tier{tier}}.Validate()
+			if err == nil || !strings.Contains(err.Error(), c.want) {
+				t.Errorf("Validate(%q) = %v, want an error naming %q", c.matcher, err, c.want)
+			}
+		}
+	}
+}
+
+func TestValidateKeepsWhatEnginesCarry(t *testing.T) {
+	p := Profile{Tiers: []Tier{{
+		Block:  []string{"geoip:!ru", "geosite:geolocation-!cn", "geosite:cn@ads", "keyword:ads", "keyword:.ru", "keyword:domainer"},
+		Direct: []string{"geoip:private", "domain:рф", "keyword:a:b"},
+	}}}
+	if err := p.Validate(); err != nil {
+		t.Fatalf("Validate = %v, want nil", err)
 	}
 }

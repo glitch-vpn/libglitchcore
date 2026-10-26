@@ -57,8 +57,8 @@ func (t target) apply(r *fieldRule) {
 	}
 }
 
-// Invalid geo codes (non-ASCII, e.g. "рф" typed as geoip) are dropped so one
-// bad entry can't fail the whole config; "domain:рф" is valid and kept.
+// The core runs routing.Profile.Validate first, so every geo code here is one
+// xray can look up.
 func matcherRules(matchers []string, t target) []json.RawMessage {
 	var domains, ips, processes []string
 	for _, m := range matchers {
@@ -68,13 +68,9 @@ func matcherRules(matchers []string, t target) []json.RawMessage {
 		}
 		switch kind {
 		case routing.KindGeoSite:
-			if routing.ValidGeoCode(val) {
-				domains = append(domains, "geosite:"+val)
-			}
+			domains = append(domains, "geosite:"+val)
 		case routing.KindGeoIP:
-			if routing.ValidGeoIPCode(val) {
-				ips = append(ips, "geoip:"+val)
-			}
+			ips = append(ips, "geoip:"+val)
 		case routing.KindDomainSuffix:
 			domains = append(domains, "domain:"+val)
 		case routing.KindDomainFull:

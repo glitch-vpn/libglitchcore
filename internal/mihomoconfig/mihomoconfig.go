@@ -286,9 +286,9 @@ func buildRules(p routing.Profile, target string) []string {
 }
 
 // matcherRules classifies a flat matcher list (routing.Classify) into mihomo rule
-// lines routing each entry to target. Invalid geo codes (non-ASCII) are dropped so
-// one mistake can't fail the whole config. The core runs routing.Profile.Validate
-// first, so no domain value here holds a comma that would split its line.
+// lines routing each entry to target. The core runs routing.Profile.Validate
+// first, so no domain value here holds a comma that would split its line and no
+// geo code is one mihomo cannot look up.
 func matcherRules(matchers []string, target string) []string {
 	var out []string
 	for _, m := range matchers {
@@ -298,13 +298,9 @@ func matcherRules(matchers []string, target string) []string {
 		}
 		switch kind {
 		case routing.KindGeoSite:
-			if routing.ValidGeoCode(val) {
-				out = append(out, "GEOSITE,"+val+","+target)
-			}
+			out = append(out, "GEOSITE,"+val+","+target)
 		case routing.KindGeoIP:
-			if routing.ValidGeoIPCode(val) {
-				out = append(out, "GEOIP,"+val+","+target+",no-resolve")
-			}
+			out = append(out, "GEOIP,"+val+","+target+",no-resolve")
 		case routing.KindDomainSuffix:
 			out = append(out, "DOMAIN-SUFFIX,"+val+","+target)
 		case routing.KindDomainFull:

@@ -502,15 +502,10 @@ func TestBuildRules(t *testing.T) {
 		t.Fatalf("empty profile rules = %v", empty)
 	}
 
-	// Invalid (non-ASCII) geo code "geoip:рф" is dropped, not emitted - otherwise
-	// it would fail the whole mihomo config at load. "domain:рф" (a zone) and a
-	// valid geosite alongside still work.
+	// A zone in the Cyrillic script and a geosite alongside it translate.
 	inv := strings.Join(buildRules(routing.Profile{
-		Tiers: []routing.Tier{{Block: []string{"geosite:category-ru", "geoip:рф", "domain:рф"}}},
+		Tiers: []routing.Tier{{Block: []string{"geosite:category-ru", "domain:рф"}}},
 	}, "vpn"), "\n")
-	if strings.Contains(inv, "GEOIP,рф") {
-		t.Fatalf("invalid geo code leaked:\n%s", inv)
-	}
 	if !strings.Contains(inv, "GEOSITE,category-ru,REJECT") || !strings.Contains(inv, "DOMAIN-SUFFIX,рф,REJECT") {
 		t.Fatalf("valid matchers dropped:\n%s", inv)
 	}
