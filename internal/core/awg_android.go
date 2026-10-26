@@ -29,9 +29,22 @@ func (x *CoreController) platformAwgStart(ifName string, tunFd int, settings str
 	}
 	log.Printf("[AWG] dup'd TUN fd %d -> %d", tunFd, dupFd)
 
+	// The dup stays ours until CreateUnmonitoredTUNFromFD wraps it in an
+	// os.File; from then on the file owns it and a close here would hit a
+	// number the file's finalizer closes again.
+	unclaimedTunFd := dupFd
+	defer func() {
+		if unclaimedTunFd >= 0 {
+			closeTunFd(unclaimedTunFd)
+		}
+	}()
+	if err := syscall.SetNonblock(dupFd, true); err != nil {
+		return -1, fmt.Errorf("create TUN: %w", err)
+	}
+	unclaimedTunFd = -1
+
 	tunDev, name, err := tun.CreateUnmonitoredTUNFromFD(dupFd)
 	if err != nil {
-		closeTunFd(dupFd)
 		return -1, fmt.Errorf("create TUN: %w", err)
 	}
 
