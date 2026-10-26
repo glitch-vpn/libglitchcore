@@ -2,6 +2,7 @@ package xrayconfig
 
 import (
 	"context"
+	"encoding/base64"
 	"net"
 	"strings"
 	"testing"
@@ -88,4 +89,22 @@ func TestShadowsocks_SupportedMethodsBuild(t *testing.T) {
 		t.Run(method, func(t *testing.T) { buildLink(t, "ss://"+method+":pw@1.2.3.4:8388") })
 	}
 	buildLink(t, "ss://2022-blake3-aes-128-gcm:MDEyMzQ1Njc4OWFiY2RlZg==@1.2.3.4:8388")
+}
+
+func TestShadowsocks_Base64UserinfoBuilds(t *testing.T) {
+	for name, userinfo := range map[string]string{
+		"padded":    base64.StdEncoding.EncodeToString([]byte("aes-256-gcm:pw")),
+		"unpadded":  base64.RawURLEncoding.EncodeToString([]byte("chacha20-ietf-poly1305:p@ss:w")),
+		"url_alpha": base64.RawURLEncoding.EncodeToString([]byte("aes-128-gcm:>>>???")),
+	} {
+		t.Run(name, func(t *testing.T) { buildLink(t, "ss://"+userinfo+"@1.2.3.4:8388#n") })
+	}
+}
+
+func TestShadowsocks_Base64UserinfoWithADroppedMethodIsRefused(t *testing.T) {
+	userinfo := base64.StdEncoding.EncodeToString([]byte("aes-256-cfb:pw"))
+	_, err := BuildConfig([]string{"ss://" + userinfo + "@1.2.3.4:8388"}, BalancerOptions{}, RoutingProfile{}, "none")
+	if err == nil || !strings.Contains(err.Error(), "not supported") {
+		t.Errorf("err = %v, want the unsupported-method refusal", err)
+	}
 }

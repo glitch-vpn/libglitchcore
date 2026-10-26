@@ -445,7 +445,8 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 }
 
 func outboundFromSS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
-	// Supports both plain form ss://method:password@host:port and base64 ss://BASE64(method:password@host:port)
+	// Takes ss://method:password@host:port, SIP002's
+	// ss://BASE64(method:password)@host:port and ss://BASE64(method:password@host:port).
 	method := ""
 	password := ""
 	host := ""
@@ -455,6 +456,8 @@ func outboundFromSS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, str
 		method = u.User.Username()
 		if pw, ok := u.User.Password(); ok {
 			password = pw
+		} else if decoded, err := tryDecodeBase64(method); err == nil {
+			method, password, _ = strings.Cut(decoded, ":")
 		}
 		host = u.Hostname()
 		if p, err := strconv.Atoi(u.Port()); err == nil && p > 0 && p <= 65535 {
