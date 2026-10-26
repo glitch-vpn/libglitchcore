@@ -22,6 +22,7 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/sharelink"
+	"github.com/glitch-vpn/libglitchcore/internal/vlessencryption"
 )
 
 const (
@@ -224,9 +225,13 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	if err != nil {
 		return nil, "", "", fmt.Errorf("vless: %w", err)
 	}
+	encryption, err := vlessencryption.Normalize(q.Get("encryption"))
+	if err != nil {
+		return nil, "", "", err
+	}
 	vlessUser := map[string]string{
 		"id":         userID,
-		"encryption": "none",
+		"encryption": encryption,
 	}
 	if flow := strings.TrimSpace(q.Get("flow")); flow != "" {
 		vlessUser["flow"] = flow
@@ -234,7 +239,7 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	userJSON, _ := json.Marshal(vlessUser)
 
 	addrForDial := preResolveIPv4(host)
-	if err := requireTransportSecurity("vless", addrForDial, stream.Security != ""); err != nil {
+	if err := requireTransportSecurity("vless", addrForDial, stream.Security != "" || encryption != vlessencryption.None); err != nil {
 		return nil, "", "", err
 	}
 	vnext := &xrayConf.VLessOutboundVnext{

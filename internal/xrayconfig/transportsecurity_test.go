@@ -31,7 +31,7 @@ func TestTransportSecurity_VLESSWithoutTLSToAPublicServerIsRefused(t *testing.T)
 		"public_ipv6":   "vless://" + testVMessUUID + "@[2001:4860:4860::8888]:443",
 	} {
 		_, err := BuildConfig([]string{link}, BalancerOptions{}, RoutingProfile{}, "none")
-		if err == nil || !strings.Contains(err.Error(), "no TLS or REALITY") {
+		if err == nil || !strings.Contains(err.Error(), "no TLS, REALITY or VLESS encryption") {
 			t.Errorf("%s: err = %v, want the no-TLS refusal", name, err)
 		}
 	}
@@ -66,7 +66,7 @@ func TestTransportSecurity_DecidedOnTheAddressXrayGets(t *testing.T) {
 		t.Fatalf("a private name that resolves to no address: %v", err)
 	}
 	_, err = BuildConfig([]string{"vless://" + testVMessUUID + "@cdn.example.org:443"}, BalancerOptions{}, RoutingProfile{}, "none")
-	if err == nil || !strings.Contains(err.Error(), "no TLS or REALITY") {
+	if err == nil || !strings.Contains(err.Error(), "no TLS, REALITY or VLESS encryption") {
 		t.Fatalf("a name that resolves to a public address: %v", err)
 	}
 }

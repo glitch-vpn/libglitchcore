@@ -69,6 +69,13 @@ func freePort(t *testing.T) int {
 
 func startVlessServer(t *testing.T) int {
 	t.Helper()
+	return startVlessServerWithDecryption(t, "none")
+}
+
+// startVlessServerWithDecryption serves VLESS with the given inbound
+// "decryption" value, "none" or a mlkem768x25519plus server string.
+func startVlessServerWithDecryption(t *testing.T, decryption string) int {
+	t.Helper()
 	port := freePort(t)
 	cfg := fmt.Sprintf(`{
 		"log": {"loglevel": "warning"},
@@ -76,10 +83,10 @@ func startVlessServer(t *testing.T) int {
 			"listen": "127.0.0.1",
 			"port": %d,
 			"protocol": "vless",
-			"settings": {"clients": [{"id": %q}], "decryption": "none"}
+			"settings": {"clients": [{"id": %q}], "decryption": %q}
 		}],
 		"outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow"}]}}]
-	}`, port, testUUID)
+	}`, port, testUUID, decryption)
 	inst, err := xrayCore.StartInstance("json", []byte(cfg))
 	if err != nil {
 		t.Fatalf("vless server: %v", err)

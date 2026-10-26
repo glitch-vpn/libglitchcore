@@ -10,7 +10,7 @@ import (
 
 const (
 	redacted   = "[redacted]"
-	secretKeys = `password|passwd|pwd|pass|psk|pre[_-]?shared[_-]?key|private[_-]?key|public[_-]?key|pbk|secret|token|auth[_-]?str|auth|obfs[_-]?password|uuid|short[_-]?id|sid`
+	secretKeys = `password|passwd|pwd|pass|psk|pre[_-]?shared[_-]?key|private[_-]?key|public[_-]?key|pbk|secret|token|auth[_-]?str|auth|obfs[_-]?password|encryption|decryption|uuid|short[_-]?id|sid`
 )
 
 var (
@@ -25,6 +25,9 @@ var (
 	secretAssignPattern    = regexp.MustCompile(`(?i)\b(` + secretKeys + `)(\s*=\s*)(\[redacted\]|"[^"]*"|'[^']*'|[^\s,;&"'})\]]+)`)
 	secretQuotedPattern    = regexp.MustCompile(`(?i)\b(` + secretKeys + `)("?\s*:\s*)(\[redacted\]|"[^"]*"|'[^']*')`)
 	secretQuotedKeyPattern = regexp.MustCompile(`(?i)"(` + secretKeys + `)("\s*:\s*)(\[redacted\]|[^\s,;&"'})\]]+)`)
+	// A VLESS encryption value carries the server's public keys wherever an
+	// engine's message quotes it.
+	vlessEncryptionPattern = regexp.MustCompile(`mlkem768x25519plus(?:\.[A-Za-z0-9_-]*)+`)
 	uuidPattern            = regexp.MustCompile(`(?i)\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b`)
 	// Key material and tokens: base64, base64url or hex, at least 32 long.
 	tokenPattern = regexp.MustCompile(`[A-Za-z0-9+/_-]{32,}={0,2}`)
@@ -51,6 +54,7 @@ func Scrub(s string) string {
 	s = secretAssignPattern.ReplaceAllString(s, "${1}${2}"+redacted)
 	s = secretQuotedPattern.ReplaceAllString(s, "${1}${2}"+redacted)
 	s = secretQuotedKeyPattern.ReplaceAllString(s, `"${1}${2}`+redacted)
+	s = vlessEncryptionPattern.ReplaceAllString(s, redacted)
 	s = uuidPattern.ReplaceAllString(s, redacted)
 	return tokenPattern.ReplaceAllStringFunc(s, func(run string) string {
 		if looksLikeKeyMaterial(strings.TrimRight(run, "=")) {

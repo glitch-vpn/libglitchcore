@@ -100,3 +100,20 @@ func TestScrub_Cases(t *testing.T) {
 		t.Fatalf("only %d cases read", cases)
 	}
 }
+
+func TestScrub_VLESSEncryptionValue(t *testing.T) {
+	key := "adGhUAyxxTYcoUlMXPFrYxmBFBXLOoZXcLTLcWyiZmc"
+	value := "mlkem768x25519plus.native.0rtt." + key
+	for name, line := range map[string]string{
+		"xray":          `failed to build outbound handler for protocol vless > VLESS users: unsupported "encryption": ` + value,
+		"xray_inbound":  `VLESS users: unsupported "decryption": ` + value,
+		"mihomo":        "invaild vless encryption value: " + value,
+		"mihomo_assign": "proxy 0: vless: encryption=" + value,
+		"json":          `{"encryption":"` + value + `"}`,
+	} {
+		got := Scrub(line)
+		if strings.Contains(got, key) {
+			t.Errorf("%s: Scrub kept the key:\n  in:  %s\n  out: %s", name, line, got)
+		}
+	}
+}

@@ -30,12 +30,14 @@ func checkSSCipher(method string) error {
 // outbound with neither TLS, REALITY nor VLESS encryption to a server that is
 // not on a private address. address is the one handed to xray, the
 // pre-resolved IPv4 when the lookup succeeds, because that is what xray
-// judges. The core never sets VLESS encryption, so a link without TLS or
-// REALITY is refused here with its reason instead of failing the engine
-// start. xray's own private-address lists decide.
+// judges. A link with none of them is refused here with its reason instead
+// of failing the engine start. xray's own private-address lists decide.
 func requireTransportSecurity(protocol, address string, secured bool) error {
 	if secured || !isPublicHost(address) {
 		return nil
+	}
+	if protocol == "vless" {
+		return fmt.Errorf("vless: no TLS, REALITY or VLESS encryption to a public server; xray refuses to carry it in the clear")
 	}
 	return fmt.Errorf("%s: no TLS or REALITY to a public server; xray refuses to carry it in the clear", protocol)
 }

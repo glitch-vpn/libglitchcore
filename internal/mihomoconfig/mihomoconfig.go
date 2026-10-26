@@ -15,6 +15,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
+	"github.com/glitch-vpn/libglitchcore/internal/vlessencryption"
 	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/config"
@@ -599,6 +600,13 @@ func vlessProxy(link, name string) (map[string]any, error) {
 	}
 	if flow := q.Get("flow"); flow != "" {
 		p["flow"] = flow
+	}
+	encryption, err := vlessencryption.Normalize(q.Get("encryption"))
+	if err != nil {
+		return nil, err
+	}
+	if encryption != vlessencryption.None {
+		p["encryption"] = encryption
 	}
 
 	switch q.Get("security") {
