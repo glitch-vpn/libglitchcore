@@ -30,8 +30,9 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 	if l.ID == "" || l.Host == "" {
 		return nil, "", "", fmt.Errorf("vmess: missing uuid or server host")
 	}
+	var gap error
 	if l.AlterID > 0 {
-		return nil, "", "", fmt.Errorf("vmess: alterId %d (the legacy handshake) is not supported; xray speaks only AEAD, alterId 0", l.AlterID)
+		gap = NotCarriedError{fmt.Errorf("vmess: alterId %d (the legacy handshake) is not supported; xray speaks only AEAD, alterId 0", l.AlterID)}
 	}
 	cipher := strings.ToLower(l.Cipher)
 	if !slices.Contains(vmessCiphers, cipher) {
@@ -41,9 +42,12 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 	if q.Get("security") == "reality" {
 		return nil, "", "", fmt.Errorf("vmess: security \"reality\" is not supported")
 	}
-	stream, err := buildStreamSettings(l.Host, q)
+	stream, streamGap, err := buildStreamSettings(l.Host, q)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("vmess: %w", err)
+	}
+	if gap == nil {
+		gap = streamGap
 	}
 
 	user, _ := json.Marshal(map[string]string{"id": l.ID, "security": cipher})
@@ -72,6 +76,9 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 		default:
 			tls.ECHConfigList = ech
 		}
+	}
+	if gap != nil {
+		return nil, "", "", gap
 	}
 	return ob, l.Host, addrForDial, nil
 }

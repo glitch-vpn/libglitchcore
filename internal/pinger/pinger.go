@@ -3,6 +3,7 @@ package pinger
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -57,6 +58,12 @@ var (
 func registerMeasurer(m engineMeasurer) { measurers = append(measurers, m) }
 
 func setFallbackMeasurer(m engineMeasurer) { fallback = &m }
+
+// fallsBack marks a measurer's refusal of a link for something the engine
+// lacks, not for the link's safety: the fallback engine may carry it intact.
+type fallsBack struct{ error }
+
+func (e fallsBack) Unwrap() error { return e.error }
 
 func matchAwgLink(trimmed, lower string) bool {
 	return strings.HasPrefix(lower, "awg://") || strings.Contains(trimmed, "[Interface]")
@@ -113,6 +120,12 @@ func Measure(req Request) []Result {
 			defer cancel()
 
 			delay, err := m(ctx, link, probeURL)
+			var refused fallsBack
+			if trimmed := strings.TrimSpace(link); errors.As(err, &refused) && fallback != nil &&
+				fallback.match(trimmed, strings.ToLower(trimmed)) {
+				results[i].Engine = fallback.engine
+				delay, err = fallback.measure(ctx, link, probeURL)
+			}
 			if err != nil {
 				// A parse error quotes the link it rejected.
 				results[i].Error = logfmt.Scrub(err.Error())

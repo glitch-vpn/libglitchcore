@@ -221,7 +221,7 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	}
 
 	q := u.Query()
-	stream, err := buildStreamSettings(host, q)
+	stream, gap, err := buildStreamSettings(host, q)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("vless: %w", err)
 	}
@@ -241,6 +241,9 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	addrForDial := preResolveIPv4(host)
 	if err := requireTransportSecurity("vless", addrForDial, stream.Security != "" || encryption != vlessencryption.None); err != nil {
 		return nil, "", "", err
+	}
+	if gap != nil {
+		return nil, "", "", fmt.Errorf("vless: %w", gap)
 	}
 	vnext := &xrayConf.VLessOutboundVnext{
 		Address: &xrayConf.Address{Address: xrayNet.ParseAddress(addrForDial)},
@@ -264,12 +267,17 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 // params VLESS, Trojan and VMess links share into an xray StreamConfig. A value
 // it does not map fails the link: run as plain TCP or without TLS, it would
 // connect to nothing the server speaks, or in the clear.
-func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, error) {
-	stream := &xrayConf.StreamConfig{}
+//
+// A transport or header xray lacks comes back as gap, not as err, and the
+// build goes on: the caller runs every safety check on the link first and
+// returns the gap only after them, so a link refused for its safety never
+// reads as one another engine could carry.
+func buildStreamSettings(host string, q url.Values) (stream *xrayConf.StreamConfig, gap, err error) {
+	stream = &xrayConf.StreamConfig{}
 	switch network := strings.ToLower(strings.TrimSpace(q.Get("type"))); network {
 	case "tcp", "raw", "":
 		if header := strings.ToLower(q.Get("headerType")); header != "" && header != "none" {
-			return nil, fmt.Errorf("tcp header %q is not supported", header)
+			gap = NotCarriedError{fmt.Errorf("tcp header %q is not supported", header)}
 		}
 		proto := xrayConf.TransportProtocol("tcp")
 		stream.Network = &proto
@@ -311,7 +319,7 @@ func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, err
 		}
 		stream.XHTTPSettings = xhttp
 	default:
-		return nil, fmt.Errorf("transport %q is not supported", network)
+		gap = NotCarriedError{fmt.Errorf("transport %q is not supported", network)}
 	}
 
 	switch security := strings.ToLower(strings.TrimSpace(q.Get("security"))); security {
@@ -344,7 +352,7 @@ func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, err
 		}
 		// xray refuses allowInsecure outright since 2026-06-01.
 		if sharelink.SkipsVerification(q) {
-			return nil, fmt.Errorf("skipping certificate verification is not supported; pin the certificate with pcs")
+			return nil, nil, fmt.Errorf("skipping certificate verification is not supported; pin the certificate with pcs")
 		}
 		tls.PinnedPeerCertSha256 = strings.TrimSpace(q.Get("pcs"))
 		tls.VerifyPeerCertByName = strings.TrimSpace(q.Get("vcn"))
@@ -373,14 +381,14 @@ func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, err
 		}
 		stream.REALITYSettings = r
 	default:
-		return nil, fmt.Errorf("security %q is not supported", security)
+		return nil, nil, fmt.Errorf("security %q is not supported", security)
 	}
 
 	// TCP keepalive to prevent carrier NAT timeout on idle connections.
 	stream.SocketSettings = &xrayConf.SocketConfig{
 		TCPKeepAliveInterval: 15,
 	}
-	return stream, nil
+	return stream, gap, nil
 }
 
 // lookupIPv4 is the resolver preResolveIPv4 asks; tests replace it.
@@ -423,9 +431,12 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 	if s := strings.ToLower(q.Get("security")); s != "tls" && s != "reality" {
 		q.Set("security", "tls")
 	}
-	stream, err := buildStreamSettings(host, q)
+	stream, gap, err := buildStreamSettings(host, q)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("trojan: %w", err)
+	}
+	if gap != nil {
+		return nil, "", "", fmt.Errorf("trojan: %w", gap)
 	}
 	addrForDial := preResolveIPv4(host)
 

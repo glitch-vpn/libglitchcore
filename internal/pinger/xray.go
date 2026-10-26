@@ -4,6 +4,7 @@ package pinger
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strconv"
@@ -29,8 +30,9 @@ func init() {
 	})
 }
 
-// core.Dial dispatches through the proxy outbound, so the probe needs no SOCKS
-// inbound or TUN.
+// A link xray refuses for a capability it lacks (xrayconfig.NotCarriedError)
+// is pinged on the fallback engine by the caller; one it refuses for safety is not. core.Dial dispatches through
+// the proxy outbound, so the probe needs no SOCKS inbound or TUN.
 func measureXray(ctx context.Context, link, probeURL string) (time.Duration, error) {
 	res, err := xrayconfig.BuildConfig(
 		[]string{link},
@@ -39,6 +41,10 @@ func measureXray(ctx context.Context, link, probeURL string) (time.Duration, err
 		"none",
 	)
 	if err != nil {
+		var lacking xrayconfig.NotCarriedError
+		if errors.As(err, &lacking) {
+			return 0, fallsBack{fmt.Errorf("build config: %w", err)}
+		}
 		return 0, fmt.Errorf("build config: %w", err)
 	}
 
