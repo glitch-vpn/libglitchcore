@@ -4,6 +4,7 @@ package awgconfig
 
 import (
 	"net/netip"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -11,6 +12,8 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun/netstack"
 )
+
+var listenPortLine = regexp.MustCompile(`(?m)^listen_port=\d+$`)
 
 // The UAPI ParseToUAPI writes has to be what the linked amneziawg-go reads:
 // the device refuses a whole set over one key it does not know.
@@ -37,6 +40,9 @@ func TestParseToUAPI_AcceptedByDevice(t *testing.T) {
 			dev := device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
 			defer dev.Close()
 
+			// The fixtures' listen ports are below 1024, which a runner without
+			// root cannot bind; the port is not what this test checks.
+			uapi = listenPortLine.ReplaceAllString(uapi, "listen_port=0")
 			if err := dev.IpcSet(uapi); err != nil {
 				t.Fatalf("IpcSet: %v\n%s", err, uapi)
 			}
