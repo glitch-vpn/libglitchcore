@@ -176,7 +176,6 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		return fmt.Errorf("[Xray] No outbound built from link")
 	}
 
-	x.xrayOutboundTags.Store(res.OutboundTags)
 	serverDialIPv4s := res.DialIPv4s
 	if res.RouteIsBalancer {
 		log.Printf("[Xray] Load balancing across %d servers via tags %v", len(res.OutboundTags), res.OutboundTags)
@@ -222,7 +221,8 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		if x.xrayCoreInstance, err = xrayCore.New(builtCfg); err != nil {
 			return fmt.Errorf("[Xray] Core init failed: %w", err)
 		}
-		x.xrayStatsManager = x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
+		stats := x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
+		x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.OutboundTags})
 		x.isXrayRunning.Store(true)
 		if err = x.xrayCoreInstance.Start(); err != nil {
 			x.xrayRollback()
@@ -232,15 +232,13 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 			x.xrayRollback()
 			return fmt.Errorf("[Xray] proxy SOCKS not ready at %s", endpoint)
 		}
-		if x.xrayStatsManager != nil {
-			_ = x.xrayStatsManager.Start()
-		}
+		_ = stats.Start()
 		x.startLiveness(livenessParams{
 			engine:   "xray",
 			interval: livenessInterval(o.livenessSec),
 			probe:    socksProber(loopbackSocksURL(endpoint, o.proxyUser, o.proxyPass), o.probeURL),
 		})
-		x.initXrayServerState(res, links, o)
+		x.initXrayServerState(res, links, o, stats)
 		x.configureIPResolve(ipResolveConfig{
 			enabled: o.resolveIP,
 			urlV4:   o.ipEchoV4,
@@ -260,7 +258,8 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 	if err != nil {
 		return fmt.Errorf("[Xray] Core init failed: %w", err)
 	}
-	x.xrayStatsManager = x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
+	stats := x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
+	x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.OutboundTags})
 
 	log.Println("[Xray] Starting core")
 	x.isXrayRunning.Store(true)
@@ -299,10 +298,8 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		return fmt.Errorf("[Xray] %w", err)
 	}
 
-	if x.xrayStatsManager != nil {
-		if err := x.xrayStatsManager.Start(); err != nil {
-			logfmt.Errorf("[Xray] Stats manager start error: %v", err)
-		}
+	if err := stats.Start(); err != nil {
+		logfmt.Errorf("[Xray] Stats manager start error: %v", err)
 	}
 
 	log.Println("[Xray] Started successfully, running")
@@ -314,7 +311,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		interval: livenessInterval(o.livenessSec),
 		probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.AppTrafficTag, mark), o.probeURL),
 	})
-	x.initXrayServerState(res, links, o)
+	x.initXrayServerState(res, links, o, stats)
 	x.configureIPResolve(ipResolveConfig{
 		enabled: o.resolveIP,
 		urlV4:   o.ipEchoV4,
@@ -345,7 +342,7 @@ func waitSocksReady(endpoint string) bool {
 // xrayRollback undoes a start that got as far as creating the instance.
 func (x *CoreController) xrayRollback() {
 	x.isXrayRunning.Store(false)
-	x.xrayStatsManager = nil
+	x.xrayTraffic.Store(nil)
 	if x.xrayCoreInstance != nil {
 		_ = x.xrayCoreInstance.Close()
 		x.xrayCoreInstance = nil
@@ -373,8 +370,7 @@ func (x *CoreController) xrayStop() error {
 		}
 		x.xrayCoreInstance = nil
 		x.isXrayRunning.Store(false)
-		x.xrayStatsManager = nil
-		x.xrayOutboundTags.Store([]string(nil))
+		x.xrayTraffic.Store(nil)
 	}
 
 	log.Println("[Xray] Core stopped")
@@ -404,28 +400,21 @@ func (x *CoreController) xrayTunnelDial(inst *xrayCore.Instance, tag string, mar
 }
 
 func (x *CoreController) getXrayTraffic() (uint64, uint64) {
-	tags, _ := x.xrayOutboundTags.Load().([]string)
+	src := x.xrayTraffic.Load()
+	if src == nil {
+		return 0, 0
+	}
+	return sumOutboundTraffic(xrayStatsSource{src.stats}, src.tags)
+}
+
+func sumOutboundTraffic(src statsSource, tags []string) (rx, tx uint64) {
 	if len(tags) == 0 {
 		tags = []string{xrayconfig.OutboundTag}
 	}
-
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
-
-	if x.xrayStatsManager == nil {
-		return 0, 0
-	}
-
-	var rx, tx uint64
 	for _, tag := range tags {
-		if uplink := x.xrayStatsManager.GetCounter(fmt.Sprintf(
-			"outbound>>>%s>>>traffic>>>uplink", tag)); uplink != nil {
-			tx += uint64(uplink.Value())
-		}
-		if downlink := x.xrayStatsManager.GetCounter(fmt.Sprintf(
-			"outbound>>>%s>>>traffic>>>downlink", tag)); downlink != nil {
-			rx += uint64(downlink.Value())
-		}
+		up, down := outboundTraffic(src, tag)
+		rx += down
+		tx += up
 	}
 	return rx, tx
 }

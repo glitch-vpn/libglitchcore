@@ -94,7 +94,7 @@ func TestInitXrayServerState_LeastPingNamesNoServerBeforeTraffic(t *testing.T) {
 	}
 	res := &xrayconfig.BuildResult{OutboundTags: []string{"proxy-0", "proxy-1"}, RouteIsBalancer: true}
 
-	x.initXrayServerState(res, links, engineOpts{strategy: xrayconfig.StrategyLeastPing})
+	x.initXrayServerState(res, links, engineOpts{strategy: xrayconfig.StrategyLeastPing}, nil)
 
 	got, _ := x.serverSelJSON.Load().(string)
 	if got == "" {

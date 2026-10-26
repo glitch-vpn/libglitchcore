@@ -3,6 +3,7 @@
 package core
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"math/rand"
@@ -85,11 +86,7 @@ func (x *CoreController) awgPassiveSampler() func() (liveness.WGSample, error) {
 	var lastRx, lastTx uint64
 	var seeded bool
 	return func() (liveness.WGSample, error) {
-		handle := x.loadCurrentAwgHandle()
-		if handle == 0 {
-			return liveness.WGSample{}, fmt.Errorf("no active awg handle")
-		}
-		dump, err := x.awgGetConfig(handle)
+		dump, err := x.awgDeviceState()
 		if err != nil {
 			return liveness.WGSample{}, err
 		}
@@ -421,6 +418,9 @@ func (x *CoreController) awgStopHandle(handle int) error {
 	if !exists {
 		return fmt.Errorf("AWG handle %d not found", handle)
 	}
+	// A reader that loads the device after this sees none; one that loaded it
+	// just before waits on the device lock Close holds.
+	x.awgDevice.CompareAndSwap(awgHandle.Device, nil)
 
 	if awgHandle.UAPI != nil {
 		awgHandle.UAPI.Close()
@@ -432,7 +432,6 @@ func (x *CoreController) awgStopHandle(handle int) error {
 
 	delete(x.awgHandles, handle)
 	if len(x.awgHandles) == 0 {
-		x.awgDevice = nil
 		x.awgTunnel = nil
 	}
 
@@ -441,33 +440,22 @@ func (x *CoreController) awgStopHandle(handle int) error {
 	return nil
 }
 
-func (x *CoreController) awgGetConfig(handle int) (string, error) {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
-
-	awgHandle, exists := x.awgHandles[handle]
-	if !exists {
-		return "", fmt.Errorf("AWG handle %d not found", handle)
+// awgDeviceState is the running device's UAPI dump, its peers' counters and
+// handshakes included.
+func (x *CoreController) awgDeviceState() (string, error) {
+	dev := x.awgDevice.Load()
+	if dev == nil {
+		return "", errors.New("no running awg device")
 	}
-
-	if awgHandle.Device == nil {
-		return "", fmt.Errorf("AWG device for handle %d is nil", handle)
-	}
-
-	config, err := awgHandle.Device.IpcGet()
+	dump, err := dev.IpcGet()
 	if err != nil {
 		return "", fmt.Errorf("failed to get AWG config: %w", err)
 	}
-
-	return config, nil
+	return dump, nil
 }
 
 func (x *CoreController) getAwgTraffic() (uint64, uint64) {
-	handle := x.loadCurrentAwgHandle()
-	if handle == 0 {
-		return 0, 0
-	}
-	dump, err := x.awgGetConfig(handle)
+	dump, err := x.awgDeviceState()
 	if err != nil {
 		logfmt.Warnf("[Generic] Failed to get AWG config for stats: %v", err)
 		return 0, 0

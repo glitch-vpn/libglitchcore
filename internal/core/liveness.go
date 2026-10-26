@@ -118,10 +118,8 @@ func (x *CoreController) startLiveness(p livenessParams) {
 	}()
 }
 
-// Pointers swap out under the lock, close and wait happen outside it: the
-// passive sampler takes coreMutex, so holding a lock across the wait would
-// deadlock a stop, and a second concurrent stop must find nil rather than
-// double-close quit.
+// Pointers swap out under the lock, close and wait happen outside it: a
+// second concurrent stop must find nil rather than double-close quit.
 func (x *CoreController) stopLiveness() {
 	x.loopsMu.Lock()
 	quit, done := x.livenessQuit, x.livenessDone

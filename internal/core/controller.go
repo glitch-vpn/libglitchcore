@@ -80,8 +80,6 @@ type CoreController struct {
 	statsDone          chan struct{}
 	awgIFName          string
 	connectedAtUnixMs  atomic.Int64
-	// atomic.Value holding []string: proxy outbound tags, stats summed over them.
-	xrayOutboundTags atomic.Value
 	// atomic.Int32 holding a liveness.State.
 	linkState   atomic.Int32
 	linkProbeMs atomic.Int64

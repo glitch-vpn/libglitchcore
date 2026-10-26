@@ -73,7 +73,7 @@ func (x *CoreController) platformAwgStart(ifName string, _ int, settings string)
 		Running: true,
 	}
 
-	x.awgDevice = awgDev
+	x.awgDevice.Store(awgDev)
 	x.awgTunnel = tunDev
 
 	x.emitStatus(EngineConnected, fmt.Sprintf("AWG tunnel %d started", handle))

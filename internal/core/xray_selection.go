@@ -21,7 +21,7 @@ const (
 
 // leastping is followed by traffic; random/roundrobin dispatch per connection,
 // so their Selected stays nil.
-func (x *CoreController) initXrayServerState(res *xrayconfig.BuildResult, links []string, o engineOpts) {
+func (x *CoreController) initXrayServerState(res *xrayconfig.BuildResult, links []string, o engineOpts, stats xrayStats.Manager) {
 	servers := serverinfo.FromLinks(links)
 	if len(servers) == 0 || len(servers) != len(res.OutboundTags) {
 		return
@@ -51,7 +51,7 @@ func (x *CoreController) initXrayServerState(res *xrayconfig.BuildResult, links 
 	base.Selected = nil
 	// The manager is captured, not re-read: its counters are atomics, so the
 	// poller needs no lock, and taking coreMutex here could deadlock a stop.
-	x.startSelectionWatch(base, tagTrafficPicker(x.xrayStatsManager, res.OutboundTags))
+	x.startSelectionWatch(base, tagTrafficPicker(stats, res.OutboundTags))
 }
 
 // tagTrafficPicker: the outbound whose byte counters grew most since the last
@@ -124,11 +124,18 @@ func tagTraffic(src statsSource, tags []string) []uint64 {
 		return out
 	}
 	for i, tag := range tags {
-		for _, dir := range [...]string{"uplink", "downlink"} {
-			if c := src.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>%s", tag, dir)); c != nil {
-				out[i] += uint64(c.Value())
-			}
-		}
+		up, down := outboundTraffic(src, tag)
+		out[i] = up + down
 	}
 	return out
+}
+
+func outboundTraffic(src statsSource, tag string) (up, down uint64) {
+	if c := src.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>uplink", tag)); c != nil {
+		up = uint64(c.Value())
+	}
+	if c := src.GetCounter(fmt.Sprintf("outbound>>>%s>>>traffic>>>downlink", tag)); c != nil {
+		down = uint64(c.Value())
+	}
+	return up, down
 }

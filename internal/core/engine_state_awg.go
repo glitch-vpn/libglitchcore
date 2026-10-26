@@ -4,6 +4,7 @@ package core
 
 import (
 	"net"
+	"sync/atomic"
 	"time"
 
 	"github.com/amnezia-vpn/amneziawg-go/v3/device"
@@ -22,8 +23,10 @@ type awgHandle struct {
 
 type awgState struct {
 	awgHandles map[int]*awgHandle
-	awgDevice  *device.Device
-	awgTunnel  tun.Device
+	// The running device, read without coreMutex: a start or a stop holds it
+	// for its whole run, and the device guards its own state.
+	awgDevice atomic.Pointer[device.Device]
+	awgTunnel tun.Device
 }
 
 func (x *CoreController) initEngineState() {
