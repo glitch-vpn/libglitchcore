@@ -323,6 +323,15 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 		return fmt.Errorf("[mihomo] another engine is already running")
 	}
 
+	// The dup stays ours until ApplyConfig hands it to sing-tun; left open, it
+	// keeps the platform's VPN interface up after the plugin closes its own fd.
+	unclaimedTunFd := -1
+	defer func() {
+		if unclaimedTunFd >= 0 {
+			closeTunFd(unclaimedTunFd)
+		}
+	}()
+
 	// Inbound: proxyPort>0 = loopback mixed, no TUN. Bridge (when tun2socks is
 	// linked; Windows + Android via env) = mihomo's tunnel fed in process by a
 	// tun2socks-bridged platform TUN, avoiding mihomo's sing-tun (Wintun
@@ -358,6 +367,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 			if derr != nil {
 				return fmt.Errorf("[mihomo] dup tun fd: %w", derr)
 			}
+			unclaimedTunFd = dupFd
 			tin.FileDescriptor = dupFd
 			// Android cmfa: seed mihomo's system resolver so bootstrap/proxy
 			// hostname resolution works (no-op elsewhere).
@@ -389,6 +399,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 	mihomoSessionTraffic.startSession()
 
 	log.Println("[mihomo] applying config")
+	unclaimedTunFd = -1
 	// ApplyConfig is void but blocks through TUN creation; a cleared TUN Enable
 	// flag is the only success signal (checked below, native TUN mode only).
 	executor.ApplyConfig(cfg, true)

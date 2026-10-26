@@ -31,7 +31,7 @@ func (x *CoreController) platformAwgStart(ifName string, tunFd int, settings str
 
 	tunDev, name, err := tun.CreateUnmonitoredTUNFromFD(dupFd)
 	if err != nil {
-		syscall.Close(dupFd)
+		closeTunFd(dupFd)
 		return -1, fmt.Errorf("create TUN: %w", err)
 	}
 

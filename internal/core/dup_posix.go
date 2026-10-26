@@ -8,3 +8,5 @@ import "syscall"
 // sing-tun/tun2socks close the fd they're handed, and without the dup that's the
 // platform's fd (Android PFD / iOS NE), which trips fdsan and aborts.
 func dupTunFd(fd int) (int, error) { return syscall.Dup(fd) }
+
+func closeTunFd(fd int) { _ = syscall.Close(fd) }
