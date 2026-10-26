@@ -881,3 +881,21 @@ func TestHy2Ports(t *testing.T) {
 		t.Fatal("expected error for invalid ports")
 	}
 }
+
+// dnsconfig.Config.Validate must refuse exactly the fake-ip filter entries
+// mihomo's own parser fails the start on, so the two cannot drift.
+func TestBuildConfig_FakeIPFilterAgreesWithDNSValidation(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
+	entries := []string{
+		"a*b", "*foo.com", "foo*.com", "a.+.com", "a+b.com", "+", "example.com.", "a..example.com",
+		"+.lan", "*.example.com", "a.*.example.com", ".example.com", "time.windows.com", "*", "localhost",
+		"rule-set:ads",
+	}
+	for _, entry := range entries {
+		dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}, FakeIPFilter: []string{entry}}
+		_, mihomoErr := BuildConfig([]string{link}, Inbound{Bridge: true, DNS: dns}, Options{}, routing.Profile{})
+		if refused := dns.Validate("mihomo") != nil; refused != (mihomoErr != nil) {
+			t.Errorf("fake-ip-filter %q: Validate refuses = %v, mihomo error = %v", entry, refused, mihomoErr)
+		}
+	}
+}

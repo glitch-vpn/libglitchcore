@@ -23,7 +23,7 @@ type AwgPick struct {
 // yields its first link, as a start does; a link with no Interface address is
 // an error rather than a guess.
 func PickAwg(req EngineStartRequest) (AwgPick, error) {
-	o, err := optsFromRequest(req)
+	o, err := optsFromRequest(req, "awg")
 	if err != nil {
 		return AwgPick{}, fmt.Errorf("invalid opts: %w", err)
 	}

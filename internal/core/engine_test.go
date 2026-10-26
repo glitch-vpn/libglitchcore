@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"runtime"
 	"slices"
 	"strings"
@@ -76,17 +77,17 @@ func TestOptsFromRequest_GeoAssetsDir(t *testing.T) {
 	if runtime.GOOS != "windows" {
 		abs = "/opt/geo/assets"
 	}
-	o, err := optsFromRequest(EngineStartRequest{Opts: map[string]string{"geoAssetsDir": " " + abs + " "}})
+	o, err := optsFromRequest(EngineStartRequest{Opts: map[string]string{"geoAssetsDir": " " + abs + " "}}, "xray")
 	if err != nil || o.geoAssetsDir != abs {
 		t.Errorf("abs path: geoAssetsDir = %q, err = %v; want %q", o.geoAssetsDir, err, abs)
 	}
 	// Relative paths are meaningless in a service process with an unknown
 	// working directory - ignored, not failed.
-	o, err = optsFromRequest(EngineStartRequest{Opts: map[string]string{"geoAssetsDir": "relative/dir"}})
+	o, err = optsFromRequest(EngineStartRequest{Opts: map[string]string{"geoAssetsDir": "relative/dir"}}, "xray")
 	if err != nil || o.geoAssetsDir != "" {
 		t.Errorf("relative path: geoAssetsDir = %q, err = %v; want ignored", o.geoAssetsDir, err)
 	}
-	o, err = optsFromRequest(EngineStartRequest{})
+	o, err = optsFromRequest(EngineStartRequest{}, "xray")
 	if err != nil || o.geoAssetsDir != "" {
 		t.Errorf("absent: geoAssetsDir = %q, err = %v; want empty", o.geoAssetsDir, err)
 	}
@@ -139,5 +140,38 @@ func TestCoreCapabilities_JSONShape(t *testing.T) {
 	}
 	if caps.Versions == nil {
 		t.Error("versions map missing")
+	}
+}
+
+func TestDNSFromRequest_FilterIsCheckedWhereTheEngineReadsIt(t *testing.T) {
+	bad := []string{"a*b"}
+	tunnel := map[string]string{}
+	proxy := map[string]string{"proxyPort": "1080"}
+	cases := []struct {
+		name    string
+		engine  string
+		mode    string
+		opts    map[string]string
+		refused bool
+	}{
+		{"mihomo tunnel, unset mode runs fake-ip", "mihomo", "", tunnel, true},
+		{"mihomo tunnel, fake-ip", "mihomo", dnsconfig.ModeFakeIP, tunnel, true},
+		{"mihomo tunnel, normal", "mihomo", dnsconfig.ModeNormal, tunnel, false},
+		{"mihomo proxy mode, fake-ip", "mihomo", dnsconfig.ModeFakeIP, proxy, false},
+		{"mihomo proxy mode, unset", "mihomo", "", proxy, false},
+		{"xray, unset mode is not fake-ip", "xray", "", tunnel, false},
+		{"awg reads none", "awg", dnsconfig.ModeFakeIP, tunnel, false},
+	}
+	for _, c := range cases {
+		req := EngineStartRequest{Opts: c.opts, DNSConfig: &dnsconfig.Config{Mode: c.mode, FakeIPFilter: bad}}
+		_, err := dnsFromRequest(req, c.engine)
+		if (err != nil) != c.refused {
+			t.Errorf("%s: err = %v, want refused = %v", c.name, err, c.refused)
+		}
+	}
+	// A filter xray reads as another matcher is refused on xray in fake-ip mode.
+	req := EngineStartRequest{DNSConfig: &dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, FakeIPFilter: []string{"keyword:domain:x.com"}}}
+	if _, err := dnsFromRequest(req, "xray"); err == nil {
+		t.Error("xray fake-ip: keyword that reads as a matcher was accepted")
 	}
 }

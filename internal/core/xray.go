@@ -65,7 +65,7 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 
 	// After the guards: a malformed request must not tear down the live
 	// session they protect (EngineError clears client session state).
-	o, err := optsFromRequest(req)
+	o, err := optsFromRequest(req, "xray")
 	if err != nil {
 		x.emitStatus(EngineError, fmt.Sprintf("[Xray] invalid opts: %v", err))
 		return glitchCoreResultError

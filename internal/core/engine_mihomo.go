@@ -280,7 +280,7 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 
 	// After the guards: a malformed request must not tear down the live
 	// session they protect (EngineError clears client session state).
-	o, err := optsFromRequest(req)
+	o, err := optsFromRequest(req, "mihomo")
 	if err != nil {
 		x.emitStatus(EngineError, fmt.Sprintf("[mihomo] invalid opts: %v", err))
 		return glitchCoreResultError

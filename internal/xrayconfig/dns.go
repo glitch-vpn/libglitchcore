@@ -237,7 +237,8 @@ func plainNameServers(servers []string) []*xrayConf.NameServerConfig {
 
 // domainMatchers classifies entries into xray domain matchers
 // (domain/full/keyword/regexp/geosite). IP and process entries carry no name
-// and are dropped - they mean nothing to a per-server domain scope.
+// and are dropped - they mean nothing to a per-server domain scope. The
+// profile and the fake-ip filter are validated before they reach here.
 func domainMatchers(filter []string) []string {
 	var domains []string
 	for _, f := range filter {
@@ -247,9 +248,7 @@ func domainMatchers(filter []string) []string {
 		}
 		switch kind {
 		case routing.KindGeoSite:
-			if routing.ValidGeoCode(val) {
-				domains = append(domains, "geosite:"+val)
-			}
+			domains = append(domains, "geosite:"+val)
 		case routing.KindDomainSuffix:
 			domains = append(domains, "domain:"+val)
 		case routing.KindDomainFull:

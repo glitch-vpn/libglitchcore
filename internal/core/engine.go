@@ -25,7 +25,8 @@ type EngineStartRequest struct {
 }
 
 // dnsFromRequest: falls back to the legacy DNS string; disableIPv6 rides on the DNS intent.
-func dnsFromRequest(req EngineStartRequest) dnsconfig.Config {
+// An entry the engines would fail the start on is refused here, naming it.
+func dnsFromRequest(req EngineStartRequest, engine string) (dnsconfig.Config, error) {
 	var cfg dnsconfig.Config
 	switch {
 	case req.DNSConfig != nil:
@@ -34,7 +35,21 @@ func dnsFromRequest(req EngineStartRequest) dnsconfig.Config {
 		cfg = dnsconfig.Config{Servers: []string{req.DNS}}
 	}
 	cfg.DisableIPv6 = boolOpt(req.Opts["disableIPv6"])
-	return cfg
+	// mihomo's proxy-mode inbound never applies the filter, and a mihomo tunnel
+	// start with no mode runs fake-ip; xray takes the mode as given.
+	effective := cfg
+	if engine == "mihomo" {
+		if proxyPortFromOpts(req.Opts) > 0 {
+			return cfg, nil
+		}
+		if strings.TrimSpace(effective.Mode) == "" {
+			effective.Mode = dnsconfig.ModeFakeIP
+		}
+	}
+	if err := effective.Validate(engine); err != nil {
+		return dnsconfig.Config{}, fmt.Errorf("dnsConfig: %w", err)
+	}
+	return cfg, nil
 }
 
 func boolOpt(s string) bool {
@@ -72,7 +87,7 @@ type engineOpts struct {
 	ipEchoV6  string
 }
 
-func optsFromRequest(req EngineStartRequest) (engineOpts, error) {
+func optsFromRequest(req EngineStartRequest, engine string) (engineOpts, error) {
 	o := req.Opts
 	sniffing := true
 	if v, ok := o["sniffing"]; ok && strings.TrimSpace(v) != "" {
@@ -86,9 +101,13 @@ func optsFromRequest(req EngineStartRequest) (engineOpts, error) {
 	if err != nil {
 		return engineOpts{}, err
 	}
+	dns, err := dnsFromRequest(req, engine)
+	if err != nil {
+		return engineOpts{}, err
+	}
 	return engineOpts{
 		routing:         prof,
-		dns:             dnsFromRequest(req),
+		dns:             dns,
 		strategy:        o["balancerStrategy"],
 		proxyPort:       proxyPortFromOpts(o),
 		sniffing:        sniffing,

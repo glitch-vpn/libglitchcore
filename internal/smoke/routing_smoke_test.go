@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
+	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 )
 
 func TestSmoke_RoutingTiersOpt(t *testing.T) {
@@ -96,5 +97,39 @@ func TestSmoke_RulesItCannotCarryFailStart(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+// A fake-ip filter entry xray would read as another matcher fails the start with
+// the entry named. mihomo reads the filter only in a tunnel start, which the
+// loopback suite cannot run; its grammar is held to mihomo's parser in mihomoconfig.
+func TestSmoke_FakeIPFilterEntryItCannotCarryFailsStart(t *testing.T) {
+	core.Initialize()
+
+	upstream := startVlessServer(t)
+	link := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#Refused", testUUID, upstream)
+	cases := []struct{ engine, entry string }{
+		{"xray", "keyword:domain:example.com"},
+	}
+	for _, c := range cases {
+		t.Run(c.engine+"/"+c.entry, func(t *testing.T) {
+			ev := captureEvents(t)
+			res := core.EngineStart(c.engine, core.EngineStartRequest{
+				Config: link,
+				DNSConfig: &dnsconfig.Config{
+					Mode:         dnsconfig.ModeFakeIP,
+					Servers:      []string{"1.1.1.1"},
+					FakeIPFilter: []string{"+.lan", c.entry},
+				},
+				Opts: map[string]string{"proxyPort": strconv.Itoa(freePort(t))},
+			})
+			if res != core.ResultError {
+				stopEngine(t, c.engine)
+				t.Fatalf("EngineStart = %d, want error", res)
+			}
+			if msg := ev.waitFor(t, core.EngineError, 5*time.Second); !strings.Contains(msg, fmt.Sprintf("fakeIpFilter: %q", c.entry)) {
+				t.Fatalf("EngineError = %q, want it to name the entry", msg)
+			}
+		})
 	}
 }

@@ -2,10 +2,13 @@
 package dnsconfig
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
+	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
 const (
@@ -117,4 +120,91 @@ func Scheme(server string) string {
 		return strings.ToLower(server[:i])
 	}
 	return ""
+}
+
+// Validate refuses a fake-ip filter entry the engine that reads it would fail
+// the start on or read as something else, naming the entry. The filter is read
+// only in fake-ip mode; awg reads none. The grammar is the engine's own:
+//
+// mihomo reads a domain pattern whose wildcards are whole labels ("*" anywhere,
+// "+" as the first label of a longer name), with no trailing dot or empty
+// label; "a*b", "*foo.com" and "a.+.com" fail its domain trie. "geosite:" takes
+// codes, and "rule-set:" names a rule provider, which the core never defines.
+//
+// xray reads the entry as routing.Classify does, so "regexp:" and a keyword
+// containing "+" stay valid; a bad geosite code or a keyword that reads as
+// another matcher is refused as in a routing rule.
+func (c Config) Validate(engine string) error {
+	if !c.FakeIP() {
+		return nil
+	}
+	var check func(string) error
+	switch engine {
+	case "mihomo":
+		check = validateMihomoFilterEntry
+	case "xray":
+		check = validateXrayFilterEntry
+	default:
+		return nil
+	}
+	for _, entry := range c.NormalizedFilter() {
+		if err := check(entry); err != nil {
+			return fmt.Errorf("fakeIpFilter: %q: %w", entry, err)
+		}
+	}
+	return nil
+}
+
+func validateXrayFilterEntry(entry string) error {
+	kind, val, ok := routing.Classify(entry)
+	if !ok {
+		return nil
+	}
+	switch kind {
+	case routing.KindGeoSite:
+		if !routing.ValidGeoCode(val) {
+			return errors.New("invalid geosite code")
+		}
+	case routing.KindDomainKeyword:
+		return routing.ValidKeyword(val)
+	}
+	return nil
+}
+
+func validateMihomoFilterEntry(entry string) error {
+	lower := strings.ToLower(entry)
+	if strings.HasPrefix(lower, "rule-set:") {
+		return errors.New("rule-set is not supported: no rule provider is defined")
+	}
+	if strings.HasPrefix(lower, "geosite:") {
+		for _, code := range strings.Split(entry[len("geosite:"):], ",") {
+			if !routing.ValidGeoCode(code) {
+				return fmt.Errorf("invalid geosite code %q", code)
+			}
+		}
+		return nil
+	}
+	if strings.HasSuffix(entry, ".") {
+		return errors.New("a trailing dot is not allowed")
+	}
+	labels := strings.Split(entry, ".")
+	for i, label := range labels {
+		if label == "" && i > 0 {
+			return fmt.Errorf("label %d is empty", i+1)
+		}
+		if strings.Contains(label, "+") {
+			switch {
+			case label != "+":
+				return errors.New(`"+" must be a whole label`)
+			case i != 0:
+				return errors.New(`"+" is only allowed as the first label`)
+			case len(labels) == 1:
+				return errors.New(`"+" must be followed by another label`)
+			}
+		}
+		if strings.Contains(label, "*") && label != "*" {
+			return fmt.Errorf(`"*" must be a whole label, not part of %q`, label)
+		}
+	}
+	return nil
 }

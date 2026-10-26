@@ -1,6 +1,9 @@
 package dnsconfig
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestScheme(t *testing.T) {
 	cases := map[string]string{
@@ -94,5 +97,69 @@ func TestFakeIP(t *testing.T) {
 	}
 	if (Config{Mode: "normal"}).FakeIP() || (Config{}).FakeIP() {
 		t.Fatal("non-fake-ip misdetected")
+	}
+}
+
+func TestValidateFakeIPFilterMihomo(t *testing.T) {
+	refused := map[string]string{
+		"a*b":            `"*" must be a whole label`,
+		"*foo.com":       `"*" must be a whole label`,
+		"foo*.com":       `"*" must be a whole label`,
+		"a.+.com":        `"+" is only allowed as the first label`,
+		"a+b.com":        `"+" must be a whole label`,
+		"+":              `"+" must be followed by another label`,
+		"example.com.":   "trailing dot",
+		"a..example.com": "label 2 is empty",
+		"rule-set:ads":   "rule-set is not supported",
+		"geosite:рф":     "invalid geosite code",
+		"geosite:cn,a b": "invalid geosite code",
+	}
+	for entry, want := range refused {
+		err := Config{Mode: ModeFakeIP, FakeIPFilter: []string{"+.ok.example", entry}}.Validate("mihomo")
+		if err == nil || !strings.Contains(err.Error(), want) || !strings.Contains(err.Error(), entry) {
+			t.Errorf("Validate(%q) = %v, want an error naming the entry and %q", entry, err, want)
+		}
+	}
+	accepted := []string{
+		"+.lan", "*.example.com", "a.*.example.com", ".example.com", "time.windows.com",
+		"geosite:category-ads", "geosite:cn,geolocation-!cn", "  *.local  ",
+	}
+	if err := (Config{Mode: ModeFakeIP, FakeIPFilter: accepted}).Validate("mihomo"); err != nil {
+		t.Errorf("Validate(%v) = %v, want nil", accepted, err)
+	}
+}
+
+func TestValidateFakeIPFilterXray(t *testing.T) {
+	refused := map[string]string{
+		"keyword:domain:example.com": "another matcher",
+		"keyword:full:a.b":           "another matcher",
+		"geosite:рф":                 "invalid geosite code",
+	}
+	for entry, want := range refused {
+		err := Config{Mode: ModeFakeIP, FakeIPFilter: []string{entry}}.Validate("xray")
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate(%q) = %v, want an error naming %q", entry, err, want)
+		}
+	}
+	// Entries xray takes that mihomo's domain trie would not.
+	accepted := []string{"regexp:^a.*b$", "keyword:a+b", "a*b", "*foo.com", "+.lan", "geosite:cn@ads", "domain:example.com"}
+	if err := (Config{Mode: ModeFakeIP, FakeIPFilter: accepted}).Validate("xray"); err != nil {
+		t.Errorf("Validate(%v) = %v, want nil", accepted, err)
+	}
+}
+
+func TestValidateFakeIPFilterOnlyWhereItIsRead(t *testing.T) {
+	bad := []string{"a*b", "rule-set:x"}
+	for name, c := range map[string]struct {
+		cfg    Config
+		engine string
+	}{
+		"normal mode": {Config{Mode: ModeNormal, FakeIPFilter: bad}, "mihomo"},
+		"unset mode":  {Config{FakeIPFilter: bad}, "mihomo"},
+		"awg":         {Config{Mode: ModeFakeIP, FakeIPFilter: bad}, "awg"},
+	} {
+		if err := c.cfg.Validate(c.engine); err != nil {
+			t.Errorf("%s: Validate = %v, want nil", name, err)
+		}
 	}
 }
