@@ -120,6 +120,13 @@ func MeasurePings(cRequestJSON *C.char) *C.char {
 	return C.CString(string(data))
 }
 
+//export AwgPick
+func AwgPick(cRequestJSON *C.char) *C.char {
+	// Caller frees via FreeStatusMessage. In-process like MeasurePings: the
+	// pick only probes and parses, so it needs no service command.
+	return C.CString(core.PickAwgJSON(C.GoString(cRequestJSON)))
+}
+
 //export EngineStart
 func EngineStart(cEngineID *C.char, cRequestJSON *C.char) C.int {
 	engineID := C.GoString(cEngineID)

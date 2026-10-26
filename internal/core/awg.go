@@ -8,6 +8,7 @@ import (
 	"math/rand"
 	"net"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -157,7 +158,12 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 
 	go func() {
 		mark := x.sessionGen.Load()
-		chosen, idx := x.pickAwgConfig(links, o)
+		chosen, idx, err := chooseAwgLink(links, o)
+		if err != nil {
+			x.clearSessionState()
+			x.emitStatus(EngineError, fmt.Sprintf("[AWG] %v", err))
+			return
+		}
 		// awg (L3) takes only a plain resolver; empty -> INI DNS field.
 		if err := x.awgStart(ifaceName, req.TunFD, chosen, o.dns.FirstPlainServer()); err != nil {
 			logfmt.Errorf("[AWG] Failed to start AWG: %v", err)
@@ -185,8 +191,10 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 	return glitchCoreResultSuccess
 }
 
+var measureAwgLinks = pinger.Measure
+
 // Multilink: probe each awg:// link, pick by strategy; fall back to first if none alive.
-func (x *CoreController) pickAwgConfig(links []string, o engineOpts) (string, int) {
+func pickAwgConfig(links []string, o engineOpts) (string, int) {
 	if len(links) == 0 {
 		return "", 0
 	}
@@ -194,7 +202,7 @@ func (x *CoreController) pickAwgConfig(links []string, o engineOpts) (string, in
 		return links[0], 0
 	}
 
-	res := pinger.Measure(pinger.Request{Links: links, ProbeURL: o.probeURL})
+	res := measureAwgLinks(pinger.Request{Links: links, ProbeURL: o.probeURL})
 	idx := pickAwgWinner(res, o.strategy)
 	if idx < 0 || idx >= len(links) {
 		idx = 0
@@ -205,6 +213,20 @@ func (x *CoreController) pickAwgConfig(links []string, o engineOpts) (string, in
 	}
 	log.Printf("[AWG] multilink: %d links, strategy=%q -> picked #%d (%s)", len(links), o.strategy, idx, delay)
 	return links[idx], idx
+}
+
+// chooseAwgLink takes the link a caller already picked through PickAwg when
+// the start names one, so the pool is probed once per connect.
+func chooseAwgLink(links []string, o engineOpts) (string, int, error) {
+	if o.awgPicked == "" {
+		chosen, idx := pickAwgConfig(links, o)
+		return chosen, idx, nil
+	}
+	idx, err := strconv.Atoi(o.awgPicked)
+	if err != nil || idx < 0 || idx >= len(links) {
+		return "", 0, fmt.Errorf("awgPicked %q is not an index into the %d links", o.awgPicked, len(links))
+	}
+	return links[idx], idx, nil
 }
 
 // awg is pick-a-winner: the selection is final for the session.

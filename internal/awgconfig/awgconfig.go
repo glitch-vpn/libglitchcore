@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"slices"
 	"strconv"
@@ -389,6 +390,71 @@ func Address(cfg string) string {
 		}
 	}
 	return ""
+}
+
+// Addresses returns every Interface Address of a WireGuard config in order,
+// the IPv4 and IPv6 entries alike.
+func Addresses(cfg string) []string {
+	var out []string
+	forEachKey(cfg, "interface", "address", func(fields []string) {
+		out = append(out, fields...)
+	})
+	return out
+}
+
+// TunnelAddresses is Addresses cut to what a TUN can carry: a prefix that
+// parses for its family, and an address that is not loopback, unspecified,
+// multicast or link-local. A config is untrusted input, and a TUN builder
+// that refuses every address leaves no tunnel at all.
+func TunnelAddresses(cfg string) []string {
+	var out []string
+	for _, a := range Addresses(cfg) {
+		prefix, err := netip.ParsePrefix(a)
+		if err != nil {
+			continue
+		}
+		ip := prefix.Addr()
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out
+}
+
+// PeersCarryIPv6 reports whether any Peer routes an IPv6 prefix in AllowedIPs.
+func PeersCarryIPv6(cfg string) bool {
+	carries := false
+	forEachKey(cfg, "peer", "allowedips", func(fields []string) {
+		for _, f := range fields {
+			if strings.Contains(f, ":") {
+				carries = true
+			}
+		}
+	})
+	return carries
+}
+
+func forEachKey(cfg, wantSection, wantKey string, fn func(fields []string)) {
+	section := ""
+	for _, l := range strings.Split(cfg, "\n") {
+		line := strings.TrimSpace(l)
+		if i := strings.IndexByte(line, '#'); i >= 0 {
+			line = strings.TrimSpace(line[:i])
+		}
+		if line == "" || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			section = strings.ToLower(strings.Trim(line, "[] \t"))
+			continue
+		}
+		key, val, ok := strings.Cut(line, "=")
+		if !ok || section != wantSection || strings.ToLower(strings.TrimSpace(key)) != wantKey {
+			continue
+		}
+		fn(strings.FieldsFunc(val, func(r rune) bool { return r == ',' || r == ';' || r == ' ' || r == '\t' }))
+	}
 }
 
 // SumRxTx sums rx_bytes/tx_bytes counters from a UAPI get dump.

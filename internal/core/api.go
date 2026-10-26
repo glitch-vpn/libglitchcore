@@ -13,6 +13,29 @@ const (
 	ResultError   = glitchCoreResultError
 )
 
+// PickAwgJSON is the AwgPick export's whole body: a start request in, the pick
+// or {"error":...} out. Error text is scrubbed, since it can quote a link.
+func PickAwgJSON(requestJSON string) string {
+	var req EngineStartRequest
+	if err := json.Unmarshal([]byte(requestJSON), &req); err != nil {
+		return errorJSON(err)
+	}
+	pick, err := PickAwg(req)
+	if err != nil {
+		return errorJSON(err)
+	}
+	data, err := json.Marshal(pick)
+	if err != nil {
+		return errorJSON(err)
+	}
+	return string(data)
+}
+
+func errorJSON(err error) string {
+	data, _ := json.Marshal(map[string]string{"error": logfmt.Scrub(err.Error())})
+	return string(data)
+}
+
 // Set by the root package from -ldflags -X main.built* (link target stays main).
 var (
 	builtXrayCoreVersion  = "unknown"

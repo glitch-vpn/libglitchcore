@@ -42,6 +42,38 @@ EngineStop("xray");
 `CoreCapabilities()` returns the engines this particular binary contains, so a
 UI can hide what is not there.
 
+## Picking an awg pool's link first
+
+A caller that has to build the TUN itself (Android's `VpnService`) needs the
+addresses of the link an awg pool will use before `EngineStart`, and the core
+picks that link by probing. `AwgPick(request_json)` runs the same pick and
+answers with the link's position and its tunnel addresses. The caller frees
+the string with `FreeStatusMessage`.
+
+```jsonc
+// request: the start request's config and opts
+{"config": "awg://…#a\nawg://…#b", "opts": {"balancerStrategy": "leastping"}}
+// answer
+{"index": 1, "addresses": ["10.2.0.2/32", "fd00:2::2/128"], "peersCarryV6": true}
+// or
+{"error": "chosen awg link has no Interface address"}
+```
+
+`addresses` are the chosen link's `[Interface]` addresses, IPv4 and IPv6 in
+order; `peersCarryV6` says whether any of its peers routes IPv6. The link
+itself is not returned, since it carries the private key. A pool whose probes
+all fail answers with its first link, as a start does; a link with no address
+is an error. Addresses a TUN cannot carry (loopback, unspecified, multicast,
+link-local, or a prefix that does not parse) are left out of `addresses`.
+Start the engine with the whole pool and `opts.awgPicked` set to
+the answer's `index`: the start then uses that link without probing again and
+still reports the pool in the server event.
+
+The call probes and parses and does nothing that needs elevation, so it runs in
+the caller's process on Windows too and has no service command;
+`awgPicked` travels to the service inside the start request like every other
+opt.
+
 ## The start request
 
 Everything engine-specific travels as JSON, which is why the ABI stays put
@@ -84,6 +116,9 @@ when an engine gains an option:
   `regexp:expr`, `process:app.exe` or a bare IP/CIDR. A start fails on a
   domain, `full:` or `keyword:` matcher holding a comma, and on a regexp with
   a space beside a comma: mihomo splits its rule lines there.
+* `opts.awgPicked` — an awg start only: the index of the pool's link, from
+  `AwgPick`, to use without probing again. An index outside the pool fails the
+  start asynchronously: `EngineStart` returns, then an `EngineError` follows.
 * `dnsConfig` — resolvers (plain, DoT, DoH, DoQ), fake-ip mode, a hosts table
   and separate resolvers for direct-routed names.
 

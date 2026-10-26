@@ -54,6 +54,7 @@ type engineOpts struct {
 	// fake-IP->domain mapping is never disabled (fake-ip can't route without it).
 	sniffing    bool
 	probeURL    string
+	awgPicked   string
 	livenessSec int
 	// xray Mux (mihomo ignores); muxConcurrency==0 = off.
 	muxConcurrency  int
@@ -92,6 +93,7 @@ func optsFromRequest(req EngineStartRequest) (engineOpts, error) {
 		proxyPort:       proxyPortFromOpts(o),
 		sniffing:        sniffing,
 		probeURL:        probeURLOpt(o["probeUrl"]),
+		awgPicked:       strings.TrimSpace(o["awgPicked"]),
 		livenessSec:     intOpt(o["livenessIntervalSec"]),
 		muxConcurrency:  intOpt(o["muxConcurrency"]),
 		xudpConcurrency: intOpt(o["xudpConcurrency"]),

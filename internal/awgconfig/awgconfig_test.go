@@ -325,3 +325,39 @@ func TestLastHandshakeUnix(t *testing.T) {
 		t.Fatalf("LastHandshakeUnix(no handshake) = %d, want 0", got)
 	}
 }
+
+func TestAddressesAndPeersCarryIPv6(t *testing.T) {
+	cfg := "[Interface]\r\nPrivateKey = AAAA\r\nAddress = 10.0.0.2/32, fd00::2/128 # tun\r\nAddress = 10.0.0.3/32\r\n" +
+		"[Peer]\r\nPublicKey = BBBB\r\nAllowedIPs = 0.0.0.0/0\r\n"
+	got := Addresses(cfg)
+	if strings.Join(got, " ") != "10.0.0.2/32 fd00::2/128 10.0.0.3/32" {
+		t.Fatalf("Addresses = %v", got)
+	}
+	if PeersCarryIPv6(cfg) {
+		t.Error("an IPv4-only peer reported as carrying IPv6")
+	}
+	if !PeersCarryIPv6(cfg + "[Peer]\nPublicKey = CCCC\nAllowedIPs = 10.0.0.0/8;::/0\n") {
+		t.Error("a ::/0 peer not reported as carrying IPv6")
+	}
+	if len(Addresses("not a config")) != 0 || PeersCarryIPv6("") {
+		t.Error("garbage yielded values")
+	}
+}
+
+func TestTunnelAddresses_KeepsOnlyWhatATunCanCarry(t *testing.T) {
+	iface := func(addresses string) string {
+		return "[Interface]\nPrivateKey = AAAA\nAddress = " + addresses + "\n"
+	}
+	for _, bad := range []string{
+		"127.0.0.2/32", "10.8.0.2/33", "10.8.0.256/32", "::1/128", "0.0.0.0/0",
+		"169.254.1.1/32", "fe80::2/64", "224.0.0.1/32", "ff02::1/128", "fd00::2/129", "10.8.0.2", "garbage",
+	} {
+		if got := TunnelAddresses(iface(bad)); len(got) != 0 {
+			t.Errorf("%q kept as %v", bad, got)
+		}
+	}
+	mixed := iface("127.0.0.2/32, 10.8.0.2/33, 10.8.0.2/32, ::1/128, fd00:8::2/128")
+	if got := strings.Join(TunnelAddresses(mixed), " "); got != "10.8.0.2/32 fd00:8::2/128" {
+		t.Errorf("mixed kept %q", got)
+	}
+}
