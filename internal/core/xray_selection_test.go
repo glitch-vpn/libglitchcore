@@ -2,7 +2,12 @@
 
 package core
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
+)
 
 type fakeCounter struct{ v int64 }
 
@@ -77,5 +82,25 @@ func TestTagTrafficPicker_NoManager(t *testing.T) {
 	}
 	if got := pick(); got != -1 {
 		t.Fatalf("nil manager = %d, want -1", got)
+	}
+}
+
+func TestInitXrayServerState_LeastPingNamesNoServerBeforeTraffic(t *testing.T) {
+	x := &CoreController{}
+	t.Cleanup(x.stopSelectionWatch)
+	links := []string{
+		"vless://11111111-1111-1111-1111-111111111111@192.0.2.1:443?security=tls#a",
+		"vless://11111111-1111-1111-1111-111111111111@192.0.2.2:443?security=tls#b",
+	}
+	res := &xrayconfig.BuildResult{OutboundTags: []string{"proxy-0", "proxy-1"}, RouteIsBalancer: true}
+
+	x.initXrayServerState(res, links, engineOpts{strategy: xrayconfig.StrategyLeastPing})
+
+	got, _ := x.serverSelJSON.Load().(string)
+	if got == "" {
+		t.Fatal("no server selection emitted")
+	}
+	if strings.Contains(got, `"selected"`) {
+		t.Errorf("selection names a server before traffic identified one: %s", got)
 	}
 }

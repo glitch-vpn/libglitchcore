@@ -39,12 +39,9 @@ func (x *CoreController) initXrayServerState(res *xrayconfig.BuildResult, links 
 		strat = xrayconfig.StrategyLeastPing
 	}
 	sel.Strategy = strat
-	if strat == xrayconfig.StrategyLeastPing {
-		// Until traffic identifies an outbound, the balancer routes through its
-		// fallback tag - the first one.
-		s := servers[0]
-		sel.Selected = &s
-	}
+	// No pick is named until traffic identifies one: the observatory answers
+	// within seconds and the balancer leaves its fallback tag then, so naming
+	// the first server would name one the session may not be using.
 	x.setServerSelection(&sel)
 
 	if strat != xrayconfig.StrategyLeastPing {
