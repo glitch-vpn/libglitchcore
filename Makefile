@@ -83,7 +83,10 @@ ffi:
 	AWG_VER=$$(go list -m -f '{{.Version}}' github.com/amnezia-vpn/amneziawg-go/v3 2>/dev/null || echo unknown)
 	MIHOMO_VER=$$(go list -m -f '{{.Version}}' github.com/metacubex/mihomo 2>/dev/null || echo unknown)
 	LDFLAGS="-s -w -X main.builtXrayCoreVersion=$$XRAY_VER -X main.builtAmneziawgVersion=$$AWG_VER -X main.builtMihomoVersion=$$MIHOMO_VER"
-	ANDROID_LDFLAGS="$$LDFLAGS -extldflags \"-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384\""
+	# -checklinkname=0: xray's finalmask (via pion) links wlynxg/anet, whose Android
+	# file reaches net.zoneCache by go:linkname, which Go 1.27 refuses; xray's own
+	# release builds pass the same flag.
+	ANDROID_LDFLAGS="$$LDFLAGS -checklinkname=0 -extldflags \"-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384\""
 	# Engine set -> negative build tags (default: everything in).
 	ENGINE_SET=$$(printf '%s' "$${GLITCH_ENGINES:-xray,awg,mihomo}" | tr ',' ' ')
 	HAS_XRAY=""; HAS_AWG=""; HAS_MIHOMO=""
