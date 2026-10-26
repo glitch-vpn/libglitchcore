@@ -113,11 +113,14 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 		TCPSendBufferSize:        "4m",
 		TCPReceiveBufferSize:     "4m",
 	}
+	// engine.Start owns the dup from here, whether it succeeds or not.
 	engine.Insert(key)
-	go func() {
-		engine.Start()
-		useTun2socksSink(logLevel)
-	}()
+	startErr := engine.Start()
+	useTun2socksSink(logLevel)
+	if startErr != nil {
+		setBridgeProxy(nil)
+		return fmt.Errorf("start tun2socks: %w", startErr)
+	}
 	x.isTun2socksRunning.Store(true)
 	x.tun2socksKey = key
 	log.Println("[tun2socks] started")

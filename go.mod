@@ -16,7 +16,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 )
 
-replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.1
+replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.2
 
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect

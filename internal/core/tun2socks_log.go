@@ -23,8 +23,8 @@ func capTun2socksLogLevel(level string) string {
 
 // useTun2socksSink replaces the stderr logger tun2socks builds for itself on
 // every engine start. Lines it writes before the swap stay on its own logger.
-// It runs after engine.Start on the start goroutine, outside coreMutex: the
-// swap must follow Start's own, and the logger is tun2socks's to guard.
+// It runs right after engine.Start: the swap must follow its own, and the
+// logger is tun2socks's to guard.
 func useTun2socksSink(level string) {
 	parsed, err := tun2socksLog.ParseLevel(level)
 	if err != nil || parsed == tun2socksLog.SilentLevel {
