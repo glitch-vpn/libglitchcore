@@ -32,7 +32,7 @@ func startVMessServer(t *testing.T, network string) int {
 			"settings": {"clients": [{"id": %q}]},
 			"streamSettings": %s
 		}],
-		"outbounds": [{"protocol": "freedom"}]
+		"outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow"}]}}]
 	}`, port, testUUID, stream)
 	inst, err := xrayCore.StartInstance("json", []byte(cfg))
 	if err != nil {

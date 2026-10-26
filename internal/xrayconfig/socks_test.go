@@ -28,18 +28,18 @@ func TestApplyProxyInbound_Auth(t *testing.T) {
 		t.Fatalf("ApplyProxyInbound(auth): %v", err)
 	}
 	var s struct {
-		Auth     string `json:"auth"`
-		UDP      bool   `json:"udp"`
-		Accounts []struct {
+		Auth  string `json:"auth"`
+		UDP   bool   `json:"udp"`
+		Users []struct {
 			User string `json:"user"`
 			Pass string `json:"pass"`
-		} `json:"accounts"`
+		} `json:"users"`
 	}
 	idx := findInboundIdx(authCfg.InboundConfigs, AppTrafficTag)
 	if err := json.Unmarshal(*authCfg.InboundConfigs[idx].Settings, &s); err != nil {
 		t.Fatalf("settings unmarshal: %v", err)
 	}
-	if s.Auth != "password" || len(s.Accounts) != 1 || s.Accounts[0].User != "alice" || s.Accounts[0].Pass != `p"ass` {
+	if s.Auth != "password" || len(s.Users) != 1 || s.Users[0].User != "alice" || s.Users[0].Pass != `p"ass` {
 		t.Fatalf("auth settings = %+v, want password alice/p\"ass (quote preserved)", s)
 	}
 	if s.UDP {
@@ -75,8 +75,8 @@ func TestApplySniffing(t *testing.T) {
 
 	ApplySniffing(cfg, true)
 	for _, in := range cfg.InboundConfigs {
-		if got := len(*in.SniffingConfig.DestOverride); got != 4 {
-			t.Fatalf("sniffing on: inbound %q destOverride = %v, want full set", in.Tag, *in.SniffingConfig.DestOverride)
+		if got := len(in.SniffingConfig.DestOverride); got != 4 {
+			t.Fatalf("sniffing on: inbound %q destOverride = %v, want full set", in.Tag, in.SniffingConfig.DestOverride)
 		}
 	}
 
@@ -86,8 +86,8 @@ func TestApplySniffing(t *testing.T) {
 		if sc == nil || !sc.Enabled || !sc.RouteOnly {
 			t.Fatalf("sniffing off: inbound %q must keep Enabled+RouteOnly: %+v", in.Tag, sc)
 		}
-		if len(*sc.DestOverride) != 1 || (*sc.DestOverride)[0] != "fakedns" {
-			t.Fatalf("sniffing off: inbound %q destOverride = %v, want [fakedns]", in.Tag, *sc.DestOverride)
+		if len(sc.DestOverride) != 1 || sc.DestOverride[0] != "fakedns" {
+			t.Fatalf("sniffing off: inbound %q destOverride = %v, want [fakedns]", in.Tag, sc.DestOverride)
 		}
 	}
 
@@ -118,7 +118,7 @@ func TestAppSniffing_MatchesTheInboundSet(t *testing.T) {
 		ApplySniffing(cfg, content)
 		sc := cfg.InboundConfigs[0].SniffingConfig
 		got := AppSniffing(content)
-		if !got.Enabled || got.RouteOnly != sc.RouteOnly || !slices.Equal(got.OverrideDestinationForProtocol, []string(*sc.DestOverride)) {
+		if !got.Enabled || got.RouteOnly != sc.RouteOnly || !slices.Equal(got.OverrideDestinationForProtocol, []string(sc.DestOverride)) {
 			t.Fatalf("content sniffing %v: AppSniffing = %+v, inbound = %+v", content, got, sc)
 		}
 	}

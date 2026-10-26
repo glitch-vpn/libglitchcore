@@ -4,7 +4,7 @@
 
 | Need | Why |
 |---|---|
-| Go 1.26.4 | matches CI; the toolchain version is pinned there |
+| Go 1.27.3 | matches CI; the toolchain version is pinned there |
 | Docker | cross-compilation for all targets runs in the toolchain image |
 | Dart SDK headers | the root FFI shell includes `dart_api_dl.h`; `go vet ./` needs `CGO_CFLAGS="-I<dart-sdk>/include"` |
 | mingw-w64 (optional) | local Windows builds without Docker, e.g. `CC=x86_64-w64-mingw32-gcc` |

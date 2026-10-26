@@ -351,3 +351,16 @@ func TestMatcherRules_Classification(t *testing.T) {
 		t.Errorf("want 4 ip matchers (geoip:рф dropped), got %v", ips)
 	}
 }
+
+func TestDirectOutbound_ResolvesThroughSockopt(t *testing.T) {
+	cfg := &xrayConf.Config{}
+	ensureDirectOutbound(RoutingProfile{DirectInterface: "Ethernet"}, cfg)
+	ob := cfg.OutboundConfigs[0]
+	if ob.Settings != nil {
+		t.Fatalf("freedom settings = %s, want none: its domainStrategy is deprecated", *ob.Settings)
+	}
+	socket := ob.StreamSetting.SocketSettings
+	if socket.DomainStrategy != "UseIP" || socket.Interface != "Ethernet" {
+		t.Fatalf("sockopt = %+v", socket)
+	}
+}

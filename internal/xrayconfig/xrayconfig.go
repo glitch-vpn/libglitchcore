@@ -493,16 +493,6 @@ func outboundFromSS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, str
 		Password: password,
 	}
 
-	q := u.Query()
-	if v := q.Get("uot"); v == "1" || strings.EqualFold(v, "true") {
-		server.UoT = true
-	}
-	if v := q.Get("uotVersion"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil {
-			server.UoTVersion = n
-		}
-	}
-
 	ssSettings := &xrayConf.ShadowsocksClientConfig{Servers: []*xrayConf.ShadowsocksServerTarget{server}}
 	settingsBytes, _ := json.Marshal(ssSettings)
 	settingsRaw := json.RawMessage(settingsBytes)

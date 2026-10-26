@@ -213,11 +213,12 @@ func hasProcessProxy(p RoutingProfile) bool {
 }
 
 func ensureDirectOutbound(p RoutingProfile, cfg *xrayConf.Config) {
-	settings := json.RawMessage(`{"domainStrategy":"UseIP"}`)
 	ob := xrayConf.OutboundDetourConfig{
 		Protocol: "freedom",
 		Tag:      directTag,
-		Settings: &settings,
+		StreamSetting: &xrayConf.StreamConfig{
+			SocketSettings: &xrayConf.SocketConfig{DomainStrategy: "UseIP"},
+		},
 	}
 	if p.DirectSendThrough != "" {
 		st := p.DirectSendThrough
@@ -227,9 +228,7 @@ func ensureDirectOutbound(p RoutingProfile, cfg *xrayConf.Config) {
 	// leaves the machine instead of looping back into the TUN default route.
 	// Source-IP bind (SendThrough) alone does not achieve this on Windows.
 	if p.DirectInterface != "" {
-		ob.StreamSetting = &xrayConf.StreamConfig{
-			SocketSettings: &xrayConf.SocketConfig{Interface: p.DirectInterface},
-		}
+		ob.StreamSetting.SocketSettings.Interface = p.DirectInterface
 	}
 	ensureOutbound(cfg, directTag, ob)
 }

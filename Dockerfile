@@ -12,7 +12,7 @@ RUN apt-get install -y --no-install-recommends rsync
 RUN apt-get install -y --no-install-recommends mingw-w64
 RUN rm -rf /var/lib/apt/lists/*
 
-ENV GO_VERSION=1.26.4
+ENV GO_VERSION=1.27.3
 RUN wget https://golang.org/dl/go${GO_VERSION}.linux-amd64.tar.gz && \
     tar -C /usr/local -xzf go${GO_VERSION}.linux-amd64.tar.gz && \
     rm go${GO_VERSION}.linux-amd64.tar.gz

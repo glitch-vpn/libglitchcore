@@ -260,7 +260,7 @@ functions carry nothing.
   never committed, never logged.
 - `-race` is clean for `./internal/...`. It is **not** clean for the smoke
   suite with a leastping balancer: xray-core's `GetObservation` reads the
-  observer's status slice without its lock (v1.260327.0
+  observer's status slice without its lock (v26.10.21
   `app/observatory/observer.go:41`) and its own router hits that on every
   dispatch. Do not chase those reports, and do not consume `GetObservation`
   from our side — the xray pick is read from traffic counters instead.

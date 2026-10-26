@@ -63,7 +63,7 @@ func (x *CoreController) initXrayServerState(res *xrayconfig.BuildResult, links 
 // actually in use, so it leads even on an otherwise idle tunnel.
 //
 // xray's own observatory report is not consulted: GetObservation reads the
-// observer's status slice without its lock (xray-core v1.260327.0,
+// observer's status slice without its lock (xray-core v26.10.21,
 // app/observatory/observer.go:41), and polling that from here made the race
 // deterministic.
 func tagTrafficPicker(mgr xrayStats.Manager, tags []string) func() int {

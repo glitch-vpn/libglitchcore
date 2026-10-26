@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/xtls/xray-core/app/router"
+	"github.com/xtls/xray-core/common/geodata"
 	"google.golang.org/protobuf/proto"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
@@ -24,17 +24,17 @@ import (
 // a file that lacks it with a downloaded one.
 func writeGeoFixtures(t *testing.T, dir string) {
 	t.Helper()
-	site, err := proto.Marshal(&router.GeoSiteList{Entry: []*router.GeoSite{
+	site, err := proto.Marshal(&geodata.GeoSiteList{Entry: []*geodata.GeoSite{
 		{
-			CountryCode: "GLITCH-TEST",
-			Domain: []*router.Domain{
-				{Type: router.Domain_Domain, Value: "glitch.test"},
-				{Type: router.Domain_Full, Value: "exact.glitch.test"},
+			Code: "GLITCH-TEST",
+			Domain: []*geodata.Domain{
+				{Type: geodata.Domain_Domain, Value: "glitch.test"},
+				{Type: geodata.Domain_Full, Value: "exact.glitch.test"},
 			},
 		},
 		{
-			CountryCode: "CN",
-			Domain:      []*router.Domain{{Type: router.Domain_Domain, Value: "cn.glitch.test"}},
+			Code:   "CN",
+			Domain: []*geodata.Domain{{Type: geodata.Domain_Domain, Value: "cn.glitch.test"}},
 		},
 	}})
 	if err != nil {
@@ -43,14 +43,14 @@ func writeGeoFixtures(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "geosite.dat"), site, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ip, err := proto.Marshal(&router.GeoIPList{Entry: []*router.GeoIP{
+	ip, err := proto.Marshal(&geodata.GeoIPList{Entry: []*geodata.GeoIP{
 		{
-			CountryCode: "GLITCH-TEST",
-			Cidr:        []*router.CIDR{{Ip: net.ParseIP("198.51.100.0").To4(), Prefix: 24}},
+			Code: "GLITCH-TEST",
+			Cidr: []*geodata.CIDR{{Ip: net.ParseIP("198.51.100.0").To4(), Prefix: 24}},
 		},
 		{
-			CountryCode: "CN",
-			Cidr:        []*router.CIDR{{Ip: net.ParseIP("203.0.113.0").To4(), Prefix: 24}},
+			Code: "CN",
+			Cidr: []*geodata.CIDR{{Ip: net.ParseIP("203.0.113.0").To4(), Prefix: 24}},
 		},
 	}})
 	if err != nil {

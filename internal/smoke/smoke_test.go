@@ -78,7 +78,7 @@ func startVlessServer(t *testing.T) int {
 			"protocol": "vless",
 			"settings": {"clients": [{"id": %q}], "decryption": "none"}
 		}],
-		"outbounds": [{"protocol": "freedom"}]
+		"outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow"}]}}]
 	}`, port, testUUID)
 	inst, err := xrayCore.StartInstance("json", []byte(cfg))
 	if err != nil {

@@ -43,7 +43,7 @@ func sniffingConfig() *xrayConf.SniffingConfig {
 	dest := sniffedProtocols(true)
 	return &xrayConf.SniffingConfig{
 		Enabled:      true,
-		DestOverride: &dest,
+		DestOverride: dest,
 		RouteOnly:    true,
 	}
 }
@@ -61,7 +61,7 @@ func ApplySniffing(cfg *xrayConf.Config, contentSniffing bool) {
 		}
 		cfg.InboundConfigs[i].SniffingConfig = &xrayConf.SniffingConfig{
 			Enabled:      true,
-			DestOverride: &dest,
+			DestOverride: dest,
 			RouteOnly:    true,
 		}
 	}
@@ -95,14 +95,14 @@ func proxyInboundSettings(addr, user, pass string) (*json.RawMessage, error) {
 		Pass string `json:"pass"`
 	}
 	s := struct {
-		Auth     string    `json:"auth"`
-		Accounts []account `json:"accounts,omitempty"`
-		UDP      bool      `json:"udp"`
-		IP       string    `json:"ip"`
+		Auth  string    `json:"auth"`
+		Users []account `json:"users,omitempty"`
+		UDP   bool      `json:"udp"`
+		IP    string    `json:"ip"`
 	}{Auth: "noauth", UDP: true, IP: addr}
 	if user != "" && pass != "" {
 		s.Auth = "password"
-		s.Accounts = []account{{User: user, Pass: pass}}
+		s.Users = []account{{User: user, Pass: pass}}
 		s.UDP = false
 	}
 	b, err := json.Marshal(s)
