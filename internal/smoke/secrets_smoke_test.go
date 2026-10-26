@@ -57,15 +57,14 @@ func TestSmoke_NoSecretLeavesInEvents(t *testing.T) {
 
 	dead := freePort(t)
 	trojan := fmt.Sprintf("trojan://%s@127.0.0.1:%d?security=none&type=tcp#Dead", smokeTrojanPass, dead)
-	mixedPort := freePort(t)
-	if res := core.EngineStart("mihomo", core.EngineStartRequest{
-		Config: trojan,
-		DNS:    "1.1.1.1",
-		Opts:   map[string]string{"proxyPort": strconv.Itoa(mixedPort), "resolveExternalIp": "0"},
-	}); res != core.ResultSuccess {
-		t.Fatalf("EngineStart mihomo = %d", res)
+	seenConnected := len(ev.all(core.EngineConnected))
+	mixedPort := startEngineInProxyMode(t, "mihomo", trojan, map[string]string{
+		"resolveExternalIp": "0",
+	}, nil)
+	if !ev.waitForNew(t, core.EngineConnected, seenConnected, 30*time.Second) {
+		lastError, _ := ev.last(core.EngineError)
+		t.Fatalf("mihomo did not reach EngineConnected: %s", lastError)
 	}
-	ev.waitFor(t, core.EngineConnected, 30*time.Second)
 	if _, err := socksConnect(mixedPort, "127.0.0.1", uint16(echoPort)); err == nil {
 		t.Log("socks through a dead trojan upstream unexpectedly answered")
 	}
