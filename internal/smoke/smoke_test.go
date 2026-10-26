@@ -36,7 +36,24 @@ import (
 // session.
 func TestMain(m *testing.M) {
 	core.SetServiceIPC(false)
-	os.Exit(m.Run())
+	os.Exit(runWithAssetHome(m))
+}
+
+// smokeAssetDir is the geo and mihomo home of every engine started through
+// startEngineInProxyMode: Android and Linux have no default for it, and the
+// executable's directory is not a place a test may write to.
+var smokeAssetDir string
+
+func runWithAssetHome(m *testing.M) int {
+	dir, err := os.MkdirTemp("", "glitch-smoke-assets-*")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "smoke asset home:", err)
+		return 1
+	}
+	smokeAssetDir = dir
+	// Best effort: mihomo can hold cache.db open on Windows after the run.
+	defer func() { _ = os.RemoveAll(dir) }()
+	return m.Run()
 }
 
 const testUUID = "b831381d-6324-4d53-ad4f-8cda48b30811"
@@ -264,7 +281,8 @@ func startEngineInProxyMode(t *testing.T, engine, links string, extraOpts map[st
 	t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
 	proxyPort := freePort(t)
 	opts := map[string]string{
-		"proxyPort": strconv.Itoa(proxyPort),
+		"proxyPort":    strconv.Itoa(proxyPort),
+		"geoAssetsDir": smokeAssetDir,
 	}
 	for k, v := range extraOpts {
 		opts[k] = v
