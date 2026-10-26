@@ -591,10 +591,9 @@ func TestSmoke_Balancer_ServerEventPool(t *testing.T) {
 		sel.Servers[0].Port != upA || sel.Servers[1].Port != upB {
 		t.Fatalf("pool = %+v", sel.Servers)
 	}
-	// leastping reports the fallback (first outbound) until the observatory
-	// has a verdict.
-	if sel.Selected == nil {
-		t.Fatal("no initial selected for leastping")
+	// No server is named until traffic identifies the outbound in use.
+	if sel.Selected != nil {
+		t.Fatalf("selected = %+v before any traffic identified a server", sel.Selected)
 	}
 
 	var ip struct {
