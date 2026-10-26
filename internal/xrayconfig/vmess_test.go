@@ -71,6 +71,8 @@ func TestVMess_Refuses(t *testing.T) {
 	cases := map[string]map[string]any{
 		"legacy_alter_id": {"aid": "64"},
 		"unknown_cipher":  {"scy": "aes-256-cfb"},
+		"cipher_none":     {"scy": "none"},
+		"cipher_zero":     {"scy": "zero"},
 		"h2":              {"net": "h2"},
 		"quic":            {"net": "quic"},
 		"kcp":             {"net": "kcp"},

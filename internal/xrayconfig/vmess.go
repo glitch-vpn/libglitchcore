@@ -12,8 +12,10 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
 )
 
-// The ciphers xray's VMess account knows; it reads any other name as auto.
-var vmessCiphers = []string{"auto", "aes-128-gcm", "chacha20-poly1305", "none", "zero"}
+// The ciphers xray's VMess account knows. xray reads any other cipher, none
+// and zero included, as auto; the core refuses those names so a link never
+// runs encrypted where it asked for no encryption.
+var vmessCiphers = []string{"auto", "aes-128-gcm", "chacha20-poly1305"}
 
 // outboundFromVMess takes both link forms vmesslink reads, over the
 // transports buildStreamSettings maps. xray dropped the legacy MD5 handshake

@@ -234,6 +234,9 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	userJSON, _ := json.Marshal(vlessUser)
 
 	addrForDial := preResolveIPv4(host)
+	if err := requireTransportSecurity("vless", addrForDial, stream.Security != ""); err != nil {
+		return nil, "", "", err
+	}
 	vnext := &xrayConf.VLessOutboundVnext{
 		Address: &xrayConf.Address{Address: xrayNet.ParseAddress(addrForDial)},
 		Port:    port,
@@ -375,6 +378,11 @@ func buildStreamSettings(host string, q url.Values) (*xrayConf.StreamConfig, err
 	return stream, nil
 }
 
+// lookupIPv4 is the resolver preResolveIPv4 asks; tests replace it.
+var lookupIPv4 = func(ctx context.Context, host string) ([]net.IP, error) {
+	return net.DefaultResolver.LookupIP(ctx, "ip4", host)
+}
+
 // preResolveIPv4 returns host's first IPv4 (short DNS timeout) for use as the
 // dial address, leaving TLS SNI / WS Host as the original domain. Returns host
 // unchanged if it is already an IP or resolution fails.
@@ -384,7 +392,7 @@ func preResolveIPv4(host string) string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if ips, err := net.DefaultResolver.LookupIP(ctx, "ip4", host); err == nil && len(ips) > 0 {
+	if ips, err := lookupIPv4(ctx, host); err == nil && len(ips) > 0 {
 		return ips[0].String()
 	}
 	return host
@@ -484,6 +492,9 @@ func outboundFromSS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, str
 
 	if method == "" || password == "" || host == "" || port == 0 {
 		return nil, "", "", fmt.Errorf("incomplete ss link")
+	}
+	if err := checkSSCipher(method); err != nil {
+		return nil, "", "", err
 	}
 
 	server := &xrayConf.ShadowsocksServerTarget{
