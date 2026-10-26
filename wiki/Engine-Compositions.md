@@ -6,9 +6,9 @@ entirely — CI proves it with `go list -deps` guards, not by trust.
 
 ```
 make build                          # xray + awg + mihomo (default)
-make build ENGINES="xray,awg"
-make build ENGINES=xray
-make build ENGINES=awg              # the only GPL-free composition
+make build ENGINES="xray,awg"      # GPL-free
+make build ENGINES=xray            # GPL-free
+make build ENGINES=awg              # GPL-free
 make build ENGINES=mihomo
 ```
 
@@ -31,10 +31,10 @@ More numbers, and how they were taken: [Benchmarks](Benchmarks).
 
 ## Consequences of the choice
 
-* **Licence.** Xray and mihomo compositions are GPL-3.0 as a whole. The
-  awg-only build is the one permissive composition. This is why the license
-  guard exists in CI: a stray import that drags mihomo into an awg-only build
-  is a release blocker, not a style nit.
+* **Licence.** Compositions with mihomo are GPL-3.0 as a whole; those of xray
+  and awg are not. This is why the license guard exists in CI: a stray import
+  that drags mihomo or sing into a build without mihomo is a release blocker,
+  not a style nit.
 * **Protocol coverage.** awg alone means WireGuard/AmneziaWG only — no VLESS,
   no Hysteria2, and routing/DNS rules are ignored (awg is an L3 tunnel that
   takes a single plain resolver).

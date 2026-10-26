@@ -48,11 +48,11 @@ jobs:
             forbidden: ''
           - name: xray+awg (no_mihomo)
             tags: 'no_mihomo'
-            forbidden: 'github.com/metacubex/mihomo|github.com/metacubex/sing'
+            forbidden: 'github.com/metacubex|github.com/sagernet/sing'
           - name: mihomo-only
             tags: 'no_xray no_awg'
             forbidden: 'github.com/xtls/xray-core|github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
-          # The one GPL-free composition: no mihomo/sing (either fork) at all.
+          # Without mihomo nothing GPL links: no mihomo/sing (either fork) at all.
           - name: awg-only (no_mihomo no_xray)
             tags: 'no_mihomo no_xray'
             forbidden: 'github.com/metacubex/mihomo|github.com/metacubex/sing|github.com/sagernet/sing|github.com/xtls/xray-core|github.com/xjasonlyu/tun2socks'

@@ -20,7 +20,7 @@ under `internal/`. One `CoreController`, one engine at a time.
 |---|---|
 | FFI surface | **Frozen by default.** New data flows ride the status port as new event codes; new knobs ride `EngineStart`'s `Opts` map. A new C export is a last resort: it changes `libglitchcore.h`, forces ffigen regen in the plugin (CI fails on drift) and needs a service IPC command on Windows |
 | Engine composition | Negative build tags `no_xray` / `no_awg` / `no_mihomo`; the tagless build links everything. `with_gvisor` is always on in real builds and tests |
-| Licensing | Repo is MIT; xray/mihomo compositions are GPL-3.0 combined works via `sing`; awg-only is the one GPL-free composition. CI `go list -deps` guards keep excluded engines out of the link |
+| Licensing | Repo is MIT; compositions with mihomo are GPL-3.0 combined works via `sing`; xray and awg compositions are GPL-free. CI `go list -deps` guards keep excluded engines out of the link |
 | Deploy builds | `make build` (Docker) only. Local mingw builds are a compile check, never a deliverable |
 | Windows elevation | Client library forwards engine commands to the `GlitchVpnCore` system service over named pipes (`useServiceIPC`); proxy mode stays in-process |
 | Language | Everything in the repo is **English** (code, comments, commits, docs) |
