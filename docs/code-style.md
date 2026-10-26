@@ -53,7 +53,9 @@ go func() {
 The stop side **swaps the pointers out under `loopsMu`, then closes and waits
 outside the lock** — holding a lock across the wait deadlocks any loop that
 needs it, and the swap is what makes a second concurrent stop safe instead of a
-double-close panic. A loop reading an engine instance stops **before** the instance closes — `clearSessionState` runs
+double-close panic. A blocking call inside the loop takes a context the loop
+cancels when `quit` closes (the liveness probe), so a stop never waits out the
+call's timeout. A loop reading an engine instance stops **before** the instance closes — `clearSessionState` runs
 in `HandleXrayStop` ahead of the goroutine that calls
 `xrayCoreInstance.Close()`. A `time.Sleep` poll, a `context.Context` where the
 tree uses channels, or a goroutine with no done-wait are findings.

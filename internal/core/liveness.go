@@ -19,11 +19,12 @@ import (
 const (
 	defaultLivenessProbeURL = "https://www.gstatic.com/generate_204"
 	defaultLivenessInterval = 20 * time.Second
-	// quickLivenessInterval polls faster while not up, to confirm an outage or
-	// recovery without waiting the full interval.
-	quickLivenessInterval = 5 * time.Second
-	livenessProbeTimeout  = 8 * time.Second
+	livenessProbeTimeout    = 8 * time.Second
 )
+
+// quickLivenessInterval polls faster while not up, to confirm an outage or
+// recovery without waiting the full interval.
+var quickLivenessInterval = 5 * time.Second
 
 // livenessParams: exactly one of probe/passive is set. probe actively fetches
 // through the tunnel; passive samples WireGuard counters on Android, where our
@@ -62,6 +63,17 @@ func (x *CoreController) startLiveness(p livenessParams) {
 
 	go func() {
 		defer close(done)
+		// A stop waits for this loop inside its FFI call, which a Flutter host
+		// makes on its UI thread: it must not sit out a probe's timeout.
+		probes, cancelProbes := context.WithCancel(context.Background())
+		defer cancelProbes()
+		go func() {
+			select {
+			case <-quit:
+				cancelProbes()
+			case <-probes.Done():
+			}
+		}()
 		var tr liveness.Tracker
 		timer := time.NewTimer(quickLivenessInterval)
 		defer timer.Stop()
@@ -73,10 +85,16 @@ func (x *CoreController) startLiveness(p livenessParams) {
 			}
 
 			if p.probe != nil {
-				ctx, cancel := context.WithTimeout(context.Background(), livenessProbeTimeout)
+				ctx, cancel := context.WithTimeout(probes, livenessProbeTimeout)
 				elapsed, err := p.probe(ctx)
 				cancel()
 				if err != nil {
+					// Cancelled by the stop, not a link verdict.
+					select {
+					case <-quit:
+						return
+					default:
+					}
 					if _, changed := tr.ObserveFailure(); changed {
 						logfmt.Warnf("[liveness] %s: internet through tunnel is DOWN: %v", p.engine, err)
 					}

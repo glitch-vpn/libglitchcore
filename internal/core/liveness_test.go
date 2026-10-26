@@ -32,3 +32,33 @@ func TestProbeOnce(t *testing.T) {
 		t.Fatal("probeOnce against a closed server must fail")
 	}
 }
+
+func TestStopLiveness_CancelsTheProbeInFlight(t *testing.T) {
+	prev := quickLivenessInterval
+	quickLivenessInterval = 10 * time.Millisecond
+	t.Cleanup(func() { quickLivenessInterval = prev })
+
+	probing := make(chan struct{})
+	x := &CoreController{}
+	x.startLiveness(livenessParams{
+		engine:   "test",
+		interval: time.Hour,
+		probe: func(ctx context.Context) (time.Duration, error) {
+			close(probing)
+			<-ctx.Done()
+			return 0, ctx.Err()
+		},
+	})
+	<-probing
+
+	stopped := make(chan struct{})
+	go func() {
+		x.stopLiveness()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(livenessProbeTimeout / 2):
+		t.Fatal("stopLiveness waited out the probe's timeout")
+	}
+}
