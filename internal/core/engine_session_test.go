@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"net"
 	"strconv"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
+	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 )
 
 // holdStarts parks every start of engine before it takes coreMutex until the
@@ -198,4 +200,46 @@ func listens(addr string) bool {
 	}
 	_ = c.Close()
 	return true
+}
+
+// The loops a stale start armed: a stop's own cleanup can run before the
+// start arms them, and its stop can close the instance before the start's
+// tail looks. Only a later start that replaced the instance owns them.
+func TestAbortStaleEngineSession_EndsTheLoopsUnlessALaterStartOwnsThem(t *testing.T) {
+	sessions := map[string]func(x *CoreController) *engineSession{
+		"xray":   func(x *CoreController) *engineSession { return &x.xraySession },
+		"awg":    func(x *CoreController) *engineSession { return &x.awgSession },
+		"mihomo": func(x *CoreController) *engineSession { return &x.mihomoSession },
+	}
+	cases := []struct {
+		name      string
+		instance  func(s *engineSession) // the engine's state when the start's tail looks
+		loopsLeft bool
+	}{
+		{"its stop already closed the instance", func(s *engineSession) {}, false},
+		{"its own instance still runs", func(s *engineSession) { s.up(0) }, false},
+		{"a later start replaced it", func(s *engineSession) { s.up(1) }, true},
+	}
+	for engine, session := range sessions {
+		for _, c := range cases {
+			t.Run(engine+"/"+c.name, func(t *testing.T) {
+				x := &CoreController{}
+				x.startLiveness(livenessParams{engine: engine, interval: time.Hour, probe: func(context.Context) (time.Duration, error) { return 0, nil }})
+				x.startSelectionWatch(serverinfo.Selection{}, func() int { return -1 })
+				t.Cleanup(x.endSessionLoops)
+				x.sessionGen.Store(1)
+				c.instance(session(x))
+
+				if !x.abortStaleEngineSession(session(x), 0) {
+					t.Fatal("a start whose session moved on was not stale")
+				}
+				x.loopsMu.Lock()
+				left := x.livenessQuit != nil || x.selWatchQuit != nil
+				x.loopsMu.Unlock()
+				if left != c.loopsLeft {
+					t.Fatalf("loops left running = %v, want %v", left, c.loopsLeft)
+				}
+			})
+		}
+	}
 }

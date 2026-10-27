@@ -67,16 +67,17 @@ var (
 	engineStopGate  = func(engine string, stopGen int64) {}
 )
 
-// abortStaleEngineSession: true when a stop came in after the start at mark.
-// The session's loops are torn down only while its own instance runs: a
-// later start that replaced it armed the loops running now.
+// abortStaleEngineSession: true when a stop came in after the start at mark,
+// whose loops are then torn down - also when the stop already closed the
+// instance, as its own cleanup can run before the start armed them. Only a
+// later start that replaced the instance owns the loops running now.
 func (x *CoreController) abortStaleEngineSession(s *engineSession, mark int64) bool {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 	if x.sessionGen.Load() == mark {
 		return false
 	}
-	if s.runsSession(mark) {
+	if !(s.running.Load() && s.instanceGen.Load() > mark) {
 		x.endSessionLoops()
 	}
 	return true
