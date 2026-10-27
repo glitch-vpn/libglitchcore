@@ -4,10 +4,14 @@ package core
 
 import (
 	"errors"
+	"net"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
 )
 
 // holdXrayStarts parks every start before it takes coreMutex until the test
@@ -88,12 +92,130 @@ func TestXrayStop_TakenWhileALaterStartWaits(t *testing.T) {
 func TestXrayStop_LeavesTheInstanceOfALaterStart(t *testing.T) {
 	x := &CoreController{}
 	x.isXrayRunning.Store(true)
-	x.xrayInstanceGen = 2
+	x.xrayInstanceGen.Store(2)
 
 	if err := x.xrayStop(2); !errors.Is(err, errStopSuperseded) {
 		t.Fatalf("stop of generation 2 over an instance started under 2: %v", err)
 	}
 	if !x.isXrayRunning.Load() {
 		t.Fatal("the stop marked the later session's engine stopped")
+	}
+}
+
+func holdXrayStops(t *testing.T) (release func()) {
+	t.Helper()
+	gate := make(chan struct{})
+	prev := xrayStopGate
+	xrayStopGate = func(int64) { <-gate }
+	t.Cleanup(func() { xrayStopGate = prev })
+	return func() { close(gate) }
+}
+
+func proxyModeStart(t *testing.T) (EngineStartRequest, string) {
+	t.Helper()
+	t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
+	port, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return EngineStartRequest{
+		Config: "vless://b831381d-6324-4d53-ad4f-8cda48b30811@127.0.0.1:9?security=none&type=tcp#t",
+		Opts: map[string]string{
+			"proxyPort":         strconv.Itoa(port),
+			"resolveExternalIp": "0",
+			"livenessSec":       "300",
+		},
+	}, net.JoinHostPort("127.0.0.1", strconv.Itoa(port))
+}
+
+func listens(addr string) bool {
+	c, err := net.DialTimeout("tcp", addr, time.Second)
+	if err != nil {
+		return false
+	}
+	_ = c.Close()
+	return true
+}
+
+// Connect A comes up, disconnect S is queued behind connect B, and B takes
+// the lock first: B replaces A's instance instead of reporting connected on
+// it, and S then leaves B's alone.
+func TestXrayStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
+	var mu sync.Mutex
+	var lifecycle []int32
+	setStatusSink(func(code int32, _ string) {
+		if code >= EngineConnecting && code <= EngineStopRejectedNotRunning {
+			mu.Lock()
+			lifecycle = append(lifecycle, code)
+			mu.Unlock()
+		}
+	})
+	t.Cleanup(func() { setStatusSink(nil) })
+	connected := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		n := 0
+		for _, c := range lifecycle {
+			if c == EngineConnected {
+				n++
+			}
+		}
+		return n
+	}
+	waitConnected := func(want int) {
+		t.Helper()
+		for deadline := time.Now().Add(30 * time.Second); connected() < want; time.Sleep(10 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("connected %d times, want %d", connected(), want)
+			}
+		}
+	}
+
+	releaseStart := holdXrayStarts(t)
+	releaseStop := holdXrayStops(t)
+	x := &CoreController{}
+	x.initEngineState()
+	t.Cleanup(func() {
+		x.coreMutex.Lock()
+		defer x.coreMutex.Unlock()
+		x.xrayStopLocked()
+	})
+	startA, addrA := proxyModeStart(t)
+	startB, addrB := proxyModeStart(t)
+
+	if res := x.HandleXrayStart(startA); res != glitchCoreResultSuccess {
+		t.Fatalf("start A = %d", res)
+	}
+	releaseStart(0)
+	waitConnected(1)
+
+	if res := x.HandleXrayStop(); res != glitchCoreResultSuccess {
+		t.Fatalf("stop S = %d", res)
+	}
+	if res := x.HandleXrayStart(startB); res != glitchCoreResultSuccess {
+		t.Fatalf("start B = %d", res)
+	}
+	releaseStart(1)
+	waitConnected(2)
+	releaseStop()
+	time.Sleep(200 * time.Millisecond)
+
+	x.coreMutex.Lock()
+	running, gen := x.isXrayRunning.Load(), x.xrayInstanceGen.Load()
+	x.coreMutex.Unlock()
+	if !running || gen != 1 {
+		t.Fatalf("running %v under generation %d, want B's instance (generation 1)", running, gen)
+	}
+	if !listens(addrB) {
+		t.Fatal("B's proxy is not up")
+	}
+	if listens(addrA) {
+		t.Fatal("A's proxy still answers")
+	}
+	mu.Lock()
+	last := lifecycle[len(lifecycle)-1]
+	mu.Unlock()
+	if connected() != 2 || last != EngineConnected {
+		t.Fatalf("lifecycle %v: want A's and B's connected, B's last", lifecycle)
 	}
 }
