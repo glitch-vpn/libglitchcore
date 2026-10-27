@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -73,9 +74,16 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 
 	x.emitStatus(EngineConnecting, "[Xray] Connecting")
 
+	mark := x.sessionGen.Load()
+	x.xrayStarting.Store(true)
 	go func() {
-		mark := x.sessionGen.Load()
-		if err := x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o, mark); err != nil {
+		defer x.xrayStarting.Store(false)
+		err := x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o, mark)
+		if errors.Is(err, errSessionEnded) {
+			log.Println("[Xray] stopped before startup; not starting")
+			return
+		}
+		if err != nil {
 			logfmt.Errorf("[Xray] Failed to start Xray: %v", err)
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to start: %v", err))
@@ -96,7 +104,7 @@ func (x *CoreController) HandleXrayStop() int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if !x.isXrayRunning.Load() {
+	if !x.xrayEngaged() {
 		x.emitStatus(EngineStopRejectedNotRunning, "[Xray] Stop rejected: not running")
 		return glitchCoreResultError
 	}
@@ -122,16 +130,26 @@ func (x *CoreController) HandleXrayIsRunning() int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if x.xrayRunning() {
+	if x.xrayEngaged() {
 		return glitchCoreResultSuccess
 	}
 	return glitchCoreResultError
+}
+
+// xrayEngaged: running or starting, read without coreMutex, which a start or
+// a stop holds for its whole run; callers reach it from the UI thread.
+func (x *CoreController) xrayEngaged() bool {
+	return x.isXrayRunning.Load() || x.xrayStarting.Load()
 }
 
 func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string, logLevel int, o engineOpts, mark int64) (err error) {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
+	// A stop that came in before this start took the lock has already run.
+	if x.sessionGen.Load() != mark {
+		return errSessionEnded
+	}
 	if x.isXrayRunning.Load() {
 		log.Println("[Xray] Core is already running")
 		return nil

@@ -130,3 +130,30 @@ func TestSmoke_XrayTrafficReadsDuringAStop(t *testing.T) {
 		t.Fatal("traffic reads a running engine after the stop")
 	}
 }
+
+// A disconnect sent while the engine is still coming up ends the session
+// rather than being refused and leaving the engine to come up anyway.
+func TestSmoke_XrayStopDuringStartEndsTheSession(t *testing.T) {
+	core.Initialize()
+	ev := captureEvents(t)
+
+	upstream := startVlessServer(t)
+	link := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#Traffic", testUUID, upstream)
+	startEngineInProxyMode(t, "xray", link, map[string]string{
+		"resolveExternalIp": "0",
+		"disableIPv6":       "1",
+	}, nil)
+	if res := core.EngineStop("xray"); res != core.ResultSuccess {
+		t.Fatalf("EngineStop during the start = %d", res)
+	}
+	ev.waitFor(t, core.EngineDisconnected, 30*time.Second)
+
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); time.Sleep(50 * time.Millisecond) {
+		if core.EngineIsRunning("xray") == core.ResultSuccess {
+			t.Fatal("xray runs after a stop sent during its start")
+		}
+	}
+	if _, connected := ev.last(core.EngineConnected); connected {
+		t.Fatal("a start stopped before it came up reported connected")
+	}
+}

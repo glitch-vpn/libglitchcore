@@ -123,16 +123,12 @@ func normalizedVersion(v string) string {
 	return t
 }
 
-func (x *CoreController) xrayRunning() bool {
+// xraySettledRunning waits out an xray start or stop in flight: a check
+// that guards another engine's start must not pass while xray comes up.
+func (x *CoreController) xraySettledRunning() bool {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 	return x.isXrayRunning.Load()
-}
-
-func (x *CoreController) awgRunning() bool {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
-	return x.isAwgRunning.Load()
 }
 
 func (x *CoreController) emitStatus(code int32, message string) {

@@ -6,6 +6,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"time"
 
 	xrayStatsApp "github.com/xtls/xray-core/app/stats"
 )
@@ -84,4 +85,23 @@ func TestXrayTraffic_ReadsRaceASessionEnding(t *testing.T) {
 	}
 	close(stop)
 	readers.Wait()
+}
+
+// The plugin asks which engine runs from the UI thread, during a connect too.
+func TestXrayRunning_AnswersWhileAStartHoldsTheCore(t *testing.T) {
+	x := &CoreController{}
+	x.xrayStarting.Store(true)
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	answered := make(chan string, 1)
+	go func() { answered <- x.activeEngineID() }()
+	select {
+	case id := <-answered:
+		if id != "xray" {
+			t.Fatalf("active engine during an xray start = %q", id)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("asking which engine runs waited on coreMutex")
+	}
 }

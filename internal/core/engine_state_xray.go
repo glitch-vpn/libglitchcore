@@ -11,6 +11,9 @@ import (
 
 type xrayState struct {
 	xrayCoreInstance *xrayCore.Instance
+	// From the start's request until its goroutine ends: the engine counts as
+	// running, so a stop in that time is taken rather than refused.
+	xrayStarting atomic.Bool
 	// Read without coreMutex, which a start or a stop holds for its whole run;
 	// the manager's counters are atomics.
 	xrayTraffic atomic.Pointer[xrayTrafficSource]

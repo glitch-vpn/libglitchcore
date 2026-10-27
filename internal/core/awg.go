@@ -117,7 +117,7 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 	}
 	log.Println("[AWG] AwgStart")
 
-	if x.xrayRunning() || x.isMihomoRunning.Load() {
+	if x.xraySettledRunning() || x.isMihomoRunning.Load() {
 		x.emitStatus(EngineConflictOtherCore, "[AWG] Start rejected: another engine is running")
 		return glitchCoreResultError
 	}
@@ -327,7 +327,7 @@ func (x *CoreController) HandleAwgIsRunning() int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if x.awgRunning() {
+	if x.isAwgRunning.Load() {
 		return glitchCoreResultSuccess
 	}
 	return glitchCoreResultError
