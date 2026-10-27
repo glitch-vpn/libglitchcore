@@ -15,10 +15,8 @@ import (
 	"github.com/amnezia-vpn/amneziawg-go/v3/tun"
 )
 
+// The caller holds coreMutex.
 func (x *CoreController) platformAwgStart(ifName string, _ int, settings string) (int, error) {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
-
 	handle := x.nextHandle
 	x.nextHandle++
 
@@ -80,6 +78,5 @@ func (x *CoreController) platformAwgStart(ifName string, _ int, settings string)
 	x.awgDevice.Store(awgDev)
 	x.awgTunnel = tunDev
 
-	x.emitStatus(EngineConnected, fmt.Sprintf("AWG tunnel %d started", handle))
 	return handle, nil
 }

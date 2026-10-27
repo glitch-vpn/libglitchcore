@@ -36,7 +36,7 @@ func (awgEngine) Stop(x *CoreController) int32 { return x.HandleAwgStop() }
 func (awgEngine) IsRunning(x *CoreController) int32 { return x.HandleAwgIsRunning() }
 
 func (awgEngine) Traffic(x *CoreController) (uint64, uint64, bool) {
-	if !x.isAwgRunning.Load() {
+	if !x.awgSession.running.Load() {
 		return 0, 0, false
 	}
 	rx, tx := x.getAwgTraffic()
@@ -117,17 +117,13 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 	}
 	log.Println("[AWG] AwgStart")
 
-	if x.xraySettledRunning() || x.isMihomoRunning.Load() {
+	if x.xraySettledRunning() || x.mihomoSession.running.Load() {
 		x.emitStatus(EngineConflictOtherCore, "[AWG] Start rejected: another engine is running")
 		return glitchCoreResultError
 	}
 
-	if x.isAwgRunning.Load() {
-		x.emitStatus(EngineAlreadyRunning, "[AWG] Already running")
-		x.startStats(time.Second)
-		x.emitStatus(EngineConnected, "[AWG] Connected (already running)")
-		x.reemitSessionState()
-		return glitchCoreResultSuccess
+	if x.awgSession.runsSession(x.sessionGen.Load()) {
+		return x.replyAlreadyRunning("AWG")
 	}
 
 	// After the guards: a malformed request must not tear down the live
@@ -153,36 +149,18 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 
 	const ifaceName = "GlitchVPN"
 
+	// Counted from here, the link pick included: a stop during the pick is
+	// taken, and the start then finds its session ended.
+	mark, done := x.beginStart(&x.awgSession)
 	go func() {
-		mark := x.sessionGen.Load()
+		defer done()
 		chosen, idx, err := chooseAwgLink(links, o)
 		if err != nil {
 			x.clearSessionState()
 			x.emitStatus(EngineError, fmt.Sprintf("[AWG] %v", err))
 			return
 		}
-		// awg (L3) takes only a plain resolver; empty -> INI DNS field.
-		if err := x.awgStart(ifaceName, req.TunFD, chosen, o.dns.FirstPlainServer()); err != nil {
-			logfmt.Errorf("[AWG] Failed to start AWG: %v", err)
-			x.clearSessionState()
-			x.emitStatus(EngineError, fmt.Sprintf("[AWG] Failed to start: %v", err))
-			return
-		}
-		if x.abortStaleSession(mark) {
-			log.Println("[AWG] stopped during startup; not arming session state")
-			return
-		}
-		x.startAwgLiveness(o)
-		x.initAwgServerState(links, idx, o)
-		x.configureAwgIPResolve(o)
-		// A stop landing inside the arming above leaves loops behind; the
-		// desktop prober would then report the physical NIC as the tunnel.
-		if x.abortStaleSession(mark) {
-			log.Println("[AWG] stopped while arming; session state torn down")
-			return
-		}
-		x.startStats(time.Second)
-		x.emitStatus(EngineConnected, "[AWG] Connected")
+		x.finishStart(&x.awgSession, "AWG", mark, x.awgStart(ifaceName, req.TunFD, chosen, links, idx, o, mark))
 	}()
 
 	return glitchCoreResultSuccess
@@ -301,73 +279,69 @@ func (x *CoreController) HandleAwgStop() int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if !x.isAwgRunning.Load() {
-		x.emitStatus(EngineStopRejectedNotRunning, "[AWG] Stop rejected: not running")
-		return glitchCoreResultError
-	}
-
-	x.stopStats()
-	x.stopLiveness()
-	x.clearSessionState()
-	x.emitStatus(EngineDisconnecting, "[AWG] Disconnecting")
-
-	go func() {
-		if err := x.awgStop(); err != nil {
-			logfmt.Errorf("[AWG] Failed to stop AWG: %v", err)
-			x.emitStatus(EngineError, fmt.Sprintf("[AWG] Failed to stop: %v", err))
-			return
-		}
-		x.emitStatus(EngineDisconnected, "[AWG] Disconnected")
-	}()
-
-	return glitchCoreResultSuccess
+	return x.stopEngineSession(&x.awgSession, "AWG", x.awgStop)
 }
 
 func (x *CoreController) HandleAwgIsRunning() int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if x.isAwgRunning.Load() {
+	if x.awgSession.engaged() {
 		return glitchCoreResultSuccess
 	}
 	return glitchCoreResultError
 }
 
-func (x *CoreController) awgStart(ifName string, tunFd int, rawConfig string, dnsOverride string) error {
-	log.Println("[AWG] awgStart")
+// The device's bring-up and tear-down; tests stand in for them, as the real
+// ones create a system TUN.
+var (
+	awgDeviceUp   = (*CoreController).awgDeviceUpPlatform
+	awgDeviceDown = (*CoreController).awgDeviceDownPlatform
+)
 
-	if x.isXrayRunning.Load() || x.isMihomoRunning.Load() {
+// awgStart brings the chosen link up and arms the session, all under
+// coreMutex so a start queued behind it finds either nothing of this session
+// or all of it.
+func (x *CoreController) awgStart(ifName string, tunFd int, rawConfig string, links []string, idx int, o engineOpts, mark int64) error {
+	engineStartGate("awg", mark)
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+
+	if already, err := x.prepareStartLocked(&x.awgSession, mark, x.awgStopLocked); err != nil || already {
+		return err
+	}
+	if x.xraySession.running.Load() || x.mihomoSession.running.Load() {
 		return fmt.Errorf("[AWG] another engine is already running")
 	}
-
-	if !x.isAwgRunning.CompareAndSwap(false, true) {
-		log.Println("[AWG] Awg is already running")
-		return nil
-	}
-
-	success := false
-	defer func() {
-		if !success {
-			x.isAwgRunning.Store(false)
-		}
-	}()
 
 	rawConfig, err := awgconfig.NormalizeToINI(rawConfig)
 	if err != nil {
 		return fmt.Errorf("[AWG] %w", err)
 	}
-
 	uapiCfg, err := awgconfig.ParseToUAPI(rawConfig)
 	if err != nil {
 		return fmt.Errorf("[AWG] parse config: %w", err)
 	}
-
-	// Do NOT hold coreMutex here - platformAwgStart locks the controller itself.
-	handle, err := x.platformAwgStart(ifName, tunFd, uapiCfg)
+	// awg (L3) takes only a plain resolver; empty -> INI DNS field.
+	handle, err := awgDeviceUp(x, ifName, tunFd, rawConfig, uapiCfg, o.dns.FirstPlainServer())
 	if err != nil {
 		return err
 	}
+	x.currentAwgHandle = handle
+	x.awgSession.up(mark)
+	log.Println("[AWG] Started successfully")
 
+	x.startAwgLiveness(o)
+	x.initAwgServerState(links, idx, o)
+	x.configureAwgIPResolve(o)
+	return nil
+}
+
+func (x *CoreController) awgDeviceUpPlatform(ifName string, tunFd int, rawConfig, uapiCfg, dnsOverride string) (int, error) {
+	handle, err := x.platformAwgStart(ifName, tunFd, uapiCfg)
+	if err != nil {
+		return -1, err
+	}
 	if runtime.GOOS == "windows" {
 		server := awgconfig.EndpointHost(rawConfig)
 		// dnsConfig plain server overrides the INI DNS field.
@@ -380,40 +354,42 @@ func (x *CoreController) awgStart(ifName string, tunFd int, rawConfig string, dn
 		}
 		addr := awgconfig.Address(rawConfig)
 		if err := configureTunV3(ifName, addr, []string{server}, dns); err != nil {
-			_ = x.awgStopHandle(handle) // takes the lock internally
-			return fmt.Errorf("configure tun: %w", err)
+			_ = x.awgStopHandleLocked(handle)
+			return -1, fmt.Errorf("configure tun: %w", err)
 		}
 	}
-
-	x.setCurrentAwgHandle(handle)
-
-	success = true
-	x.isAwgRunning.Store(true)
-	log.Println("[AWG] Started successfully")
-	return nil
+	return handle, nil
 }
 
-func (x *CoreController) awgStop() error {
-	if !x.isAwgRunning.Load() {
-		return nil
-	}
-	handle := x.loadCurrentAwgHandle()
-	if err := x.awgStopHandle(handle); err != nil {
+func (x *CoreController) awgDeviceDownPlatform(handle int) error {
+	if err := x.awgStopHandleLocked(handle); err != nil {
 		return err
 	}
 	if runtime.GOOS == "windows" {
 		cleanupTun("GlitchVPN")
 	}
-	x.isAwgRunning.Store(false)
-	x.setCurrentAwgHandle(0)
-	log.Println("[AWG] Stopped")
 	return nil
 }
 
-func (x *CoreController) awgStopHandle(handle int) error {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
+func (x *CoreController) awgStop(stopGen int64) error {
+	return x.stopEngineInstance("awg", &x.awgSession, stopGen, x.awgStopLocked)
+}
 
+// awgStopLocked tears the running device down. The caller holds coreMutex.
+func (x *CoreController) awgStopLocked() {
+	if !x.awgSession.running.Load() {
+		return
+	}
+	if err := awgDeviceDown(x, x.currentAwgHandle); err != nil {
+		logfmt.Errorf("[AWG] stop: %v", err)
+	}
+	x.awgSession.running.Store(false)
+	x.currentAwgHandle = 0
+	log.Println("[AWG] Stopped")
+}
+
+// awgStopHandleLocked closes one handle's device. The caller holds coreMutex.
+func (x *CoreController) awgStopHandleLocked(handle int) error {
 	awgHandle, exists := x.awgHandles[handle]
 	if !exists {
 		return fmt.Errorf("AWG handle %d not found", handle)
@@ -462,16 +438,4 @@ func (x *CoreController) getAwgTraffic() (uint64, uint64) {
 	}
 	rx, tx := awgconfig.SumRxTx(dump)
 	return rx, tx
-}
-
-func (x *CoreController) loadCurrentAwgHandle() int {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
-	return x.currentAwgHandle
-}
-
-func (x *CoreController) setCurrentAwgHandle(handle int) {
-	x.coreMutex.Lock()
-	x.currentAwgHandle = handle
-	x.coreMutex.Unlock()
 }

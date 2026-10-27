@@ -68,12 +68,12 @@ const (
 // xrayState/awgState/bridgeState so an excluded engine links none of its packages.
 type CoreController struct {
 	coreMutex          sync.Mutex
-	isXrayRunning      atomic.Bool
 	isTun2socksRunning atomic.Bool
 	currentAwgHandle   int
-	isAwgRunning       atomic.Bool
-	isMihomoRunning    atomic.Bool
 	nextHandle         int
+	xraySession        engineSession
+	awgSession         engineSession
+	mihomoSession      engineSession
 	statsMu            sync.Mutex
 	statsTicker        *time.Ticker
 	statsQuit          chan struct{}
@@ -128,7 +128,7 @@ func normalizedVersion(v string) string {
 func (x *CoreController) xraySettledRunning() bool {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
-	return x.isXrayRunning.Load()
+	return x.xraySession.running.Load()
 }
 
 func (x *CoreController) emitStatus(code int32, message string) {

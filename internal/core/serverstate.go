@@ -68,20 +68,15 @@ func (x *CoreController) clearSessionState() int64 {
 	return gen
 }
 
-// abortStaleSession: true when a stop tore this session down while it was
-// still starting. The stop's cleanup ran before (or during) arming, so undo
-// whatever this session armed - on desktop awg a leaked liveness prober would
-// otherwise report the physical NIC as the tunnel and publish the user's real
-// address as the exit IP.
-func (x *CoreController) abortStaleSession(mark int64) bool {
-	if x.sessionGen.Load() == mark {
-		return false
-	}
+// endSessionLoops undoes what a session armed. A stop's own cleanup can run
+// before the arming; on desktop awg a leaked liveness prober would then report
+// the physical NIC as the tunnel and publish the user's real address as the
+// exit IP.
+func (x *CoreController) endSessionLoops() {
 	x.stopLiveness()
 	x.stopSelectionWatch()
 	x.stopIPResolve()
 	x.serverSelJSON.Store("")
-	return true
 }
 
 // current returns an index into base.Servers, or -1 for "unknown" - the last

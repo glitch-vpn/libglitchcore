@@ -210,7 +210,7 @@ func TestHandleAwgStart_InvalidAwgPickedIsAnErrorEvent(t *testing.T) {
 			case <-time.After(5 * time.Second):
 				t.Fatal("no EngineError for an invalid awgPicked")
 			}
-			if ctl.isAwgRunning.Load() {
+			if ctl.awgSession.running.Load() {
 				t.Fatal("awg marked running after an invalid awgPicked")
 			}
 		})

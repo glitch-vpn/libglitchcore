@@ -47,7 +47,7 @@ func TestXrayTraffic_ReadsWhileAStartOrStopHoldsTheCore(t *testing.T) {
 	tags := []string{"proxy-0", "proxy-1"}
 	x := &CoreController{}
 	x.xrayTraffic.Store(&xrayTrafficSource{stats: newXrayStatsManager(t, tags, 10), tags: tags})
-	x.isXrayRunning.Store(true)
+	x.xraySession.running.Store(true)
 
 	rx, tx, running := readTrafficWhileTheCoreIsHeld(t, x)
 	if !running || rx != 20 || tx != 20 {
@@ -77,9 +77,9 @@ func TestXrayTraffic_ReadsRaceASessionEnding(t *testing.T) {
 	}
 	for range 200 {
 		x.xrayTraffic.Store(&xrayTrafficSource{stats: newXrayStatsManager(t, tags, 1), tags: tags})
-		x.isXrayRunning.Store(true)
+		x.xraySession.running.Store(true)
 		x.coreMutex.Lock()
-		x.isXrayRunning.Store(false)
+		x.xraySession.running.Store(false)
 		x.xrayTraffic.Store(nil)
 		x.coreMutex.Unlock()
 	}
@@ -90,7 +90,7 @@ func TestXrayTraffic_ReadsRaceASessionEnding(t *testing.T) {
 // The plugin asks which engine runs from the UI thread, during a connect too.
 func TestXrayRunning_AnswersWhileAStartHoldsTheCore(t *testing.T) {
 	x := &CoreController{}
-	x.xrayStartsInFlight.Add(1)
+	x.xraySession.startsInFlight.Add(1)
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 

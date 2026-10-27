@@ -76,7 +76,7 @@ func TestHandleAwgStart_RefusesProxyMode(t *testing.T) {
 	if len(codes) != 1 || codes[0] != EngineError || !strings.Contains(messages[0], "proxyPort") {
 		t.Fatalf("events = %v %q, want one EngineError naming proxyPort", codes, messages)
 	}
-	if ctl.isAwgRunning.Load() {
+	if ctl.awgSession.running.Load() {
 		t.Fatal("awg marked running after a refused proxy-mode start")
 	}
 }

@@ -128,7 +128,14 @@ break it.
   `replaySession` — on already-running starts, on status-port registration,
   and via the `replay_session` IPC command. `clearSessionState` bumps
   `sessionGen`, which is how a start that raced a stop tears down what it
-  armed too late (`abortStaleSession`).
+  armed too late (`abortStaleEngineSession`).
+- Each engine keeps an `engineSession` (`engine_session.go`) with one set of
+  rules: a start counts as running from its request, so a stop then is taken;
+  "already running" only for the current session's instance, and an earlier
+  session's instance is replaced under `coreMutex`; a stop leaves an instance
+  started as late as itself. Engines go through its helpers
+  (`beginStart`/`prepareStartLocked`/`finishStart`, `stopEngineSession`/
+  `stopEngineInstance`) rather than their own copies.
 
 ### Verification of a change (definition of done)
 

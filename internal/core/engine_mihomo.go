@@ -50,7 +50,7 @@ func (mihomoEngine) Stop(x *CoreController) int32 { return x.HandleMihomoStop() 
 func (mihomoEngine) IsRunning(x *CoreController) int32 { return x.HandleMihomoIsRunning() }
 
 func (mihomoEngine) Traffic(x *CoreController) (uint64, uint64, bool) {
-	if !x.isMihomoRunning.Load() {
+	if !x.mihomoSession.running.Load() {
 		return 0, 0, false
 	}
 	rx, tx := x.getMihomoTraffic()
@@ -266,16 +266,12 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if x.isXrayRunning.Load() || x.isAwgRunning.Load() {
+	if x.xraySession.running.Load() || x.awgSession.running.Load() {
 		x.emitStatus(EngineConflictOtherCore, "[mihomo] Start rejected: another engine is running")
 		return glitchCoreResultError
 	}
-	if x.isMihomoRunning.Load() {
-		x.emitStatus(EngineAlreadyRunning, "[mihomo] Already running")
-		x.startStats(time.Second)
-		x.emitStatus(EngineConnected, "[mihomo] Connected (already running)")
-		x.reemitSessionState()
-		return glitchCoreResultSuccess
+	if x.mihomoSession.runsSession(x.sessionGen.Load()) {
+		return x.replyAlreadyRunning("mihomo")
 	}
 
 	// After the guards: a malformed request must not tear down the live
@@ -292,34 +288,25 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	}
 
 	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
+	mark, done := x.beginStart(&x.mihomoSession)
 	go func() {
-		mark := x.sessionGen.Load()
-		if err := x.mihomoStart(links, req.TunFD, o, mark); err != nil {
-			logfmt.Errorf("[mihomo] start failed: %v", err)
-			x.clearSessionState()
-			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
-			return
-		}
-		if x.abortStaleSession(mark) {
-			log.Println("[mihomo] stopped during startup; not publishing connected state")
-			return
-		}
-		x.startStats(time.Second)
-		x.emitStatus(EngineConnected, "[mihomo] Connected")
+		defer done()
+		x.finishStart(&x.mihomoSession, "mihomo", mark, x.mihomoStart(links, req.TunFD, o, mark))
 	}()
 	return glitchCoreResultSuccess
 }
 
 func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, mark int64) error {
+	engineStartGate("mihomo", mark)
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
 	dns, prof, proxyPort := o.dns, o.routing, o.proxyPort
 
-	if x.isMihomoRunning.Load() {
-		return nil
+	if already, err := x.prepareStartLocked(&x.mihomoSession, mark, x.mihomoStopLocked); err != nil || already {
+		return err
 	}
-	if x.isXrayRunning.Load() || x.isAwgRunning.Load() {
+	if x.xraySession.running.Load() || x.awgSession.running.Load() {
 		return fmt.Errorf("[mihomo] another engine is already running")
 	}
 
@@ -416,7 +403,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 		log.Printf("[mihomo] Proxy mode: mixed SOCKS/HTTP at 127.0.0.1:%d (no TUN)", proxyPort)
 	}
 
-	x.isMihomoRunning.Store(true)
+	x.mihomoSession.up(mark)
 	startMihomoConnInspector()
 	x.startLiveness(livenessParams{
 		engine:   "mihomo",
@@ -511,45 +498,29 @@ func (x *CoreController) HandleMihomoStop() int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if !x.isMihomoRunning.Load() {
-		x.emitStatus(EngineStopRejectedNotRunning, "[mihomo] Stop rejected: not running")
-		return glitchCoreResultError
-	}
-
-	x.stopStats()
-	x.stopLiveness()
-	x.clearSessionState()
-	x.emitStatus(EngineDisconnecting, "[mihomo] Disconnecting")
-	go func() {
-		if err := x.mihomoStop(); err != nil {
-			logfmt.Errorf("[mihomo] stop failed: %v", err)
-			x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to stop: %v", err))
-			return
-		}
-		x.emitStatus(EngineDisconnected, "[mihomo] Disconnected")
-	}()
-	return glitchCoreResultSuccess
+	return x.stopEngineSession(&x.mihomoSession, "mihomo", x.mihomoStop)
 }
 
-func (x *CoreController) mihomoStop() error {
-	x.coreMutex.Lock()
-	defer x.coreMutex.Unlock()
+func (x *CoreController) mihomoStop(stopGen int64) error {
+	return x.stopEngineInstance("mihomo", &x.mihomoSession, stopGen, x.mihomoStopLocked)
+}
 
-	if !x.isMihomoRunning.Load() {
-		return nil
+// mihomoStopLocked tears the running engine down. The caller holds coreMutex.
+func (x *CoreController) mihomoStopLocked() {
+	if !x.mihomoSession.running.Load() {
+		return
 	}
 	x.mihomoStopBridge()
 	mihomoTeardown()
-	x.isMihomoRunning.Store(false)
+	x.mihomoSession.running.Store(false)
 	log.Println("[mihomo] stopped")
-	return nil
 }
 
 func (x *CoreController) HandleMihomoIsRunning() int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if x.isMihomoRunning.Load() {
+	if x.mihomoSession.engaged() {
 		return glitchCoreResultSuccess
 	}
 	return glitchCoreResultError

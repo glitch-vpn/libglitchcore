@@ -22,7 +22,7 @@ func TestAwgTraffic_ReadsWhileAStartOrStopHoldsTheCore(t *testing.T) {
 	x := &CoreController{}
 	x.initEngineState()
 	x.awgDevice.Store(newIdleAwgDevice(t))
-	x.isAwgRunning.Store(true)
+	x.awgSession.running.Store(true)
 
 	if _, _, running := readTrafficWhileTheCoreIsHeld(t, x); !running {
 		t.Fatal("a running awg session read as not running")
@@ -56,11 +56,14 @@ func TestAwgTraffic_ReadsRaceAStop(t *testing.T) {
 		x.awgHandles[handle] = &awgHandle{ID: handle, Device: dev, Running: true}
 		x.coreMutex.Unlock()
 		x.awgDevice.Store(dev)
-		x.isAwgRunning.Store(true)
-		if err := x.awgStopHandle(handle); err != nil {
+		x.awgSession.running.Store(true)
+		x.coreMutex.Lock()
+		err := x.awgStopHandleLocked(handle)
+		x.coreMutex.Unlock()
+		if err != nil {
 			t.Fatal(err)
 		}
-		x.isAwgRunning.Store(false)
+		x.awgSession.running.Store(false)
 	}
 	close(stop)
 	readers.Wait()

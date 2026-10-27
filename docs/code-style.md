@@ -19,7 +19,7 @@ Engine start/stop bodies hold `coreMutex`. Anything read from another
 goroutine — running flags, link state, cached JSON payloads — is an atomic:
 
 ```go
-isXrayRunning atomic.Bool      // flag
+xraySession   engineSession    // flags: running, starts in flight
 linkProbeMs   atomic.Int64     // snapshot
 serverSelJSON atomic.Value     // string; "" = none
 ```
@@ -74,9 +74,10 @@ never held across a callback, and past `maxDeferredStatus` it sheds the oldest
 `LogEvent`/`ConnEvent` only. The status sink it calls must not block.
 
 A start that races a stop is caught by `sessionGen`: the start captures the
-generation, the stop bumps it in `clearSessionState`, and the start's tail
-calls `abortStaleSession` before and after arming. Without it a stop landing
-in the tail leaves the previous session's loops running — on desktop awg the
+generation, the stop bumps it in `clearSessionState`, the start arms its loops
+under `coreMutex`, and its tail calls `abortStaleEngineSession`, which tears
+them down while its own instance still runs. Without it a stop landing in the
+tail leaves the previous session's loops running — on desktop awg the
 liveness prober would then measure the physical NIC and the IP fetch would
 publish the user's real address as the tunnel exit.
 
