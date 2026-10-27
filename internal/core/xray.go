@@ -69,10 +69,14 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 
 	x.emitStatus(EngineConnecting, "[Xray] Connecting")
 
-	mark, done := x.beginStart(&x.xraySession)
+	mark, tun, done, err := x.beginStart(&x.xraySession, req.TunFD)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to start: %v", err))
+		return glitchCoreResultError
+	}
 	go func() {
 		defer done()
-		x.finishStart(&x.xraySession, "Xray", mark, x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o, mark))
+		x.finishStart(&x.xraySession, "Xray", mark, x.xrayStart(req.Config, tun, req.DNS, req.LogLevel, o, mark))
 	}()
 
 	return glitchCoreResultSuccess
@@ -95,7 +99,7 @@ func (x *CoreController) HandleXrayIsRunning() int32 {
 	return glitchCoreResultError
 }
 
-func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string, logLevel int, o engineOpts, mark int64) (err error) {
+func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer string, logLevel int, o engineOpts, mark int64) (err error) {
 	engineStartGate("xray", mark)
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
@@ -254,7 +258,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 	if err := x.startTun2socks(tun2socksParams{
 		proxy:       appProxy,
 		forceProxy:  forceProxy,
-		tunFd:       tunFd,
+		tunFd:       tun.take(),
 		serverIPv4s: serverDialIPv4s,
 		dnsServer:   dnsServer,
 		logLevel:    tun2socksLogLevel,

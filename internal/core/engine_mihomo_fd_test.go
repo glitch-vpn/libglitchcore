@@ -11,7 +11,7 @@ import (
 )
 
 // The TUN fd stands in as a pipe's read end: once the caller closes its own
-// copy, a write fails with EPIPE only if no dup of it is left open.
+// copy, a write fails with EPIPE only if the start left no copy of it open.
 func TestMihomoStart_FailedStartClosesTunDup(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -39,7 +39,12 @@ func TestMihomoStart_FailedStartClosesTunDup(t *testing.T) {
 
 			t.Cleanup(func() { applyGeoAssetsDir("") })
 			x := &CoreController{}
-			startErr := x.mihomoStart(tc.links, int(platformFd.Fd()), engineOpts{geoAssetsDir: tc.geoDir(t)}, x.sessionGen.Load())
+			mark, tun, done, err := x.beginStart(&x.mihomoSession, int(platformFd.Fd()))
+			if err != nil {
+				t.Fatalf("beginStart: %v", err)
+			}
+			startErr := x.mihomoStart(tc.links, tun, engineOpts{geoAssetsDir: tc.geoDir(t)}, mark)
+			done()
 			if startErr == nil {
 				t.Fatal("mihomoStart succeeded, want a failed start")
 			}

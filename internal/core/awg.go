@@ -151,7 +151,11 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 
 	// Counted from here, the link pick included: a stop during the pick is
 	// taken, and the start then finds its session ended.
-	mark, done := x.beginStart(&x.awgSession)
+	mark, tun, done, err := x.beginStart(&x.awgSession, req.TunFD)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[AWG] Failed to start: %v", err))
+		return glitchCoreResultError
+	}
 	go func() {
 		defer done()
 		chosen, idx, err := chooseAwgLink(links, o)
@@ -160,7 +164,7 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 			x.emitStatus(EngineError, fmt.Sprintf("[AWG] %v", err))
 			return
 		}
-		x.finishStart(&x.awgSession, "AWG", mark, x.awgStart(ifaceName, req.TunFD, chosen, links, idx, o, mark))
+		x.finishStart(&x.awgSession, "AWG", mark, x.awgStart(ifaceName, tun, chosen, links, idx, o, mark))
 	}()
 
 	return glitchCoreResultSuccess
@@ -302,7 +306,7 @@ var (
 // awgStart brings the chosen link up and arms the session, all under
 // coreMutex so a start queued behind it finds either nothing of this session
 // or all of it.
-func (x *CoreController) awgStart(ifName string, tunFd int, rawConfig string, links []string, idx int, o engineOpts, mark int64) error {
+func (x *CoreController) awgStart(ifName string, tun *tunCopy, rawConfig string, links []string, idx int, o engineOpts, mark int64) error {
 	engineStartGate("awg", mark)
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
@@ -323,7 +327,7 @@ func (x *CoreController) awgStart(ifName string, tunFd int, rawConfig string, li
 		return fmt.Errorf("[AWG] parse config: %w", err)
 	}
 	// awg (L3) takes only a plain resolver; empty -> INI DNS field.
-	handle, err := awgDeviceUp(x, ifName, tunFd, rawConfig, uapiCfg, o.dns.FirstPlainServer())
+	handle, err := awgDeviceUp(x, ifName, tun, rawConfig, uapiCfg, o.dns.FirstPlainServer())
 	if err != nil {
 		return err
 	}
@@ -337,8 +341,8 @@ func (x *CoreController) awgStart(ifName string, tunFd int, rawConfig string, li
 	return nil
 }
 
-func (x *CoreController) awgDeviceUpPlatform(ifName string, tunFd int, rawConfig, uapiCfg, dnsOverride string) (int, error) {
-	handle, err := x.platformAwgStart(ifName, tunFd, uapiCfg)
+func (x *CoreController) awgDeviceUpPlatform(ifName string, tun *tunCopy, rawConfig, uapiCfg, dnsOverride string) (int, error) {
+	handle, err := x.platformAwgStart(ifName, tun, uapiCfg)
 	if err != nil {
 		return -1, err
 	}

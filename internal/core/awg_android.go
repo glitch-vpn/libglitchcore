@@ -5,7 +5,6 @@ package core
 import (
 	"errors"
 	"fmt"
-	"log"
 	"net"
 	"syscall"
 	"time"
@@ -17,15 +16,14 @@ import (
 )
 
 // The caller holds coreMutex.
-func (x *CoreController) platformAwgStart(ifName string, tunFd int, settings string) (int, error) {
+func (x *CoreController) platformAwgStart(ifName string, tunFd *tunCopy, settings string) (int, error) {
 	handle := x.nextHandle
 	x.nextHandle++
 
-	dupFd, dupErr := dupTunFd(tunFd)
-	if dupErr != nil {
-		return -1, fmt.Errorf("dup TUN fd: %w", dupErr)
+	dupFd := tunFd.take()
+	if dupFd < 0 {
+		return -1, errors.New("no TUN fd")
 	}
-	log.Printf("[AWG] dup'd TUN fd %d -> %d", tunFd, dupFd)
 
 	// The dup stays ours until CreateUnmonitoredTUNFromFD wraps it in an
 	// os.File; from then on the file owns it and a close here would hit a

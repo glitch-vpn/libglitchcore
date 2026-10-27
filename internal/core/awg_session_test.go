@@ -26,14 +26,14 @@ func standInAwgDevices(t *testing.T) *awgDevices {
 	t.Helper()
 	d := &awgDevices{fds: map[int]int{}, down: map[int]bool{}}
 	prevUp, prevDown := awgDeviceUp, awgDeviceDown
-	awgDeviceUp = func(x *CoreController, _ string, tunFd int, _, _, _ string) (int, error) {
+	awgDeviceUp = func(x *CoreController, _ string, tunFd *tunCopy, _, _, _ string) (int, error) {
 		dev := device.NewDevice(tuntest.NewChannelTUN().TUN(), conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
 		handle := x.nextHandle
 		x.nextHandle++
 		x.awgHandles[handle] = &awgHandle{ID: handle, Device: dev, Running: true}
 		x.awgDevice.Store(dev)
 		d.mu.Lock()
-		d.fds[handle] = tunFd
+		d.fds[handle] = tunFd.take()
 		d.mu.Unlock()
 		return handle, nil
 	}
@@ -77,12 +77,14 @@ func newAwgSessionController(t *testing.T) *CoreController {
 }
 
 func TestAwgStop_TakenWhileALaterStartWaits(t *testing.T) {
+	standInTunCopies(t)
 	standInAwgDevices(t)
 	x := newAwgSessionController(t)
 	queuedStopScenario(t, x, "awg", &x.awgSession, x.HandleAwgStart, x.HandleAwgStop, awgStartOn(101))
 }
 
 func TestAwgStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
+	standInTunCopies(t)
 	devices := standInAwgDevices(t)
 	x := newAwgSessionController(t)
 
@@ -94,8 +96,8 @@ func TestAwgStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	x.coreMutex.Unlock()
 	devices.mu.Lock()
 	defer devices.mu.Unlock()
-	if devices.fds[handle] != 102 {
-		t.Fatalf("the running device came up on fd %d, want B's 102", devices.fds[handle])
+	if devices.fds[handle] != 1102 {
+		t.Fatalf("the running device came up on fd %d, want the copy of B's 102", devices.fds[handle])
 	}
 	if aLeft || !devices.down[1] {
 		t.Fatal("A's device is still up")
@@ -105,6 +107,7 @@ func TestAwgStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 // The link pick runs before the start takes the lock and can take seconds;
 // a stop in it is taken, and the start then gives up.
 func TestAwgStop_TakenDuringTheLinkPick(t *testing.T) {
+	standInTunCopies(t)
 	standInAwgDevices(t)
 	logs := captureLogs(t, 1)
 	release := holdStarts(t, "awg")
@@ -118,6 +121,7 @@ func TestAwgStop_TakenDuringTheLinkPick(t *testing.T) {
 	}
 	release(0)
 	waitStartsGivenUp(t, logs, 1)
+	waitStartsInFlight(t, &x.awgSession, 0)
 	if x.awgSession.running.Load() {
 		t.Fatal("awg runs after a stop during its link pick")
 	}

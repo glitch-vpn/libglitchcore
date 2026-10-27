@@ -288,15 +288,19 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	}
 
 	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
-	mark, done := x.beginStart(&x.mihomoSession)
+	mark, tun, done, err := x.beginStart(&x.mihomoSession, req.TunFD)
+	if err != nil {
+		x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
+		return glitchCoreResultError
+	}
 	go func() {
 		defer done()
-		x.finishStart(&x.mihomoSession, "mihomo", mark, x.mihomoStart(links, req.TunFD, o, mark))
+		x.finishStart(&x.mihomoSession, "mihomo", mark, x.mihomoStart(links, tun, o, mark))
 	}()
 	return glitchCoreResultSuccess
 }
 
-func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, mark int64) error {
+func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts, mark int64) error {
 	engineStartGate("mihomo", mark)
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
@@ -309,15 +313,6 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 	if x.xraySession.running.Load() || x.awgSession.running.Load() {
 		return fmt.Errorf("[mihomo] another engine is already running")
 	}
-
-	// The dup stays ours until ApplyConfig hands it to sing-tun; left open, it
-	// keeps the platform's VPN interface up after the plugin closes its own fd.
-	unclaimedTunFd := -1
-	defer func() {
-		if unclaimedTunFd >= 0 {
-			closeTunFd(unclaimedTunFd)
-		}
-	}()
 
 	// Inbound: proxyPort>0 = loopback mixed, no TUN. Bridge (when tun2socks is
 	// linked; Windows + Android via env) = mihomo's tunnel fed in process by a
@@ -346,16 +341,13 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 			dns.Servers = []string{xrayDefaultDnsServer}
 		}
 		tin := &mihomoconfig.TunInbound{MTU: defaultTunMTU, DNS: dns}
-		if tunFd > 0 {
-			// DUP the platform fd: sing-tun closes the fd it's given on teardown,
-			// but ParcelFileDescriptor/NE still owns the original - double-close
-			// fdsan-aborts (see dupTunFd).
-			dupFd, derr := dupTunFd(tunFd)
-			if derr != nil {
-				return fmt.Errorf("[mihomo] dup tun fd: %w", derr)
-			}
-			unclaimedTunFd = dupFd
-			tin.FileDescriptor = dupFd
+		if tun.fd >= 0 {
+			// The start's copy: sing-tun closes the fd it's given on teardown,
+			// but ParcelFileDescriptor/NE still owns the original. Until
+			// ApplyConfig takes it, the start's done closes it; left open, it
+			// keeps the platform's VPN interface up after the plugin closes its
+			// own fd.
+			tin.FileDescriptor = tun.fd
 			// Android cmfa: seed mihomo's system resolver so bootstrap/proxy
 			// hostname resolution works (no-op elsewhere).
 			seedMihomoSystemDNS(plainDNSServers(dns))
@@ -386,7 +378,9 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 	mihomoSessionTraffic.startSession()
 
 	log.Println("[mihomo] applying config")
-	unclaimedTunFd = -1
+	if bridge == nil {
+		tun.take()
+	}
 	// ApplyConfig is void but blocks through TUN creation; a cleared TUN Enable
 	// flag is the only success signal (checked below, native TUN mode only).
 	executor.ApplyConfig(cfg, true)
@@ -395,7 +389,7 @@ func (x *CoreController) mihomoStart(links []string, tunFd int, o engineOpts, ma
 		return fmt.Errorf("[mihomo] TUN listener failed to start (see mihomo logs)")
 	}
 	if bridge != nil {
-		if err := x.mihomoStartBridge(bridge, prof, dns, tunFd, mark); err != nil {
+		if err := x.mihomoStartBridge(bridge, prof, dns, tun.take(), mark); err != nil {
 			mihomoTeardown()
 			return fmt.Errorf("[mihomo] tun2socks bridge: %w", err)
 		}

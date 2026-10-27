@@ -52,12 +52,57 @@ func (s *engineSession) up(mark int64) {
 	s.running.Store(true)
 }
 
-// beginStart counts a start from its request; done ends the count when the
-// start's goroutine returns.
-func (x *CoreController) beginStart(s *engineSession) (mark int64, done func()) {
+// beginStart counts a start from its request and copies the platform TUN fd
+// there, in the FFI call: by the time the start gets coreMutex the caller may
+// have closed that fd and its number gone to something else. done closes the
+// copy unless the engine took it, and ends the count, when the start's
+// goroutine returns.
+func (x *CoreController) beginStart(s *engineSession, tunFd int) (mark int64, tun *tunCopy, done func(), err error) {
+	if tun, err = copyRequestTun(tunFd); err != nil {
+		return 0, nil, nil, err
+	}
 	mark = x.sessionGen.Load()
 	s.startsInFlight.Add(1)
-	return mark, func() { s.startsInFlight.Add(-1) }
+	return mark, tun, func() {
+		tun.release()
+		s.startsInFlight.Add(-1)
+	}, nil
+}
+
+// The dup and close of a start's TUN copy; tests stand in for them, as a dup
+// is no copy on Windows.
+var (
+	dupRequestTun   = dupTunFd
+	closeRequestTun = closeTunFd
+)
+
+// tunCopy is a start's own copy of the platform TUN fd (fd < 0: none asked
+// for). The engine takes it where something else comes to own it.
+type tunCopy struct{ fd int }
+
+func copyRequestTun(fd int) (*tunCopy, error) {
+	if fd <= 0 {
+		return &tunCopy{fd: -1}, nil
+	}
+	dup, err := dupRequestTun(fd)
+	if err != nil {
+		return nil, fmt.Errorf("dup TUN fd: %w", err)
+	}
+	log.Printf("[Generic] dup'd TUN fd %d -> %d", fd, dup)
+	return &tunCopy{fd: dup}, nil
+}
+
+// take hands the copy over: from here its new owner closes it.
+func (t *tunCopy) take() int {
+	fd := t.fd
+	t.fd = -1
+	return fd
+}
+
+func (t *tunCopy) release() {
+	if t.fd >= 0 {
+		closeRequestTun(t.take())
+	}
 }
 
 // engineStartGate and engineStopGate run before a start or a stop takes

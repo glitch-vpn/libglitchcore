@@ -4,6 +4,6 @@ package core
 
 import "errors"
 
-func (x *CoreController) platformAwgStart(ifName string, tunFd int, settings string) (int, error) {
+func (x *CoreController) platformAwgStart(ifName string, _ *tunCopy, settings string) (int, error) {
 	return -1, errors.New("turning on from file descriptor is not supported on this platform")
 }

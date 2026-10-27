@@ -30,7 +30,7 @@ import (
 type tun2socksParams struct {
 	proxy       t2sproxy.Proxy
 	forceProxy  t2sproxy.Proxy // always tunnels: where process->proxy flows go (may be nil)
-	tunFd       int            // fd path (non-Windows)
+	tunFd       int            // fd path (non-Windows): a copy this start owns
 	serverIPv4s []string       // proxy server IPs pinned off the TUN (Windows)
 	dnsServer   string
 	logLevel    string
@@ -85,19 +85,17 @@ func tun2socksUDPTimeout() time.Duration {
 }
 
 // startTun2socks bridges the platform TUN to params.proxy. On the fd path it
-// dup's the fd so Go owns its own copy - disconnect must not double-close the
-// platform-owned (ParcelFileDescriptor) fd.
+// takes the start's own copy of the fd, made in the FFI call: disconnect must
+// not double-close the platform-owned (ParcelFileDescriptor) fd.
 func (x *CoreController) startTun2socks(p tun2socksParams) error {
 	var devURI string
 	if runtime.GOOS == "windows" {
 		devURI = "tun://GlitchVPN"
 	} else {
-		dupFd, err := dupTunFd(p.tunFd)
-		if err != nil {
-			return fmt.Errorf("dup TUN fd: %w", err)
+		if p.tunFd < 0 {
+			return errors.New("no TUN fd")
 		}
-		devURI = fmt.Sprintf("fd://%d", dupFd)
-		log.Printf("[tun2socks] dup'd TUN fd %d -> %d", p.tunFd, dupFd)
+		devURI = fmt.Sprintf("fd://%d", p.tunFd)
 	}
 
 	logLevel := capTun2socksLogLevel(p.logLevel)

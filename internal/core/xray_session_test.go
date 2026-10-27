@@ -62,3 +62,31 @@ func TestXrayStop_LeavesTheInstanceOfALaterStart(t *testing.T) {
 		t.Fatal("the stop marked the later session's engine stopped")
 	}
 }
+
+// The start copies the TUN fd in the FFI call, before it waits for the lock:
+// by the time it would get there the caller may have closed that fd and its
+// number gone to something else. A start that gives up closes its copy.
+func TestXrayStart_CopiesTheTunFdInTheCall(t *testing.T) {
+	copies := standInTunCopies(t)
+	logs := captureLogs(t, 1)
+	release := holdStarts(t, "xray")
+	x := &CoreController{}
+	x.initEngineState()
+
+	if res := x.HandleXrayStart(EngineStartRequest{Config: xraySessionTestLink, TunFD: 7}); res != glitchCoreResultSuccess {
+		t.Fatalf("start = %d", res)
+	}
+	if dups, _ := copies.snapshot(); dups[7] != 1 {
+		t.Fatalf("copies of fd 7 made in the call = %d, want 1", dups[7])
+	}
+	if res := x.HandleXrayStop(); res != glitchCoreResultSuccess {
+		t.Fatalf("stop = %d", res)
+	}
+	release(0)
+	waitStartsGivenUp(t, logs, 1)
+	waitStartsInFlight(t, &x.xraySession, 0)
+
+	if _, closed := copies.snapshot(); len(closed) != 1 || closed[0] != 1007 {
+		t.Fatalf("closed %v, want the start's copy 1007 once", closed)
+	}
+}

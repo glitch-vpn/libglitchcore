@@ -138,6 +138,7 @@ func queuedStopScenario(t *testing.T, x *CoreController, engine string, s *engin
 	}
 	release(1)
 	waitStartsGivenUp(t, logs, 2)
+	waitStartsInFlight(t, s, 0)
 
 	if s.running.Load() {
 		t.Fatal("the engine runs after both starts were stopped")
@@ -168,6 +169,7 @@ func replaceScenario(t *testing.T, engine string, s *engineSession, start func(E
 	}
 	releaseStart(1)
 	life.waitFor(t, EngineConnected, 2)
+	waitStartsInFlight(t, s, 0)
 	releaseStop()
 	time.Sleep(200 * time.Millisecond)
 
@@ -240,6 +242,52 @@ func TestAbortStaleEngineSession_EndsTheLoopsUnlessALaterStartOwnsThem(t *testin
 					t.Fatalf("loops left running = %v, want %v", left, c.loopsLeft)
 				}
 			})
+		}
+	}
+}
+
+// tunCopies stands in for the dup of a start's TUN copy: copy n of fd f is
+// f+1000*n, and every close is recorded.
+type tunCopies struct {
+	mu     sync.Mutex
+	dups   map[int]int
+	closed []int
+}
+
+func standInTunCopies(t *testing.T) *tunCopies {
+	t.Helper()
+	c := &tunCopies{dups: map[int]int{}}
+	prevDup, prevClose := dupRequestTun, closeRequestTun
+	dupRequestTun = func(fd int) (int, error) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.dups[fd]++
+		return fd + 1000*c.dups[fd], nil
+	}
+	closeRequestTun = func(fd int) {
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		c.closed = append(c.closed, fd)
+	}
+	t.Cleanup(func() { dupRequestTun, closeRequestTun = prevDup, prevClose })
+	return c
+}
+
+func (c *tunCopies) snapshot() (dups map[int]int, closed []int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	dups = map[int]int{}
+	for k, v := range c.dups {
+		dups[k] = v
+	}
+	return dups, append([]int(nil), c.closed...)
+}
+
+func waitStartsInFlight(t *testing.T, s *engineSession, want int32) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); s.startsInFlight.Load() != want; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("starts in flight = %d, want %d", s.startsInFlight.Load(), want)
 		}
 	}
 }

@@ -16,7 +16,7 @@ import (
 )
 
 // The caller holds coreMutex.
-func (x *CoreController) platformAwgStart(ifName string, _ int, settings string) (int, error) {
+func (x *CoreController) platformAwgStart(ifName string, _ *tunCopy, settings string) (int, error) {
 	handle := x.nextHandle
 	x.nextHandle++
 
