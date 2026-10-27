@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"strconv"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -189,7 +190,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		if berr != nil {
 			return fmt.Errorf("[Xray] Config build failed: %w", berr)
 		}
-		if x.xrayCoreInstance, err = xrayCore.New(builtCfg); err != nil {
+		if x.xrayCoreInstance, err = x.newXrayInstance(builtCfg); err != nil {
 			return fmt.Errorf("[Xray] Core init failed: %w", err)
 		}
 		stats := x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
@@ -225,7 +226,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 	if err != nil {
 		return fmt.Errorf("[Xray] Config build failed: %w", err)
 	}
-	x.xrayCoreInstance, err = xrayCore.New(builtCfg)
+	x.xrayCoreInstance, err = x.newXrayInstance(builtCfg)
 	if err != nil {
 		return fmt.Errorf("[Xray] Core init failed: %w", err)
 	}
@@ -310,10 +311,29 @@ func waitSocksReady(endpoint string) bool {
 	return false
 }
 
+func (x *CoreController) newXrayInstance(cfg *xrayCore.Config) (*xrayCore.Instance, error) {
+	life, cancel := context.WithCancel(context.Background())
+	inst, err := xrayCore.NewWithContext(life, cfg)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	x.xrayLife, x.xrayLifeCancel = life, cancel
+	return inst, nil
+}
+
+func (x *CoreController) endXrayLife() {
+	if x.xrayLifeCancel != nil {
+		x.xrayLifeCancel()
+		x.xrayLife, x.xrayLifeCancel = nil, nil
+	}
+}
+
 // xrayRollback undoes a start that got as far as creating the instance.
 func (x *CoreController) xrayRollback() {
 	x.xraySession.running.Store(false)
 	x.xrayTraffic.Store(nil)
+	x.endXrayLife()
 	if x.xrayCoreInstance != nil {
 		_ = x.xrayCoreInstance.Close()
 		x.xrayCoreInstance = nil
@@ -324,10 +344,11 @@ func (x *CoreController) xrayStop(stopGen int64) error {
 	return x.stopEngineInstance("xray", &x.xraySession, stopGen, x.xrayStopLocked)
 }
 
-// xrayStopLocked closes the bridge and the instance. The caller holds
-// coreMutex.
+// xrayStopLocked closes the bridge, the connections xray holds and the
+// instance. The caller holds coreMutex.
 func (x *CoreController) xrayStopLocked() {
 	x.stopTun2socks()
+	x.endXrayLife()
 
 	if x.xraySession.running.Load() {
 		done := make(chan struct{})
@@ -355,6 +376,7 @@ func (x *CoreController) xrayStopLocked() {
 // AppTrafficTag routes like the user's traffic. Like mihomoTunnelDial it
 // refuses once the session that started at mark has ended.
 func (x *CoreController) xrayTunnelDial(inst *xrayCore.Instance, tag string, mark int64) tunnelDialFunc {
+	life := x.xrayLife
 	return func(ctx context.Context, _, addr string) (net.Conn, error) {
 		if x.sessionGen.Load() != mark {
 			return nil, errSessionEnded
@@ -368,8 +390,33 @@ func (x *CoreController) xrayTunnelDial(inst *xrayCore.Instance, tag string, mar
 			return nil, err
 		}
 		ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: tag})
-		return xrayCore.Dial(ctx, inst, xrayNet.TCPDestination(xrayNet.ParseAddress(host), port))
+		// xray ends the flow when its context is cancelled: the caller's, or
+		// the instance's with the session.
+		ctx, cancel := context.WithCancel(ctx)
+		endWithInstance := context.AfterFunc(life, cancel)
+		conn, err := xrayCore.Dial(ctx, inst, xrayNet.TCPDestination(xrayNet.ParseAddress(host), port))
+		if err != nil {
+			endWithInstance()
+			cancel()
+			return nil, err
+		}
+		return &xrayDialConn{Conn: conn, release: func() {
+			endWithInstance()
+			cancel()
+		}}, nil
 	}
+}
+
+// xrayDialConn gives up its context when closed.
+type xrayDialConn struct {
+	net.Conn
+	release func()
+	once    sync.Once
+}
+
+func (c *xrayDialConn) Close() error {
+	c.once.Do(c.release)
+	return c.Conn.Close()
 }
 
 func (x *CoreController) getXrayTraffic() (uint64, uint64) {
