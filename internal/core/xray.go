@@ -75,9 +75,9 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 	x.emitStatus(EngineConnecting, "[Xray] Connecting")
 
 	mark := x.sessionGen.Load()
-	x.xrayStarting.Store(true)
+	x.xrayStartsInFlight.Add(1)
 	go func() {
-		defer x.xrayStarting.Store(false)
+		defer x.xrayStartsInFlight.Add(-1)
 		err := x.xrayStart(req.Config, req.TunFD, req.DNS, req.LogLevel, o, mark)
 		if errors.Is(err, errSessionEnded) {
 			log.Println("[Xray] stopped before startup; not starting")
@@ -111,11 +111,16 @@ func (x *CoreController) HandleXrayStop() int32 {
 
 	x.stopStats()
 	x.stopLiveness()
-	x.clearSessionState()
+	stopGen := x.clearSessionState()
 	x.emitStatus(EngineDisconnecting, "[Xray] Disconnecting")
 
 	go func() {
-		if err := x.xrayStop(); err != nil {
+		err := x.xrayStop(stopGen)
+		if errors.Is(err, errStopSuperseded) {
+			log.Println("[Xray] a start after this stop owns the engine; leaving it")
+			return
+		}
+		if err != nil {
 			logfmt.Errorf("[Xray] Failed to stop Xray: %v", err)
 			x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to stop: %v", err))
 			return
@@ -139,10 +144,15 @@ func (x *CoreController) HandleXrayIsRunning() int32 {
 // xrayEngaged: running or starting, read without coreMutex, which a start or
 // a stop holds for its whole run; callers reach it from the UI thread.
 func (x *CoreController) xrayEngaged() bool {
-	return x.isXrayRunning.Load() || x.xrayStarting.Load()
+	return x.isXrayRunning.Load() || x.xrayStartsInFlight.Load() > 0
 }
 
+// xrayStartGate runs before a start takes coreMutex; tests hold a start there
+// to order it against stops.
+var xrayStartGate = func(mark int64) {}
+
 func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string, logLevel int, o engineOpts, mark int64) (err error) {
+	xrayStartGate(mark)
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
@@ -241,6 +251,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 		}
 		stats := x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
 		x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.OutboundTags})
+		x.xrayInstanceGen = mark
 		x.isXrayRunning.Store(true)
 		if err = x.xrayCoreInstance.Start(); err != nil {
 			x.xrayRollback()
@@ -280,6 +291,7 @@ func (x *CoreController) xrayStart(rawconfig string, tunFd int, dnsServer string
 	x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.OutboundTags})
 
 	log.Println("[Xray] Starting core")
+	x.xrayInstanceGen = mark
 	x.isXrayRunning.Store(true)
 	if err := x.xrayCoreInstance.Start(); err != nil {
 		x.xrayRollback()
@@ -367,10 +379,18 @@ func (x *CoreController) xrayRollback() {
 	}
 }
 
-func (x *CoreController) xrayStop() error {
+// errStopSuperseded: the instance running was started after the stop was
+// asked for, by a start queued behind it; the stop leaves it to that session.
+var errStopSuperseded = errors.New("a later start owns the engine")
+
+// xrayStop stops the instance a start before stopGen brought up.
+func (x *CoreController) xrayStop(stopGen int64) error {
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 
+	if x.isXrayRunning.Load() && x.xrayInstanceGen >= stopGen {
+		return errStopSuperseded
+	}
 	x.stopTun2socks()
 
 	if x.isXrayRunning.Load() {

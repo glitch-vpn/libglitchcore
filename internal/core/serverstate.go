@@ -59,11 +59,13 @@ func (x *CoreController) reemitSessionState() {
 // once clearSessionState has run for it.
 var errSessionEnded = errors.New("session ended")
 
-func (x *CoreController) clearSessionState() {
-	x.sessionGen.Add(1)
+// clearSessionState returns the generation it moved the session to.
+func (x *CoreController) clearSessionState() int64 {
+	gen := x.sessionGen.Add(1)
 	x.stopSelectionWatch()
 	x.stopIPResolve()
 	x.serverSelJSON.Store("")
+	return gen
 }
 
 // abortStaleSession: true when a stop tore this session down while it was
