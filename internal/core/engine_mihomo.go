@@ -484,6 +484,12 @@ func mihomoTeardown() {
 		executor.ApplyConfig(empty, true)
 	}
 	executor.Shutdown()
+	// mihomo's tunnel outlives the session and keeps each flow until its own
+	// timeout; a stopped session ends the flows it opened.
+	statistic.DefaultManager.Range(func(t statistic.Tracker) bool {
+		_ = t.Close()
+		return true
+	})
 	stopMihomoLogBridge()
 	stopMihomoConnInspector()
 }
