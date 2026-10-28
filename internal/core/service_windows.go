@@ -265,13 +265,38 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 	}
 }
 
-// onServedUserChange runs under the write lock of the change. The tunnel
-// outlives a switch of users; what shows its traffic does not, and neither do
-// the connections of a caller no longer admitted.
+// onServedUserChange runs under the write lock of the change, so none of it
+// races a command: what shows the traffic goes, a session another user
+// started stops, and so do the connections of a caller no longer admitted.
 func (s *glitchService) onServedUserChange() {
 	s.hideTraffic()
+	s.stopSessionOfAnotherUser()
 	s.commandConnections.closeNotAdmitted(s.access.admitsLocked)
 	s.eventConnections.closeNotAdmitted(s.access.admitsLocked)
+}
+
+// stopSessionOfAnotherUser stops the session another account started once a
+// different user is served, so the new user starts with the tunnel off. Nobody
+// served stops nothing, so the same user coming back finds it running, and a
+// session LocalSystem started belongs to no user.
+func (s *glitchService) stopSessionOfAnotherUser() {
+	start := s.access.sessionStart.Load()
+	served := s.access.servedUser
+	if start == nil || served == nil || start.starter.Equals(served) || start.starter.IsWellKnown(windows.WinLocalSystemSid) {
+		return
+	}
+	logfmt.Warnf("[service] stopping the %s session %s started: %s is served now", start.engineID, start.starter, served)
+	s.access.sessionStart.CompareAndSwap(start, nil)
+	stopRunningEngine(start.engineID)
+}
+
+var stopRunningEngine = func(engineID string) {
+	if globalController.engineIsRunning(engineID) != glitchCoreResultSuccess {
+		return
+	}
+	if resp := stopEngine(engineID); !resp.OK {
+		logfmt.Errorf("[service] %s", resp.Error)
+	}
 }
 
 // hideTraffic turns off what describes the tunnel's traffic, and drops what
@@ -587,6 +612,9 @@ func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAcc
 				return
 			}
 			resp = dispatchCommand(cmd)
+			if resp.OK {
+				access.noteSession(cmd, *caller)
+			}
 		}) {
 			refuse(caller)
 			return
@@ -595,6 +623,16 @@ func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAcc
 			return
 		}
 	}
+}
+
+func stopEngine(engineID string) pipeResponse {
+	result := runFFICall(func() int32 {
+		return globalController.engineStop(engineID)
+	})
+	if result != glitchCoreResultSuccess {
+		return pipeResponse{OK: false, Error: fmt.Sprintf("engine %q stop failed: code %d", engineID, result)}
+	}
+	return pipeResponse{OK: true}
 }
 
 // turnsTrafficOn is true of a command that would show the tunnel's traffic:
@@ -658,13 +696,7 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
 			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid payload: %v", err)}
 		}
-		result := runFFICall(func() int32 {
-			return globalController.engineStop(payload.EngineID)
-		})
-		if result != glitchCoreResultSuccess {
-			return pipeResponse{OK: false, Error: fmt.Sprintf("engine %q stop failed: code %d", payload.EngineID, result)}
-		}
-		return pipeResponse{OK: true}
+		return stopEngine(payload.EngineID)
 	case "engine_status":
 		var payload struct {
 			EngineID string `json:"engineId"`

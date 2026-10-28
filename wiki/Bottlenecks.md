@@ -116,12 +116,16 @@ name once the direct outbound resolves it. Domain and IP matchers honour tier or
   administrators and the user at the console — or, with nobody there, the one
   user of an active remote session. Every command and every event subscriber
   is checked against that user, so after a switch of users the one switched
-  away from is refused until they come back. A running tunnel survives the
-  switch; the connection inspector and logging are turned off, and so they
+  away from is refused until they come back. On a switch the connection
+  inspector and logging are turned off, and so they
   are while the service cannot tell who is at the machine, when only
   LocalSystem and elevated administrators may turn them back on. With several
   remote users at once and nobody at the console, only elevated
   administrators get through.
+* When a different user comes to the console, the service stops the session
+  the previous user started, so the new user starts with the VPN off; nobody
+  being served stops nothing, the same user coming back finds it running, and
+  a session LocalSystem started is left alone.
 * Admission is per user, not per session: the served user is admitted from
   any session they are signed in to, and an elevated administrator's client
   stays admitted across a switch of users.

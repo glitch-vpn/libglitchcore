@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -530,5 +531,90 @@ func TestTrafficStaysHiddenFromTheServedUserWhileTheActiveUserCannotBeRead(t *te
 	}
 	if !connInspectEnabled.Load() {
 		t.Fatal("the inspector stayed off")
+	}
+}
+
+// recordEngineStops stands in for stopping a running engine and lists the
+// engines a change of served user stopped.
+func recordEngineStops(t *testing.T) *[]string {
+	t.Helper()
+	var stopped []string
+	previous := stopRunningEngine
+	stopRunningEngine = func(engineID string) { stopped = append(stopped, engineID) }
+	t.Cleanup(func() { stopRunningEngine = previous })
+	return &stopped
+}
+
+func startSession(access *pipeAccess, starter *windows.SID) {
+	access.noteSession(pipeCommand{Action: "engine_start", Payload: json.RawMessage(`{"engineId":"xray"}`)}, pipeCaller{user: starter})
+}
+
+func TestSessionIsRecordedByItsStarterAndForgottenOnStop(t *testing.T) {
+	starter := madeUpUserSID(t, "1001")
+	access := servedAccess(t, starter)
+	startSession(access, starter)
+	if start := access.sessionStart.Load(); start == nil || start.engineID != "xray" || !start.starter.Equals(starter) {
+		t.Fatalf("recorded %+v, want xray started by %s", start, starter)
+	}
+	access.noteSession(pipeCommand{Action: "engine_stop", Payload: json.RawMessage(`{"engineId":"xray"}`)}, pipeCaller{user: starter})
+	if start := access.sessionStart.Load(); start != nil {
+		t.Fatalf("still recorded after a stop: %+v", start)
+	}
+}
+
+func TestSwitchToAnotherUserStopsTheSession(t *testing.T) {
+	first := madeUpUserSID(t, "1001")
+	stopped := recordEngineStops(t)
+	service := servedService(t, first)
+	startSession(service.access, first)
+
+	service.access.changeServedUser(madeUpUserSID(t, "1002"), service.onServedUserChange)
+
+	if !slices.Equal(*stopped, []string{"xray"}) {
+		t.Fatalf("stopped %v, want the xray session", *stopped)
+	}
+}
+
+func TestSameUserComingBackKeepsTheSession(t *testing.T) {
+	first := madeUpUserSID(t, "1001")
+	stopped := recordEngineStops(t)
+	service := servedService(t, first)
+	startSession(service.access, first)
+
+	service.access.changeServedUser(nil, service.onServedUserChange)
+	service.access.changeServedUser(first, service.onServedUserChange)
+
+	if len(*stopped) != 0 {
+		t.Fatalf("stopped %v, want the session kept", *stopped)
+	}
+}
+
+func TestAnotherUserAfterNobodyStopsTheSession(t *testing.T) {
+	first := madeUpUserSID(t, "1001")
+	stopped := recordEngineStops(t)
+	service := servedService(t, first)
+	startSession(service.access, first)
+
+	service.access.changeServedUser(nil, service.onServedUserChange)
+	if len(*stopped) != 0 {
+		t.Fatalf("nobody served stopped %v", *stopped)
+	}
+	service.access.changeServedUser(madeUpUserSID(t, "1002"), service.onServedUserChange)
+
+	if !slices.Equal(*stopped, []string{"xray"}) {
+		t.Fatalf("stopped %v, want the xray session", *stopped)
+	}
+}
+
+func TestSessionLocalSystemStartedOutlivesASwitch(t *testing.T) {
+	system, _ := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	stopped := recordEngineStops(t)
+	service := servedService(t, madeUpUserSID(t, "1001"))
+	startSession(service.access, system)
+
+	service.access.changeServedUser(madeUpUserSID(t, "1002"), service.onServedUserChange)
+
+	if len(*stopped) != 0 {
+		t.Fatalf("stopped %v, want the session kept", *stopped)
 	}
 }

@@ -4,11 +4,14 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	"unsafe"
 
@@ -58,6 +61,33 @@ type pipeAccess struct {
 	// From the first failed read of the active user until a read succeeds,
 	// only LocalSystem and elevated administrators may show the traffic.
 	trafficHidden bool
+	sessionStart  atomic.Pointer[engineSessionStart] // nil when no session runs
+}
+
+// engineSessionStart is the session a successful engine_start began, and the
+// account that began it.
+type engineSessionStart struct {
+	engineID string
+	starter  *windows.SID
+}
+
+// noteSession records who started the session after an engine_start that
+// succeeded, and forgets it after an engine_stop that did.
+func (a *pipeAccess) noteSession(cmd pipeCommand, caller pipeCaller) {
+	var payload struct {
+		EngineID string `json:"engineId"`
+	}
+	if json.Unmarshal(cmd.Payload, &payload) != nil {
+		return
+	}
+	switch strings.ToLower(strings.TrimSpace(cmd.Action)) {
+	case "engine_start":
+		a.sessionStart.Store(&engineSessionStart{engineID: payload.EngineID, starter: caller.user})
+	case "engine_stop":
+		if start := a.sessionStart.Load(); start != nil && start.engineID == payload.EngineID {
+			a.sessionStart.CompareAndSwap(start, nil)
+		}
+	}
 }
 
 func newPipeAccess() *pipeAccess {
