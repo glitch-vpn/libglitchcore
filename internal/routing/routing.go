@@ -59,8 +59,9 @@ type Tier struct {
 	Proxy  []string `json:"proxy,omitempty"`
 }
 
-// Profile priority: kill-switches -> Tiers in order (block -> direct -> proxy
-// within each) -> local networks -> Mode catch-all.
+// Profile priority: kill-switches -> per-app proxy flows (the bridge's
+// always-tunnel path) -> Tiers in order (block -> direct -> proxy within each)
+// -> local networks -> Mode catch-all.
 type Profile struct {
 	Mode  string
 	Tiers []Tier

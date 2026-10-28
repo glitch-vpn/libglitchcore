@@ -43,6 +43,29 @@ func TestBuildConfig_BridgeOpensNoListener(t *testing.T) {
 	}
 }
 
+// A per-app proxy flow follows the kill-switches and precedes every tier, the
+// order routing.Profile documents.
+func TestBuildRules_ForceProxyFollowsKillSwitches(t *testing.T) {
+	got := buildRules(routing.Profile{
+		Mode:        routing.ModeDirectAll,
+		Tiers:       []routing.Tier{{Block: []string{"ads.example"}, Proxy: []string{"process:app.exe"}}},
+		DisableIPv6: true,
+		DisableUDP:  true,
+	}, "vpn", true)
+	want := []string{
+		"IP-CIDR,::/0,REJECT,no-resolve",
+		"AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT",
+		"IN-NAME," + ForceProxyInName + ",vpn",
+		"DOMAIN-SUFFIX,ads.example,REJECT",
+		"PROCESS-NAME,app.exe,vpn",
+		"MATCH,DIRECT",
+	}
+	gotJoined, wantJoined := strings.Join(got, "\n"), strings.Join(want, "\n")
+	if gotJoined != wantJoined {
+		t.Fatalf("rules =\n%s\nwant\n%s", gotJoined, wantJoined)
+	}
+}
+
 func TestBuildConfig_DisableIPv6AndUDP(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
 	cfg, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{},
@@ -450,7 +473,7 @@ func TestBuildRules(t *testing.T) {
 		}},
 		LocalNetworks: true,
 	}
-	joined := strings.Join(buildRules(p, "vpn"), "\n")
+	joined := strings.Join(buildRules(p, "vpn", false), "\n")
 	for _, want := range []string{
 		"DOMAIN-SUFFIX,ads.example,REJECT",
 		"PROCESS-NAME,Discord.exe,DIRECT",
@@ -474,7 +497,7 @@ func TestBuildRules(t *testing.T) {
 			"48.123.243.123", "full:exact.example", "keyword:ads", "regexp:.*\\.cn$",
 			"domain:.ru.", ".рф",
 		}}},
-	}, "vpn"), "\n")
+	}, "vpn", false), "\n")
 	for _, want := range []string{
 		"IP-CIDR,48.123.243.123/32,vpn,no-resolve",
 		"DOMAIN,exact.example,vpn",
@@ -492,20 +515,20 @@ func TestBuildRules(t *testing.T) {
 	da := strings.Join(buildRules(routing.Profile{
 		Mode:  routing.ModeDirectAll,
 		Tiers: []routing.Tier{{Proxy: []string{"domain:youtube.com"}}},
-	}, "vpn"), "\n")
+	}, "vpn", false), "\n")
 	if !strings.Contains(da, "DOMAIN-SUFFIX,youtube.com,vpn") || !strings.Contains(da, "MATCH,DIRECT") {
 		t.Fatalf("direct-all rules wrong:\n%s", da)
 	}
 
 	// Empty profile -> everything to the proxy.
-	if empty := buildRules(routing.Profile{}, "proxy-0"); len(empty) != 1 || empty[0] != "MATCH,proxy-0" {
+	if empty := buildRules(routing.Profile{}, "proxy-0", false); len(empty) != 1 || empty[0] != "MATCH,proxy-0" {
 		t.Fatalf("empty profile rules = %v", empty)
 	}
 
 	// A zone in the Cyrillic script and a geosite alongside it translate.
 	inv := strings.Join(buildRules(routing.Profile{
 		Tiers: []routing.Tier{{Block: []string{"geosite:category-ru", "domain:рф"}}},
-	}, "vpn"), "\n")
+	}, "vpn", false), "\n")
 	if !strings.Contains(inv, "GEOSITE,category-ru,REJECT") || !strings.Contains(inv, "DOMAIN-SUFFIX,рф,REJECT") {
 		t.Fatalf("valid matchers dropped:\n%s", inv)
 	}
@@ -514,7 +537,7 @@ func TestBuildRules(t *testing.T) {
 	// literal category names like geolocation-!cn) and must survive.
 	geo := strings.Join(buildRules(routing.Profile{
 		Tiers: []routing.Tier{{Proxy: []string{"geosite:geolocation-!cn", "geosite:cn@ads", "geoip:!ru"}}},
-	}, "vpn"), "\n")
+	}, "vpn", false), "\n")
 	for _, want := range []string{
 		"GEOSITE,geolocation-!cn,vpn",
 		"GEOSITE,cn@ads,vpn",
@@ -568,7 +591,7 @@ func TestBuildRules_TwoTierOrdering(t *testing.T) {
 			{Proxy: []string{"domain:vk.ru"}},
 			{Direct: []string{"domain:ru"}},
 		},
-	}, "vpn")
+	}, "vpn", false)
 	want := []string{
 		"DOMAIN-SUFFIX,vk.ru,vpn",
 		"DOMAIN-SUFFIX,ru,DIRECT",

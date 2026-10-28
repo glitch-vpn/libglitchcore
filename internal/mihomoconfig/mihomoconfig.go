@@ -194,12 +194,7 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		raw.ProxyGroup = []map[string]any{group}
 	}
 
-	rules := buildRules(prof, target)
-	// The IN-NAME rule goes first so force-proxy flows always win, reaching
-	// the proxy even in direct-all mode.
-	if in.ForceProxy {
-		rules = append([]string{"IN-NAME," + ForceProxyInName + "," + target}, rules...)
-	}
+	rules := buildRules(prof, target, in.ForceProxy)
 	raw.Rule = rules
 
 	if err := checkGeoAssets(rules, raw.DNS.FakeIPFilter); err != nil {
@@ -257,8 +252,10 @@ func requireGeoFile(path, listName, label string) error {
 // buildRules translates the routing profile into mihomo rule lines. target is
 // where unlisted traffic goes; an empty profile yields just MATCH,target.
 // Priority (first match wins): kill-switches -> tiers in order (block ->
-// direct -> proxy within each) -> local -> mode catch-all.
-func buildRules(p routing.Profile, target string) []string {
+// direct -> proxy within each) -> local -> mode catch-all. forceProxy adds the
+// bridge's always-tunnel flows right after the kill-switches, so they reach the
+// proxy even in direct-all mode but never past a kill-switch.
+func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 	var rules []string
 	if p.DisableIPv6 {
 		rules = append(rules, "IP-CIDR,::/0,REJECT,no-resolve")
@@ -266,6 +263,9 @@ func buildRules(p routing.Profile, target string) []string {
 	if p.DisableUDP {
 		// :53 stays open so DNS keeps resolving.
 		rules = append(rules, "AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT")
+	}
+	if forceProxy {
+		rules = append(rules, "IN-NAME,"+ForceProxyInName+","+target)
 	}
 	for _, tier := range p.Tiers {
 		rules = append(rules, matcherRules(tier.Block, "REJECT")...)

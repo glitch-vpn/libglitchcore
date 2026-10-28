@@ -178,6 +178,49 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 	}
 }
 
+// A per-app proxy flow follows the kill-switches and precedes every tier, the
+// order routing.Profile documents.
+func TestApply_ForceProxyFollowsKillSwitches(t *testing.T) {
+	p := RoutingProfile{
+		Mode:        ModeDirectAll,
+		Tiers:       []routing.Tier{{Block: []string{"domain:ads.example"}, Proxy: []string{"process:app.exe"}}},
+		DisableIPv6: true,
+		DisableUDP:  true,
+	}
+	_, rules := applyTo(t, p, "proxy", false)
+
+	index := func(match func(ruleView) bool) int {
+		for i, r := range rules {
+			if match(r) {
+				return i
+			}
+		}
+		return -1
+	}
+	hasTag := func(tag string) func(ruleView) bool {
+		return func(r ruleView) bool {
+			for _, got := range r.InboundTag {
+				if got == tag {
+					return true
+				}
+			}
+			return false
+		}
+	}
+	udp := index(func(r ruleView) bool { return r.Network == "udp" })
+	force := index(hasTag(ForceProxyTag))
+	block := index(func(r ruleView) bool { return len(r.Domain) == 1 && r.Domain[0] == "domain:ads.example" })
+	if udp < 0 || force < 0 || block < 0 {
+		t.Fatalf("want a udp kill-switch, a force-proxy rule and a block tier, got %+v", rules)
+	}
+	if !(udp < force && force < block) {
+		t.Fatalf("order must be kill-switches, force-proxy, tiers; indexes udp=%d force=%d block=%d", udp, force, block)
+	}
+	if rules[force].OutboundTag != "proxy" {
+		t.Fatalf("force-proxy rule must route to the proxy: %+v", rules[force])
+	}
+}
+
 func TestApply_ExitEchoPrecedesTiers(t *testing.T) {
 	p := RoutingProfile{
 		Mode:  ModeDirectAll,

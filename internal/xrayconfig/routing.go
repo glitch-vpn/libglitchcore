@@ -123,7 +123,7 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	}
 
 	// Priority (first match wins): protocol kill-switches -> exit echo ->
-	// tiers in order (block -> direct -> proxy within each) -> local networks
+	// force-proxy flows -> tiers in order (block -> direct -> proxy within each) -> local networks
 	// -> mode catch-all. Explicit direct/proxy rules are emitted in both modes; the
 	// catch-all decides what unlisted traffic does.
 	var rules []json.RawMessage
@@ -142,6 +142,14 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	echoRule := fieldRule{InboundTag: []string{ExitEchoTag}}
 	proxy.apply(&echoRule)
 	rules = append(rules, echoRule.raw())
+	// Force-proxy flows (ForceProxyTag, per-process process->proxy) always
+	// tunnel, so "route only this app through the VPN" holds even in
+	// direct-all mode.
+	if hasProcessProxy(p) {
+		forceRule := fieldRule{InboundTag: []string{ForceProxyTag}}
+		proxy.apply(&forceRule)
+		rules = append(rules, forceRule.raw())
+	}
 	for _, tier := range p.Tiers {
 		rules = append(rules, matcherRules(tier.Block, block)...)
 		rules = append(rules, matcherRules(tier.Direct, direct)...)
@@ -152,15 +160,6 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		r := fieldRule{IP: routing.LocalNetworkCIDRs}
 		direct.apply(&r)
 		rules = append(rules, r.raw())
-	}
-
-	// Force-proxy flows (ForceProxyTag, per-process process->proxy) always
-	// tunnel, so "route only this app through the VPN" holds even in
-	// direct-all mode.
-	if hasProcessProxy(p) {
-		forceRule := fieldRule{InboundTag: []string{ForceProxyTag}}
-		proxy.apply(&forceRule)
-		rules = append(rules, forceRule.raw())
 	}
 
 	catchAll := fieldRule{InboundTag: []string{AppTrafficTag}}
