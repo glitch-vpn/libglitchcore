@@ -2,15 +2,11 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"net"
 	"net/http"
-	"net/url"
 	"time"
-
-	xproxy "golang.org/x/net/proxy"
 
 	"github.com/glitch-vpn/libglitchcore/internal/liveness"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
@@ -182,53 +178,6 @@ func probeOnce(ctx context.Context, probeURL string, dial func(ctx context.Conte
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
 	_ = resp.Body.Close()
 	return elapsed, nil
-}
-
-func loopbackSocksURL(hostPort, user, pass string) string {
-	u := url.URL{Scheme: "socks5", Host: hostPort}
-	if user != "" && pass != "" {
-		u.User = url.UserPassword(user, pass)
-	}
-	return u.String()
-}
-
-// socksContextDialer dials TCP through xray's proxy-mode SOCKS inbound with
-// the caller's credentials, the path the caller's own clients take.
-func socksContextDialer(socksURL string) (func(ctx context.Context, network, addr string) (net.Conn, error), error) {
-	u, err := url.Parse(socksURL)
-	if err != nil {
-		return nil, fmt.Errorf("socks url: %w", err)
-	}
-	var auth *xproxy.Auth
-	if u.User != nil {
-		pass, _ := u.User.Password()
-		auth = &xproxy.Auth{User: u.User.Username(), Password: pass}
-	}
-	d, err := xproxy.SOCKS5("tcp", u.Host, auth, &net.Dialer{Timeout: livenessProbeTimeout})
-	if err != nil {
-		return nil, fmt.Errorf("socks dialer: %w", err)
-	}
-	cd, ok := d.(xproxy.ContextDialer)
-	if !ok {
-		return nil, fmt.Errorf("socks dialer has no DialContext")
-	}
-	return cd.DialContext, nil
-}
-
-// Built per call - the inbound may not be accepting yet when the session is
-// configured.
-func socksTunnelDial(socksURL string) tunnelDialFunc {
-	return func(ctx context.Context, network, addr string) (net.Conn, error) {
-		d, err := socksContextDialer(socksURL)
-		if err != nil {
-			return nil, err
-		}
-		return d(ctx, network, addr)
-	}
-}
-
-func socksProber(socksURL, probeURL string) func(ctx context.Context) (time.Duration, error) {
-	return tunnelProber(socksTunnelDial(socksURL), probeURL)
 }
 
 func tunnelProber(dial tunnelDialFunc, probeURL string) func(ctx context.Context) (time.Duration, error) {

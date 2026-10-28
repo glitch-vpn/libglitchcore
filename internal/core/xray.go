@@ -241,7 +241,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		x.startLiveness(livenessParams{
 			engine:   "xray",
 			interval: livenessInterval(o.livenessSec),
-			probe:    socksProber(loopbackSocksURL(endpoint, o.proxyUser, o.proxyPass), o.probeURL),
+			probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark), o.probeURL),
 		})
 		x.initXrayServerState(res, links, o, stats)
 		x.configureIPResolve(ipResolveConfig{
@@ -309,12 +309,13 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 
 	log.Println("[Xray] Started successfully, running")
 
-	// Probe inside xray as app traffic, so liveness follows the user's path
-	// and works on Android, where our own sockets bypass the VPN.
+	// Probe inside xray, pinned to the proxy like the exit echo: a tier that
+	// rejects the probe host must not read as link-down. Dialing in-process
+	// also works on Android, where our own sockets bypass the VPN.
 	x.startLiveness(livenessParams{
 		engine:   "xray",
 		interval: livenessInterval(o.livenessSec),
-		probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.AppTrafficTag, mark), o.probeURL),
+		probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark), o.probeURL),
 	})
 	x.initXrayServerState(res, links, o, stats)
 	x.configureIPResolve(ipResolveConfig{
@@ -405,8 +406,9 @@ func (x *CoreController) xrayStopLocked() {
 }
 
 // xrayTunnelDial dials inside the instance as the inbound tag names:
-// ExitEchoTag takes the proxy ahead of the routing tiers,
-// AppTrafficTag routes like the user's traffic. Like mihomoTunnelDial it
+// ExitEchoTag takes the proxy ahead of the routing tiers, which is where the
+// liveness probe and the exit echo go; AppTrafficTag routes like the user's
+// traffic. Like mihomoTunnelDial it
 // refuses once the session that started at mark has ended.
 func (x *CoreController) xrayTunnelDial(inst *xrayCore.Instance, tag string, mark int64) tunnelDialFunc {
 	life := x.xrayLife

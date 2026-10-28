@@ -402,7 +402,7 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	x.startLiveness(livenessParams{
 		engine:   "mihomo",
 		interval: livenessInterval(o.livenessSec),
-		probe:    tunnelProber(x.mihomoTunnelDial("", mark), o.probeURL),
+		probe:    tunnelProber(x.mihomoTunnelDial(mihomoconfig.Target(links), mark), o.probeURL),
 	})
 	x.initMihomoServerState(links, o)
 	x.configureIPResolve(ipResolveConfig{
@@ -418,7 +418,8 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 
 // mihomoTunnelDial dials inside mihomo's tunnel, so the core's own probes need
 // no loopback listener: proxy "" follows the rules like user traffic, a proxy
-// name pins the flow to that proxy or group ahead of every rule. The dial
+// name pins the flow to that proxy or group ahead of every rule; the liveness
+// probe and the exit echo are pinned. The dial
 // refuses once the session that started at mark has ended: mihomo's tunnel
 // outlives the session with only DIRECT left, and an echo retried then would
 // leave from the user's own address.
