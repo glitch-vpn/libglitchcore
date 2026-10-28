@@ -131,9 +131,16 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	raw.GeoAutoUpdate = false
 	raw.GeoXUrl = config.RawGeoXUrl{}
 	// The IP->domain mapping lives in the DNS layer, so switching the sniffer
-	// off never breaks fake-ip itself.
+	// off never breaks fake-ip itself. ParsePureIp is what makes the sniffer
+	// act on a flow addressed by IP; without it only force-domain names would
+	// be sniffed. OverrideDest stays off so the dial keeps the IP and the name
+	// only steers the rules, as xray's routeOnly does. ForceDnsMapping stays
+	// off: a name DNS already supplied is authoritative, and sniffing would
+	// let the app's own bytes disagree with it.
 	raw.Sniffer = config.RawSniffer{
-		Enable: !opts.DisableSniffing,
+		Enable:       !opts.DisableSniffing,
+		ParsePureIp:  true,
+		OverrideDest: false,
 		Sniff: map[string]config.RawSniffingConfig{
 			"TLS":  {Ports: []string{"443"}},
 			"HTTP": {Ports: []string{"80", "8080-8880"}},

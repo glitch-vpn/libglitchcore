@@ -120,6 +120,31 @@ func TestBuildConfig_SnifferToggle(t *testing.T) {
 	}
 }
 
+// A flow addressed by IP is sniffed, and the sniffed name steers rules without
+// replacing the destination the dial uses. A name DNS supplied is not sniffed
+// again.
+func TestBuildConfig_SnifferActsOnIPFlowsWithoutOverridingTheDestination(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
+	cfg, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	if !cfg.Sniffer.ParsePureIp {
+		t.Error("parse-pure-ip is off: no flow addressed by IP is sniffed")
+	}
+	if len(cfg.Sniffer.Sniffers) == 0 {
+		t.Fatal("no protocol is sniffed")
+	}
+	for protocol, sniffed := range cfg.Sniffer.Sniffers {
+		if sniffed.OverrideDest {
+			t.Errorf("%v: override-destination is on: a sniffed name would replace the address the dial uses", protocol)
+		}
+	}
+	if cfg.Sniffer.ForceDnsMapping {
+		t.Error("force-dns-mapping is on: a name DNS supplied would be sniffed again")
+	}
+}
+
 func TestBuildConfig_ProxyAuth(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
 
