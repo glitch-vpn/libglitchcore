@@ -1163,11 +1163,11 @@ func ssProxy(link, name string) (map[string]any, error) {
 }
 
 func splitHostPort(hostPort string) (host, port string, err error) {
-	i := strings.LastIndex(hostPort, ":")
-	if i < 0 {
+	host, port, err = net.SplitHostPort(hostPort)
+	if err != nil {
 		return "", "", fmt.Errorf("ss: missing port in %q", hostPort)
 	}
-	return hostPort[:i], hostPort[i+1:], nil
+	return host, port, nil
 }
 
 func decodeBase64(s string) (string, error) {

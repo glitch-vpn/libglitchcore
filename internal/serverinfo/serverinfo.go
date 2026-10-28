@@ -5,6 +5,7 @@ package serverinfo
 
 import (
 	"encoding/json"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -122,8 +123,8 @@ func ssLegacyHostPort(link string) (string, int) {
 	if at < 0 || at == len(decoded)-1 {
 		return "", 0
 	}
-	host, portStr, ok := strings.Cut(decoded[at+1:], ":")
-	if !ok {
+	host, portStr, err := net.SplitHostPort(decoded[at+1:])
+	if err != nil {
 		return decoded[at+1:], 0
 	}
 	port, _ := strconv.Atoi(strings.TrimSpace(portStr))

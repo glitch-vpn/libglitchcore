@@ -171,3 +171,21 @@ func TestFromLink_VMess(t *testing.T) {
 		t.Fatalf("URI form: got %+v", s)
 	}
 }
+
+func TestFromLink_SSLegacyBase64SplitsHostAndPortLikeNetSplitHostPort(t *testing.T) {
+	cases := []struct {
+		name, plain, host string
+		port              int
+	}{
+		{"IPv6", "aes-256-gcm:pass@[2001:db8::1]:8388", "2001:db8::1", 8388},
+		{"IPv4", "aes-256-gcm:pass@192.0.2.7:8388", "192.0.2.7", 8388},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			s := FromLink("ss://"+base64.StdEncoding.EncodeToString([]byte(c.plain)), 0)
+			if s.Host != c.host || s.Port != c.port {
+				t.Fatalf("host/port = %q/%d, want %q/%d", s.Host, s.Port, c.host, c.port)
+			}
+		})
+	}
+}

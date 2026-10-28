@@ -499,8 +499,8 @@ func outboundFromSS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, str
 		}
 		method = creds[:col]
 		password = creds[col+1:]
-		h, pstr, ok := strings.Cut(addr, ":")
-		if !ok {
+		h, pstr, serr := net.SplitHostPort(addr)
+		if serr != nil {
 			return nil, "", "", fmt.Errorf("invalid ss addr")
 		}
 		host = h
