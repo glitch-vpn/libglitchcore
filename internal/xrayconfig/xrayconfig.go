@@ -428,9 +428,11 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 
 	q := u.Query()
 	// Trojan runs over TLS or REALITY; any other security= still means TLS.
-	if s := strings.ToLower(q.Get("security")); s != "tls" && s != "reality" {
-		q.Set("security", "tls")
+	s := strings.ToLower(strings.TrimSpace(q.Get("security")))
+	if s != "tls" && s != "reality" {
+		s = "tls"
 	}
+	q.Set("security", s)
 	stream, gap, err := buildStreamSettings(host, q)
 	if err != nil {
 		return nil, "", "", fmt.Errorf("trojan: %w", err)

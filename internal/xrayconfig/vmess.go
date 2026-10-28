@@ -39,7 +39,7 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 		return nil, "", "", fmt.Errorf("vmess: cipher %q is not supported", l.Cipher)
 	}
 	q := l.Params
-	if q.Get("security") == "reality" {
+	if strings.ToLower(strings.TrimSpace(q.Get("security"))) == "reality" {
 		return nil, "", "", fmt.Errorf("vmess: security \"reality\" is not supported")
 	}
 	stream, streamGap, err := buildStreamSettings(l.Host, q)

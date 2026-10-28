@@ -111,3 +111,21 @@ func TestStream_EachMappedTransportReachesXray(t *testing.T) {
 		})
 	}
 }
+
+func TestStream_SecurityIsTrimmedBeforeItIsRead(t *testing.T) {
+	key := strings.Repeat("A", 43)
+	for name, link := range map[string]string{
+		"trojan": testTrojanLink + "security=%20reality&sni=a.example.com&pbk=" + key + "&sid=0123",
+		"vless":  testVLESSLink + "security=%20reality&sni=a.example.com&pbk=" + key + "&sid=0123",
+	} {
+		t.Run(name, func(t *testing.T) {
+			stream := buildLink(t, link).Config.OutboundConfigs[0].StreamSetting
+			if stream.REALITYSettings == nil || stream.TLSSettings != nil {
+				t.Fatalf("security with a space must be REALITY: %+v", stream)
+			}
+		})
+	}
+	if _, err := BuildConfig([]string{vmessShared(t, map[string]any{"tls": " reality"})}, BalancerOptions{}, RoutingProfile{}, "none"); err == nil {
+		t.Fatal("vmess reality accepted")
+	}
+}
