@@ -6,6 +6,7 @@ import (
 	"context"
 	"io"
 	"net"
+	"sync"
 	"sync/atomic"
 
 	"github.com/metacubex/mihomo/adapter"
@@ -21,25 +22,38 @@ import (
 // to count its own bytes, so mihomo too reports what the tunnel proxied since
 // the session started.
 type mihomoTraffic struct {
-	baseUp, baseDown     atomic.Int64
 	directUp, directDown atomic.Int64
+
+	// mu holds a session's start against a read: a read that straddled a
+	// start would raise the new session's mark to the old session's total.
+	mu                 sync.Mutex
+	baseUp, baseDown   int64
+	shownUp, shownDown uint64
 }
 
 var mihomoSessionTraffic mihomoTraffic
 
 func (t *mihomoTraffic) startSession() {
-	up, down := statistic.DefaultManager.Total()
-	t.baseUp.Store(up)
-	t.baseDown.Store(down)
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.baseUp, t.baseDown = statistic.DefaultManager.Total()
 	t.directUp.Store(0)
 	t.directDown.Store(0)
+	t.shownUp, t.shownDown = 0, 0
 }
 
+// A DIRECT byte is counted as it is read, before the manager's total sees the
+// chunk, so the difference can dip by a chunk for a moment. The totals are
+// cumulative, so what was reported once is never taken back.
 func (t *mihomoTraffic) proxied() (uint64, uint64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
 	up, down := statistic.DefaultManager.Total()
-	up -= t.baseUp.Load() + t.directUp.Load()
-	down -= t.baseDown.Load() + t.directDown.Load()
-	return uint64(max(down, 0)), uint64(max(up, 0))
+	up -= t.baseUp + t.directUp.Load()
+	down -= t.baseDown + t.directDown.Load()
+	t.shownUp = max(t.shownUp, uint64(max(up, 0)))
+	t.shownDown = max(t.shownDown, uint64(max(down, 0)))
+	return t.shownDown, t.shownUp
 }
 
 // The adapter is swapped inside the parsed DIRECT proxy rather than the proxy
