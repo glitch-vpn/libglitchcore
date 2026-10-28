@@ -41,7 +41,6 @@ var bridgeTestProfile = routing.Profile{Mode: routing.ModeDirectAll, Tiers: []ro
 // mihomoStartBridge hands tun2socks.
 func startMihomoBridge(t *testing.T, x *CoreController) (app, force t2sproxy.Proxy) {
 	t.Helper()
-	skipWhereMihomoRaces(t)
 	mihomoTestHome(t)
 	dns := dnsconfig.Config{}
 	in, b := mihomoBridgeInbound(&dns, bridgeTestProfile)
@@ -58,6 +57,7 @@ func startMihomoBridge(t *testing.T, x *CoreController) (app, force t2sproxy.Pro
 }
 
 func TestMihomoBridge_CarriesTCPAndUDP(t *testing.T) {
+	skipWhereMihomoRaces(t)
 	app, _ := startMihomoBridge(t, &CoreController{})
 	requireTCPRoundTrip(t, app, tcpEcho(t), "pingeof")
 
@@ -80,6 +80,7 @@ func TestMihomoBridge_CarriesTCPAndUDP(t *testing.T) {
 }
 
 func TestMihomoBridge_AnswersTheAppsDNSInProcess(t *testing.T) {
+	skipWhereMihomoRaces(t)
 	app, _ := startMihomoBridge(t, &CoreController{})
 	resolver := &net.UDPAddr{IP: net.IPv4(1, 1, 1, 1), Port: 53}
 	pc, err := app.DialUDP(bridgeTestFlow(M.UDP, resolver))
@@ -113,6 +114,7 @@ func TestMihomoBridge_AnswersTheAppsDNSInProcess(t *testing.T) {
 // Force-proxy flows reach the proxy by their IN-NAME rule even in direct-all
 // mode; the test proxy is unreachable, so mihomo's dial-error line says so.
 func TestMihomoBridge_ForceProxyFlowsTakeTheProxy(t *testing.T) {
+	skipWhereMihomoRaces(t)
 	_, force := startMihomoBridge(t, &CoreController{})
 	sub := mihomoLog.Subscribe()
 	defer mihomoLog.UnSubscribe(sub)
@@ -141,6 +143,7 @@ func TestMihomoBridge_ForceProxyFlowsTakeTheProxy(t *testing.T) {
 }
 
 func TestMihomoBridge_RefusesAfterItsSessionEnds(t *testing.T) {
+	skipWhereMihomoRaces(t)
 	x := &CoreController{}
 	app, _ := startMihomoBridge(t, x)
 	x.clearSessionState()

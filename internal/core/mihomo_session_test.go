@@ -36,7 +36,6 @@ func mihomoSessionHome(t *testing.T) string {
 
 func newMihomoSessionController(t *testing.T) *CoreController {
 	t.Helper()
-	skipWhereMihomoRaces(t)
 	x := &CoreController{}
 	x.initEngineState()
 	t.Cleanup(func() {
@@ -56,6 +55,7 @@ func TestMihomoStop_TakenWhileALaterStartWaits(t *testing.T) {
 }
 
 func TestMihomoStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
+	skipWhereMihomoRaces(t)
 	x := newMihomoSessionController(t)
 	home := mihomoSessionHome(t)
 	reqA, addrA := mihomoProxyStart(t, home)
