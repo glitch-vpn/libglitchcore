@@ -701,7 +701,42 @@ func trojanProxy(link, name string) (map[string]any, error) {
 	if err := applyCertChecks(p, q, "trojan"); err != nil {
 		return nil, err
 	}
+	if err := applyTrojanTransport(p, q); err != nil {
+		return nil, err
+	}
 	return p, nil
+}
+
+// mihomo's Trojan outbound runs over plain TCP, WebSocket (HTTPUpgrade as its
+// option) and gRPC. A transport or HTTP header it lacks fails the link: run as
+// plain TCP it would connect to nothing the server speaks.
+func applyTrojanTransport(p map[string]any, q url.Values) error {
+	network := strings.ToLower(strings.TrimSpace(q.Get("type")))
+	switch network {
+	case "tcp", "raw", "":
+		if header := strings.ToLower(strings.TrimSpace(q.Get("headerType"))); header != "" && header != "none" {
+			return fmt.Errorf("trojan: tcp header %q is not supported", header)
+		}
+	case "ws", "websocket", "httpupgrade":
+		p["network"] = "ws"
+		opts := map[string]any{}
+		if path := q.Get("path"); path != "" {
+			opts["path"] = path
+		}
+		if host := q.Get("host"); host != "" {
+			opts["headers"] = map[string]any{"Host": host}
+		}
+		if network == "httpupgrade" {
+			opts["v2ray-http-upgrade"] = true
+		}
+		p["ws-opts"] = opts
+	case "grpc":
+		p["network"] = "grpc"
+		p["grpc-opts"] = map[string]any{"grpc-service-name": q.Get("serviceName")}
+	default:
+		return fmt.Errorf("trojan: transport %q is not supported", network)
+	}
+	return nil
 }
 
 func hysteria2Proxy(link, name string) (map[string]any, error) {
