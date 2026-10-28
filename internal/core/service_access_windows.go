@@ -23,7 +23,10 @@ import (
 // their own under the service's pipe names.
 const pipeClientAccessMask windows.ACCESS_MASK = 0x12019b
 
-const accessDeniedReply = "access denied"
+const (
+	accessDeniedReply       = "access denied"
+	tooManyConnectionsReply = "too many connections"
+)
 
 // servicePipeSDDL admits LocalSystem and the Administrators group in full and
 // the served user as a client; with no served user only the first two remain.
@@ -86,28 +89,43 @@ var (
 	activeUserReadGrace     = 30 * time.Second
 )
 
-// refresh reads the active user until a read succeeds. Meanwhile it keeps the
-// served user, since a failed read says nothing about who is at the machine,
-// but not past activeUserReadGrace: a user who left could keep the pipes.
-func (a *pipeAccess) refresh(ctx context.Context, onChange func()) {
+// refresh reads the active user until a read succeeds. The first failure runs
+// onUnreadable under the write lock and keeps the served user, since a failed
+// read says nothing about who is at the machine; a user who left could keep
+// the pipes, though, so after activeUserReadGrace nobody is served, and the
+// reads go on so that whoever is at the console gets the pipes back.
+func (a *pipeAccess) refresh(ctx context.Context, onChange, onUnreadable func()) {
 	delay := activeUserRetryDelay
 	failingSince := time.Now()
+	hidden, fellBack := false, false
 	for {
 		user, err := readActiveUser()
 		if err == nil {
 			a.changeServedUser(user, onChange)
 			return
 		}
-		if time.Since(failingSince) >= activeUserReadGrace {
-			logfmt.Errorf("[service] cannot read the active user, serving nobody: %v", err)
-			a.changeServedUser(nil, onChange)
-			return
+		if !hidden {
+			hidden = true
+			logfmt.Warnf("[service] cannot read the active user, keeping the one served: %v", err)
+			a.mu.Lock()
+			onUnreadable()
+			a.mu.Unlock()
 		}
-		logfmt.Warnf("[service] cannot read the active user, keeping the one served: %v", err)
+		wait := delay
+		if !fellBack {
+			remaining := activeUserReadGrace - time.Since(failingSince)
+			if remaining <= 0 {
+				logfmt.Errorf("[service] cannot read the active user, serving nobody: %v", err)
+				a.changeServedUser(nil, onChange)
+				fellBack = true
+			} else {
+				wait = min(wait, remaining)
+			}
+		}
 		select {
 		case <-ctx.Done():
 			return
-		case <-time.After(delay):
+		case <-time.After(wait):
 		}
 		delay = min(delay*2, activeUserMaxRetryDelay)
 	}
@@ -146,12 +164,36 @@ func sameSID(a, b *windows.SID) bool {
 	return a.Equals(b)
 }
 
-// activeUserSID returns nil with no error when nobody is at the machine, or
-// when several remote users are and none of them is the machine's.
 func activeUserSID() (*windows.SID, error) {
-	consoleSession := windows.WTSGetActiveConsoleSessionId()
+	return selectActiveUser(windows.WTSGetActiveConsoleSessionId(), listSessions, sessionUserSID)
+}
+
+type sessionState struct {
+	id     uint32
+	active bool
+}
+
+func listSessions() ([]sessionState, error) {
+	var sessions *windows.WTS_SESSION_INFO
+	var count uint32
+	if err := windows.WTSEnumerateSessions(0, 0, 1, &sessions, &count); err != nil {
+		return nil, fmt.Errorf("enumerate sessions: %w", err)
+	}
+	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(sessions)))
+	states := make([]sessionState, 0, count)
+	for _, session := range unsafe.Slice(sessions, count) {
+		states = append(states, sessionState{id: session.SessionID, active: session.State == windows.WTSActive})
+	}
+	return states, nil
+}
+
+// selectActiveUser picks the user of the console session, or else the one user
+// of an active remote session. It returns nil with no error when nobody is at
+// the machine, or when several remote users are and none of them is the
+// machine's.
+func selectActiveUser(consoleSession uint32, list func() ([]sessionState, error), userOf func(uint32) (*windows.SID, error)) (*windows.SID, error) {
 	if consoleSession != 0xFFFFFFFF {
-		user, err := sessionUserSID(consoleSession)
+		user, err := userOf(consoleSession)
 		if err == nil {
 			return user, nil
 		}
@@ -160,25 +202,22 @@ func activeUserSID() (*windows.SID, error) {
 		}
 	}
 
-	var sessions *windows.WTS_SESSION_INFO
-	var count uint32
-	if err := windows.WTSEnumerateSessions(0, 0, 1, &sessions, &count); err != nil {
-		return nil, fmt.Errorf("enumerate sessions: %w", err)
+	sessions, err := list()
+	if err != nil {
+		return nil, err
 	}
-	defer windows.WTSFreeMemory(uintptr(unsafe.Pointer(sessions)))
-
 	var found *windows.SID
-	for _, session := range unsafe.Slice(sessions, count) {
-		if session.State != windows.WTSActive || session.SessionID == consoleSession {
+	for _, session := range sessions {
+		if !session.active || session.id == consoleSession {
 			continue
 		}
-		user, err := sessionUserSID(session.SessionID)
+		user, err := userOf(session.id)
 		if errors.Is(err, windows.ERROR_NO_TOKEN) || errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_CTX_WINSTATION_NOT_FOUND) {
 			// Nobody signed in there, or the session ended since the listing.
 			continue
 		}
 		if err != nil {
-			return nil, fmt.Errorf("session %d: %w", session.SessionID, err)
+			return nil, fmt.Errorf("session %d: %w", session.id, err)
 		}
 		if found != nil {
 			return nil, nil

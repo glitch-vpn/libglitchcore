@@ -296,16 +296,24 @@ functions carry nothing.
   so the service can read who subscribes.
 - The service checks the caller on every command, not once per connection,
   and runs the command under `pipeAccess.runAdmitted`, which a change of
-  served user waits for.
+  served user waits for: a `dispatchCommand` case returns promptly and never
+  waits on another command.
+- Each pipe's connections live in a `pipeConnections`, which caps them in
+  total and per account and closes the ones no longer admitted; a caller past
+  its share of the command pipe gets `tooManyConnectionsReply`, never
+  `accessDeniedReply`. Dropping a
+  connection means closing it, never only forgetting it: a peer that stops
+  reading would otherwise keep it, its goroutines and its queue.
 - A service pipe is never closed while the service runs: a name freed for a
   moment is any account's to take. The service opens both pipes under fresh
-  names before it publishes them; a change of served user closes the
-  connections no longer admitted under the change's write lock
-  (`onServedUserChange`), and `followServedUser` rewrites each descriptor in
-  place.
+  names before it publishes them, withdraws the names before it closes the
+  pipes, and does not start if it cannot publish. A change of served user
+  runs `onServedUserChange` under the change's write lock, and
+  `followServedUser` rewrites each descriptor in place.
 - A read the service's access rests on is retried, not trusted to the next
-  notice: `pipeAccess.refresh` doubles its delay up to a cap and, past a grace
-  period, falls back to the state that admits the fewest (nobody served).
+  notice: `pipeAccess.refresh` hides the traffic at the first failure, doubles
+  its delay up to a cap, falls back to the state that admits the fewest
+  (nobody served) when the grace period ends, and keeps reading after it.
 - The command payload is a flat JSON object with snake_case action names
   (`replay_session`, `listen_stats`) and explicit field names — no positional
   data.

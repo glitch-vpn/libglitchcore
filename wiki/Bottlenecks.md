@@ -117,14 +117,26 @@ name once the direct outbound resolves it. Domain and IP matchers honour tier or
   user of an active remote session. Every command and every event subscriber
   is checked against that user, so after a switch of users the one switched
   away from is refused until they come back. A running tunnel survives the
-  switch; the connection inspector and logging are turned off. With several
+  switch; the connection inspector and logging are turned off, and so they
+  are while the service cannot tell who is at the machine. With several
   remote users at once and nobody at the console, only elevated
   administrators get through.
+* Admission is per user, not per session: the served user is admitted from
+  any session they are signed in to, and an elevated administrator's client
+  stays admitted across a switch of users.
 * The service draws new pipe names at each start and publishes them under
   `HKLM\SOFTWARE\glitch_vpn_core` (`CommandPipe`, `EventPipe`), a key only
-  LocalSystem may write; it withdraws them when it stops. The library reads
-  them there and refuses a pipe that LocalSystem or the Administrators group
-  does not own.
+  LocalSystem may write; a service that cannot publish them does not start,
+  and it withdraws them when it stops. The library reads them there and
+  refuses a pipe that LocalSystem or the Administrators group does not own, or
+  that a process other than the service's serves.
+* Each command runs while a change of served user waits for it, so every
+  command returns promptly: a command that waits on another would hold up the
+  change and, once the change waits, every command after it.
+* The service caps the connections each pipe holds open, in total and for one
+  account, and refuses any beyond them (`maxCommandConnections`,
+  `maxEventConnections` and their per-caller counterparts in
+  `internal/core/service_windows.go`).
 * Direct egress binds the physical NIC (`IP_UNICAST_IF`), which is what keeps
   direct traffic out of the TUN default route — but it also means a loopback
   service on 127.0.0.1 is unreachable from the direct outbound.

@@ -155,21 +155,129 @@ func TestServedUserIsKeptWhileTheActiveUserCannotBeRead(t *testing.T) {
 		}
 		return next, nil
 	}
-	access.refresh(context.Background(), func() {})
+	hidden := 0
+	access.refresh(context.Background(), func() {}, func() { hidden++ })
 	if user, _ := access.current(); !sameSID(user, next) {
 		t.Fatalf("the served user is %v once a read succeeded, want %s", user, next)
 	}
+	if hidden != 1 {
+		t.Fatalf("the traffic was hidden %d times over three failed reads, want once", hidden)
+	}
 }
 
-func TestNobodyIsServedWhenTheActiveUserStaysUnreadable(t *testing.T) {
+func TestNobodyIsServedOnceTheActiveUserStaysUnreadableForTheGrace(t *testing.T) {
 	shortenActiveUserRetries(t)
+	activeUserMaxRetryDelay = time.Minute
 	access := servedAccess(t, madeUpUserSID(t, "1001"))
 
 	readActiveUser = func() (*windows.SID, error) { return nil, windows.ERROR_ACCESS_DENIED }
-	ran := false
-	access.refresh(context.Background(), func() { ran = true })
-	if user, _ := access.current(); user != nil || !ran {
-		t.Fatalf("the served user is %v after the grace, want nobody", user)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	changed := make(chan time.Time, 1)
+	started := time.Now()
+	go access.refresh(ctx, func() { changed <- time.Now() }, func() {})
+
+	select {
+	case at := <-changed:
+		if user, _ := access.current(); user != nil {
+			t.Fatalf("the served user is %v after the grace, want nobody", user)
+		}
+		if late := at.Sub(started) - activeUserReadGrace; late > time.Second {
+			t.Fatalf("nobody was served %v after the grace ended", late)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the served user outlasted the grace")
+	}
+}
+
+func TestActiveUserIsStillReadAfterFallingBackToNobody(t *testing.T) {
+	shortenActiveUserRetries(t)
+	next := madeUpUserSID(t, "1002")
+	access := servedAccess(t, madeUpUserSID(t, "1001"))
+
+	fellBack := make(chan struct{})
+	readActiveUser = func() (*windows.SID, error) {
+		select {
+		case <-fellBack:
+			return next, nil
+		default:
+			return nil, windows.ERROR_ACCESS_DENIED
+		}
+	}
+	changes := 0
+	access.refresh(context.Background(), func() {
+		changes++
+		if changes == 1 {
+			close(fellBack)
+		}
+	}, func() {})
+	if user, _ := access.current(); !sameSID(user, next) || changes != 2 {
+		t.Fatalf("the served user is %v after %d changes, want %s after two", user, changes, next)
+	}
+}
+
+func sessionUsers(t *testing.T, users map[uint32]*windows.SID, failures map[uint32]error) func(uint32) (*windows.SID, error) {
+	t.Helper()
+	return func(session uint32) (*windows.SID, error) {
+		if err, ok := failures[session]; ok {
+			return nil, err
+		}
+		if user, ok := users[session]; ok {
+			return user, nil
+		}
+		return nil, windows.ERROR_NO_TOKEN
+	}
+}
+
+func TestActiveUserSelection(t *testing.T) {
+	consoleUser := madeUpUserSID(t, "1001")
+	remoteUser := madeUpUserSID(t, "1002")
+	otherRemoteUser := madeUpUserSID(t, "1003")
+	const noConsole = 0xFFFFFFFF
+	tests := []struct {
+		name     string
+		console  uint32
+		sessions []sessionState
+		users    map[uint32]*windows.SID
+		failures map[uint32]error
+		want     *windows.SID
+		wantErr  bool
+	}{
+		{name: "the console user, whoever else is signed in", console: 1,
+			sessions: []sessionState{{id: 1, active: true}, {id: 2, active: true}},
+			users:    map[uint32]*windows.SID{1: consoleUser, 2: remoteUser}, want: consoleUser},
+		{name: "the one active remote user when nobody is at the console", console: 1,
+			sessions: []sessionState{{id: 1, active: true}, {id: 2, active: true}, {id: 3}},
+			users:    map[uint32]*windows.SID{2: remoteUser, 3: otherRemoteUser}, want: remoteUser},
+		{name: "the one active remote user when no session is at the console", console: noConsole,
+			sessions: []sessionState{{id: 2, active: true}},
+			users:    map[uint32]*windows.SID{2: remoteUser}, want: remoteUser},
+		{name: "nobody when several remote users are active", console: 1,
+			sessions: []sessionState{{id: 2, active: true}, {id: 3, active: true}},
+			users:    map[uint32]*windows.SID{2: remoteUser, 3: otherRemoteUser}},
+		{name: "nobody when nobody is signed in", console: 1,
+			sessions: []sessionState{{id: 0}, {id: 1, active: true}}},
+		{name: "a session that ended since the listing is skipped", console: 1,
+			sessions: []sessionState{{id: 2, active: true}, {id: 3, active: true}},
+			users:    map[uint32]*windows.SID{3: remoteUser},
+			failures: map[uint32]error{2: windows.ERROR_CTX_WINSTATION_NOT_FOUND}, want: remoteUser},
+		{name: "a failed read of the console session is an error", console: 1,
+			failures: map[uint32]error{1: windows.ERROR_ACCESS_DENIED}, wantErr: true},
+		{name: "a failed read of a remote session is an error", console: 1,
+			sessions: []sessionState{{id: 2, active: true}},
+			failures: map[uint32]error{2: windows.ERROR_ACCESS_DENIED}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			list := func() ([]sessionState, error) { return test.sessions, nil }
+			got, err := selectActiveUser(test.console, list, sessionUsers(t, test.users, test.failures))
+			if (err != nil) != test.wantErr {
+				t.Fatalf("error %v, want an error: %v", err, test.wantErr)
+			}
+			if !sameSID(got, test.want) {
+				t.Fatalf("selected %v, want %v", got, test.want)
+			}
+		})
 	}
 }
 
@@ -364,5 +472,31 @@ func TestServicePipesAreOpenedUnderFreshNamesWhenANameIsTaken(t *testing.T) {
 	defer event.listener.Close()
 	if command.name != fresh.command || event.name != fresh.event {
 		t.Fatalf("listening on %s and %s, want the fresh %s and %s", command.name, event.name, fresh.command, fresh.event)
+	}
+}
+
+func TestAnonymousCallerIsNotIdentified(t *testing.T) {
+	user, _ := currentProcessUser(t)
+	name := testPipeName()
+	server := createSingleInstancePipe(t, name, servicePipeSDDL(user))
+
+	client, err := winio.DialPipe(name, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if _, err := client.Write([]byte("x")); err != nil {
+		t.Fatal(err)
+	}
+	if err := windows.ConnectNamedPipe(server, nil); err != nil && !errors.Is(err, windows.ERROR_PIPE_CONNECTED) {
+		t.Fatal(err)
+	}
+	var read uint32
+	if err := windows.ReadFile(server, make([]byte, 1), &read, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	if caller, err := pipeClientIdentity(pipeHandleConn{handle: server}); err == nil {
+		t.Fatalf("an anonymous dial reads as %s", caller.user)
 	}
 }

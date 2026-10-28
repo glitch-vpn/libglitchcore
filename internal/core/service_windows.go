@@ -36,58 +36,44 @@ var maxCommandBytes int64 = 32 << 20
 // caller is known.
 var firstMessageTimeout = 10 * time.Second
 
+// Caps on the connections each pipe holds open, in total and for one account.
+const (
+	maxCommandConnections          = 32
+	maxCommandConnectionsPerCaller = 8
+	maxEventConnections            = 8
+	maxEventConnectionsPerCaller   = 2
+)
+
 type serviceEventHub struct {
 	mu          sync.RWMutex
 	nextID      int
-	subscribers map[int]eventSubscriber
-}
-
-type eventSubscriber struct {
-	messages chan string
-	caller   pipeCaller
+	subscribers map[int]chan string
 }
 
 func newServiceEventHub() *serviceEventHub {
 	return &serviceEventHub{
-		subscribers: make(map[int]eventSubscriber),
+		subscribers: make(map[int]chan string),
 	}
 }
 
-func (h *serviceEventHub) addSubscriber(caller pipeCaller) (int, chan string) {
+func (h *serviceEventHub) addSubscriber() (int, chan string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	id := h.nextID
 	h.nextID++
 	messages := make(chan string, 64)
-	h.subscribers[id] = eventSubscriber{messages: messages, caller: caller}
+	h.subscribers[id] = messages
 	return id, messages
 }
 
 func (h *serviceEventHub) removeSubscriber(id int) {
 	h.mu.Lock()
-	subscriber, ok := h.subscribers[id]
+	messages, ok := h.subscribers[id]
 	if ok {
 		delete(h.subscribers, id)
 	}
 	h.mu.Unlock()
 	if ok {
-		close(subscriber.messages)
-	}
-}
-
-// dropSubscribersNotAdmitted runs within a change of served user, under its
-// write lock, with admits reading that state without locking it again.
-func (h *serviceEventHub) dropSubscribersNotAdmitted(admits func(pipeCaller) bool) {
-	var dropped []chan string
-	h.mu.Lock()
-	for id, subscriber := range h.subscribers {
-		if !admits(subscriber.caller) {
-			delete(h.subscribers, id)
-			dropped = append(dropped, subscriber.messages)
-		}
-	}
-	h.mu.Unlock()
-	for _, messages := range dropped {
 		close(messages)
 	}
 }
@@ -95,16 +81,18 @@ func (h *serviceEventHub) dropSubscribersNotAdmitted(admits func(pipeCaller) boo
 func (h *serviceEventHub) Publish(msg string) {
 	h.mu.RLock()
 	defer h.mu.RUnlock()
-	for _, subscriber := range h.subscribers {
+	for _, messages := range h.subscribers {
 		select {
-		case subscriber.messages <- msg:
+		case messages <- msg:
 		default:
 		}
 	}
 }
 
-func (h *serviceEventHub) Subscribe(ctx context.Context, conn net.Conn, caller pipeCaller) {
-	id, messages := h.addSubscriber(caller)
+// Subscribe ends with the connection: closing it is how a subscriber is
+// dropped, with whatever was queued for it.
+func (h *serviceEventHub) Subscribe(ctx context.Context, conn net.Conn) {
+	id, messages := h.addSubscriber()
 	go func() {
 		<-ctx.Done()
 		conn.Close()
@@ -149,13 +137,23 @@ type pipeResponse struct {
 }
 
 type glitchService struct {
-	hub         *serviceEventHub
-	access      *pipeAccess
-	connections *commandConnections
+	hub                *serviceEventHub
+	access             *pipeAccess
+	commandConnections *pipeConnections
+	eventConnections   *pipeConnections
+}
+
+func newGlitchService() *glitchService {
+	return &glitchService{
+		hub:                newServiceEventHub(),
+		access:             newPipeAccess(),
+		commandConnections: newPipeConnections(maxCommandConnections, maxCommandConnectionsPerCaller),
+		eventConnections:   newPipeConnections(maxEventConnections, maxEventConnectionsPerCaller),
+	}
 }
 
 func runServiceMain() {
-	svc := &glitchService{hub: newServiceEventHub(), access: newPipeAccess(), connections: newCommandConnections()}
+	svc := newGlitchService()
 	if err := svc.Run(); err != nil {
 		log.Fatalf("glitch service run failed: %v", err)
 	}
@@ -194,33 +192,27 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 		logfmt.Errorf("[service] cannot open the pipes: %v", err)
 		return true, 1
 	}
-	go func() {
-		<-ctx.Done()
+	closePipes := func() {
 		commandPipe.listener.Close()
 		eventPipe.listener.Close()
-	}()
+	}
 	go followServedUser(ctx, commandPipe, s.access)
 	go followServedUser(ctx, eventPipe, s.access)
-	go serveCommandPipe(ctx, commandPipe.listener, s.access, s.connections)
-	go serveEventPipe(ctx, eventPipe.listener, s.hub, s.access)
+	go serveCommandPipe(ctx, commandPipe.listener, s.access, s.commandConnections)
+	go serveEventPipe(ctx, eventPipe.listener, s.hub, s.access, s.eventConnections)
+	// A service whose names nobody can find serves nobody.
 	if err := publishServicePipes(servicePipesLocation, servicePipeNames{command: commandPipe.name, event: eventPipe.name}); err != nil {
 		logfmt.Errorf("[service] cannot publish the pipe names: %v", err)
+		cancel()
+		closePipes()
+		return true, 1
 	}
-	defer func() {
-		if err := withdrawServicePipes(servicePipesLocation); err != nil {
-			logfmt.Errorf("[service] cannot withdraw the pipe names: %v", err)
-		}
-	}()
 
 	// A change of served user waits for the commands in flight, and a failed
 	// read of the active user is retried, so both run apart from the loop that
 	// answers the service manager.
 	refreshes := make(chan struct{}, 1)
 	refreshDone := make(chan struct{})
-	defer func() {
-		cancel()
-		<-refreshDone
-	}()
 	go func() {
 		defer close(refreshDone)
 		for {
@@ -228,7 +220,7 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 			case <-ctx.Done():
 				return
 			case <-refreshes:
-				s.access.refresh(ctx, s.onServedUserChange)
+				s.access.refresh(ctx, s.onServedUserChange, s.hideTraffic)
 			}
 		}
 	}()
@@ -238,6 +230,16 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 		default:
 		}
 	}
+	// The names are withdrawn while the pipes are still held, so no name stays
+	// published that nobody holds.
+	defer func() {
+		if err := withdrawServicePipes(servicePipesLocation); err != nil {
+			logfmt.Errorf("[service] cannot withdraw the pipe names: %v", err)
+		}
+		cancel()
+		closePipes()
+		<-refreshDone
+	}()
 
 	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptSessionChange}
 	// A logon before session changes were accepted sends no notice.
@@ -267,10 +269,17 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 // outlives a switch of users; what shows its traffic does not, and neither do
 // the connections of a caller no longer admitted.
 func (s *glitchService) onServedUserChange() {
+	s.hideTraffic()
+	s.commandConnections.closeNotAdmitted(s.access.admitsLocked)
+	s.eventConnections.closeNotAdmitted(s.access.admitsLocked)
+}
+
+// hideTraffic turns off what describes the tunnel's traffic, and drops what
+// was emitted of it but not yet delivered.
+func (s *glitchService) hideTraffic() {
 	applyConnInspector(false)
 	applyStatusVerbosity(-1)
-	s.connections.closeNotAdmitted(s.access.admitsLocked)
-	s.hub.dropSubscribersNotAdmitted(s.access.admitsLocked)
+	deferredStatus.dropTrafficEvents()
 }
 
 func servicePipeConfig(servedUser *windows.SID, messageMode bool) *winio.PipeConfig {
@@ -355,38 +364,63 @@ func followServedUser(ctx context.Context, pipe servicePipe, access *pipeAccess)
 	}
 }
 
-type commandConnection struct {
+type pipeConnection struct {
 	conn   net.Conn
-	caller atomic.Pointer[pipeCaller] // nil until the first command is read
+	caller atomic.Pointer[pipeCaller] // nil until the caller is read
 }
 
-type commandConnections struct {
-	mu   sync.Mutex
-	open map[*commandConnection]struct{}
+// pipeConnections holds one pipe's open connections, at most maxTotal of them
+// and maxPerCaller for any one account.
+type pipeConnections struct {
+	mu           sync.Mutex
+	open         map[*pipeConnection]struct{}
+	maxTotal     int
+	maxPerCaller int
 }
 
-func newCommandConnections() *commandConnections {
-	return &commandConnections{open: make(map[*commandConnection]struct{})}
+func newPipeConnections(maxTotal, maxPerCaller int) *pipeConnections {
+	return &pipeConnections{open: make(map[*pipeConnection]struct{}), maxTotal: maxTotal, maxPerCaller: maxPerCaller}
 }
 
-func (c *commandConnections) add(conn net.Conn) *commandConnection {
-	connection := &commandConnection{conn: conn}
+func (c *pipeConnections) add(conn net.Conn) (*pipeConnection, bool) {
 	c.mu.Lock()
+	defer c.mu.Unlock()
+	if len(c.open) >= c.maxTotal {
+		return nil, false
+	}
+	connection := &pipeConnection{conn: conn}
 	c.open[connection] = struct{}{}
-	c.mu.Unlock()
-	return connection
+	return connection, true
 }
 
-func (c *commandConnections) remove(connection *commandConnection) {
+// identify records who is on connection, unless that account already holds
+// maxPerCaller connections.
+func (c *pipeConnections) identify(connection *pipeConnection, caller pipeCaller) bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	held := 0
+	for other := range c.open {
+		if known := other.caller.Load(); known != nil && known.user.Equals(caller.user) {
+			held++
+		}
+	}
+	if held >= c.maxPerCaller {
+		return false
+	}
+	connection.caller.Store(&caller)
+	return true
+}
+
+func (c *pipeConnections) remove(connection *pipeConnection) {
 	c.mu.Lock()
 	delete(c.open, connection)
 	c.mu.Unlock()
 }
 
 // closeNotAdmitted closes every connection whose caller is not known yet or is
-// no longer admitted. It runs within a change of served user, like
-// dropSubscribersNotAdmitted.
-func (c *commandConnections) closeNotAdmitted(admits func(pipeCaller) bool) {
+// no longer admitted. It runs within a change of served user, under its write
+// lock, with admits reading that state without locking it again.
+func (c *pipeConnections) closeNotAdmitted(admits func(pipeCaller) bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for connection := range c.open {
@@ -396,7 +430,7 @@ func (c *commandConnections) closeNotAdmitted(admits func(pipeCaller) bool) {
 	}
 }
 
-func serveCommandPipe(ctx context.Context, listener net.Listener, access *pipeAccess, connections *commandConnections) {
+func serveCommandPipe(ctx context.Context, listener net.Listener, access *pipeAccess, connections *pipeConnections) {
 	var wg sync.WaitGroup
 	defer wg.Wait()
 	for {
@@ -416,7 +450,7 @@ func serveCommandPipe(ctx context.Context, listener net.Listener, access *pipeAc
 	}
 }
 
-func serveEventPipe(ctx context.Context, listener net.Listener, hub *serviceEventHub, access *pipeAccess) {
+func serveEventPipe(ctx context.Context, listener net.Listener, hub *serviceEventHub, access *pipeAccess, connections *pipeConnections) {
 	for {
 		conn, err := listener.Accept()
 		if err != nil {
@@ -426,37 +460,45 @@ func serveEventPipe(ctx context.Context, listener net.Listener, hub *serviceEven
 			logfmt.Errorf("[service] event pipe accept error: %v", err)
 			continue
 		}
-		go handleEventConnection(ctx, conn, hub, access)
+		go handleEventConnection(ctx, conn, hub, access, connections)
 	}
 }
 
 // handleEventConnection subscribes a caller once it has written its first
 // byte, which is what lets the service read who it is.
-func handleEventConnection(ctx context.Context, conn net.Conn, hub *serviceEventHub, access *pipeAccess) {
+func handleEventConnection(ctx context.Context, conn net.Conn, hub *serviceEventHub, access *pipeAccess, connections *pipeConnections) {
+	defer conn.Close()
+	connection, ok := connections.add(conn)
+	if !ok {
+		logfmt.Warnf("[service] refused an event connection: %d are open", connections.maxTotal)
+		return
+	}
+	defer connections.remove(connection)
+
 	conn.SetReadDeadline(time.Now().Add(firstMessageTimeout))
 	if _, err := io.ReadFull(conn, make([]byte, 1)); err != nil {
-		conn.Close()
 		return
 	}
 	conn.SetReadDeadline(time.Time{})
 	caller, err := identifyPipeClient(conn)
 	if err != nil {
 		logfmt.Errorf("[service] cannot identify an event pipe client: %v", err)
-		conn.Close()
+		return
+	}
+	if !connections.identify(connection, caller) {
+		logfmt.Warnf("[service] refused an event connection from %s: it holds %d connections", caller.user, connections.maxPerCaller)
 		return
 	}
 
 	sessionCtx, sessionCancel := context.WithCancel(ctx)
-	if !access.runAdmitted(caller, func() { hub.Subscribe(sessionCtx, conn, caller) }) {
+	defer sessionCancel()
+	if !access.runAdmitted(caller, func() { hub.Subscribe(sessionCtx, conn) }) {
 		logfmt.Warnf("[service] refused an event subscriber %s", caller.user)
-		sessionCancel()
-		conn.Close()
 		return
 	}
 	buf := make([]byte, 1)
 	for {
 		if _, err := conn.Read(buf); err != nil {
-			sessionCancel()
 			return
 		}
 	}
@@ -466,8 +508,13 @@ var identifyPipeClient = pipeClientIdentity
 
 // handleCommandConnection checks the caller on every command, since the served
 // user can change while a connection stays open.
-func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAccess, connections *commandConnections) {
-	connection := connections.add(conn)
+func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAccess, connections *pipeConnections) {
+	defer conn.Close()
+	connection, ok := connections.add(conn)
+	if !ok {
+		logfmt.Warnf("[service] refused a command connection: %d are open", connections.maxTotal)
+		return
+	}
 	defer connections.remove(connection)
 	connCtx, stop := context.WithCancel(ctx)
 	defer stop()
@@ -506,7 +553,11 @@ func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAcc
 		return
 	}
 	caller := &identity
-	connection.caller.Store(caller)
+	if !connections.identify(connection, identity) {
+		logfmt.Warnf("[service] refused a command connection from %s: it holds %d connections", caller.user, connections.maxPerCaller)
+		emit(pipeResponse{OK: false, Error: tooManyConnectionsReply})
+		return
+	}
 
 	for {
 		if !access.admits(*caller) {
@@ -540,6 +591,9 @@ func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAcc
 	}
 }
 
+// dispatchCommand runs under pipeAccess's read lock (runAdmitted), which a
+// change of served user waits for: every case returns promptly and never waits
+// on another command.
 func dispatchCommand(cmd pipeCommand) pipeResponse {
 	if globalController == nil {
 		return pipeResponse{OK: false, Error: "controller not initialized"}

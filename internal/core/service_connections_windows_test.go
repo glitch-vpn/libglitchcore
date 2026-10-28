@@ -8,11 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -46,7 +45,7 @@ type commandPipeClient struct {
 	done    chan struct{}
 }
 
-func startCommandPipe(t *testing.T, access *pipeAccess, connections *commandConnections, identities *fakeIdentities, caller pipeCaller) *commandPipeClient {
+func startCommandPipe(t *testing.T, access *pipeAccess, connections *pipeConnections, identities *fakeIdentities, caller pipeCaller) *commandPipeClient {
 	t.Helper()
 	Initialize()
 	server, client := net.Pipe()
@@ -95,9 +94,17 @@ func (c *commandPipeClient) waitClosed(t *testing.T) {
 	}
 }
 
+func newCommandPipeConnections() *pipeConnections {
+	return newPipeConnections(maxCommandConnections, maxCommandConnectionsPerCaller)
+}
+
+func newEventPipeConnections() *pipeConnections {
+	return newPipeConnections(maxEventConnections, maxEventConnectionsPerCaller)
+}
+
 func TestCommandPipeAnswersTheServedUser(t *testing.T) {
 	servedUser := madeUpUserSID(t, "1001")
-	client := startCommandPipe(t, servedAccess(t, servedUser), newCommandConnections(), injectIdentities(t), pipeCaller{user: servedUser})
+	client := startCommandPipe(t, servedAccess(t, servedUser), newCommandPipeConnections(), injectIdentities(t), pipeCaller{user: servedUser})
 	if resp := client.ping(t); !resp.OK {
 		t.Fatalf("ping refused: %s", resp.Error)
 	}
@@ -105,7 +112,7 @@ func TestCommandPipeAnswersTheServedUser(t *testing.T) {
 
 func TestCommandPipeRefusesAnotherUser(t *testing.T) {
 	access := servedAccess(t, madeUpUserSID(t, "1001"))
-	client := startCommandPipe(t, access, newCommandConnections(), injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1002")})
+	client := startCommandPipe(t, access, newCommandPipeConnections(), injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1002")})
 	if resp := client.ping(t); resp.OK || resp.Error != accessDeniedReply {
 		t.Fatalf("got %+v, want access denied", resp)
 	}
@@ -113,7 +120,7 @@ func TestCommandPipeRefusesAnotherUser(t *testing.T) {
 }
 
 func TestCommandPipeRefusesEveryUserWhenNobodyIsServed(t *testing.T) {
-	client := startCommandPipe(t, newPipeAccess(), newCommandConnections(), injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1001")})
+	client := startCommandPipe(t, newPipeAccess(), newCommandPipeConnections(), injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1001")})
 	if resp := client.ping(t); resp.OK {
 		t.Fatal("a command passed with nobody served")
 	}
@@ -127,7 +134,7 @@ func TestCommandPipeAnswersSystemAndAdministrators(t *testing.T) {
 	} {
 		t.Run(name, func(t *testing.T) {
 			access := servedAccess(t, madeUpUserSID(t, "1001"))
-			client := startCommandPipe(t, access, newCommandConnections(), injectIdentities(t), caller)
+			client := startCommandPipe(t, access, newCommandPipeConnections(), injectIdentities(t), caller)
 			if resp := client.ping(t); !resp.OK {
 				t.Fatalf("ping refused: %s", resp.Error)
 			}
@@ -138,7 +145,7 @@ func TestCommandPipeAnswersSystemAndAdministrators(t *testing.T) {
 func TestCommandPipeChecksEveryCommandAgainstTheUserServedNow(t *testing.T) {
 	first := madeUpUserSID(t, "1001")
 	access := servedAccess(t, first)
-	client := startCommandPipe(t, access, newCommandConnections(), injectIdentities(t), pipeCaller{user: first})
+	client := startCommandPipe(t, access, newCommandPipeConnections(), injectIdentities(t), pipeCaller{user: first})
 	if resp := client.ping(t); !resp.OK {
 		t.Fatalf("ping refused: %s", resp.Error)
 	}
@@ -148,31 +155,154 @@ func TestCommandPipeChecksEveryCommandAgainstTheUserServedNow(t *testing.T) {
 	}
 }
 
-func TestServedUserChangeClosesCommandConnectionsNoLongerAdmitted(t *testing.T) {
+// showTraffic turns on what a change of served user turns off.
+func showTraffic(t *testing.T) {
+	t.Helper()
+	previousInspector := connInspectEnabled.Load()
+	previousVerbosity := atomic.LoadInt32(&statusVerbosity)
+	applyConnInspector(true)
+	applyStatusVerbosity(2)
+	t.Cleanup(func() {
+		connInspectEnabled.Store(previousInspector)
+		atomic.StoreInt32(&statusVerbosity, previousVerbosity)
+	})
+}
+
+func servedService(t *testing.T, user *windows.SID) *glitchService {
+	t.Helper()
+	service := newGlitchService()
+	setServedUser(service.access, user)
+	return service
+}
+
+func TestServedUserChangeHidesTheTrafficAndClosesWhatIsNoLongerAdmitted(t *testing.T) {
 	first := madeUpUserSID(t, "1001")
-	access := servedAccess(t, first)
-	connections := newCommandConnections()
+	administratorCaller := pipeCaller{user: madeUpUserSID(t, "500"), administrator: true}
+	service := servedService(t, first)
 	identities := injectIdentities(t)
+	showTraffic(t)
 
-	switchedAwayClient := startCommandPipe(t, access, connections, identities, pipeCaller{user: first})
-	if resp := switchedAwayClient.ping(t); !resp.OK {
+	switchedAwayCommands := startCommandPipe(t, service.access, service.commandConnections, identities, pipeCaller{user: first})
+	if resp := switchedAwayCommands.ping(t); !resp.OK {
 		t.Fatalf("ping refused: %s", resp.Error)
 	}
-	administrator := startCommandPipe(t, access, connections, identities, pipeCaller{user: madeUpUserSID(t, "500"), administrator: true})
-	if resp := administrator.ping(t); !resp.OK {
+	administratorCommands := startCommandPipe(t, service.access, service.commandConnections, identities, administratorCaller)
+	if resp := administratorCommands.ping(t); !resp.OK {
 		t.Fatalf("ping refused: %s", resp.Error)
 	}
-	unidentified := startCommandPipe(t, access, connections, identities, pipeCaller{user: madeUpUserSID(t, "1002")})
-	waitForOpenConnections(t, connections, 3)
+	unidentifiedCommands := startCommandPipe(t, service.access, service.commandConnections, identities, pipeCaller{user: madeUpUserSID(t, "1002")})
+	waitForOpenConnections(t, service.commandConnections, 3)
 
-	setServedUser(access, madeUpUserSID(t, "1002"))
-	connections.closeNotAdmitted(access.admits)
-
-	switchedAwayClient.waitClosed(t)
-	unidentified.waitClosed(t)
-	if resp := administrator.ping(t); !resp.OK {
-		t.Fatalf("an administrator lost the pipe: %s", resp.Error)
+	switchedAwayEvents := startEventPipe(t, service.hub, service.access, service.eventConnections, identities, pipeCaller{user: first})
+	switchedAwayEvents.subscribe(t)
+	if !switchedAwayEvents.receives(t, service.hub) {
+		t.Fatal("the served user received no event")
 	}
+	administratorEvents := startEventPipe(t, service.hub, service.access, service.eventConnections, identities, administratorCaller)
+	administratorEvents.subscribe(t)
+	if !administratorEvents.receives(t, service.hub) {
+		t.Fatal("an administrator received no event")
+	}
+
+	service.access.changeServedUser(madeUpUserSID(t, "1002"), service.onServedUserChange)
+
+	if connInspectEnabled.Load() {
+		t.Error("the connection inspector stayed on")
+	}
+	if verbosity := atomic.LoadInt32(&statusVerbosity); verbosity != -1 {
+		t.Errorf("logging stayed at level %d", verbosity)
+	}
+	switchedAwayCommands.waitClosed(t)
+	unidentifiedCommands.waitClosed(t)
+	switchedAwayEvents.waitClosed(t)
+	if resp := administratorCommands.ping(t); !resp.OK {
+		t.Fatalf("an administrator lost the command pipe: %s", resp.Error)
+	}
+	if !administratorEvents.receives(t, service.hub) {
+		t.Fatal("an administrator lost the event pipe")
+	}
+}
+
+func TestDroppedEventSubscriberThatNeverReadsLosesItsConnection(t *testing.T) {
+	first := madeUpUserSID(t, "1001")
+	service := servedService(t, first)
+	client := startEventPipe(t, service.hub, service.access, service.eventConnections, injectIdentities(t), pipeCaller{user: first})
+	client.subscribe(t)
+	waitForSubscribers(t, service.hub, 1)
+	for range 100 {
+		service.hub.Publish("event")
+	}
+
+	service.access.changeServedUser(madeUpUserSID(t, "1002"), service.onServedUserChange)
+
+	client.waitClosed(t)
+	waitForSubscribers(t, service.hub, 0)
+}
+
+func waitForSubscribers(t *testing.T, hub *serviceEventHub, want int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		hub.mu.RLock()
+		subscribed := len(hub.subscribers)
+		hub.mu.RUnlock()
+		if subscribed == want {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%d subscribers, want %d", subscribed, want)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestCommandPipeRefusesConnectionsPastTheTotal(t *testing.T) {
+	servedUser := madeUpUserSID(t, "1001")
+	access := servedAccess(t, servedUser)
+	connections := newPipeConnections(2, maxCommandConnectionsPerCaller)
+	identities := injectIdentities(t)
+	for range 2 {
+		client := startCommandPipe(t, access, connections, identities, pipeCaller{user: servedUser})
+		if resp := client.ping(t); !resp.OK {
+			t.Fatalf("ping refused: %s", resp.Error)
+		}
+	}
+	startCommandPipe(t, access, connections, identities, pipeCaller{user: servedUser}).waitClosed(t)
+}
+
+func TestCommandPipeRefusesACallerPastItsShare(t *testing.T) {
+	servedUser := madeUpUserSID(t, "1001")
+	access := servedAccess(t, servedUser)
+	connections := newPipeConnections(maxCommandConnections, 1)
+	identities := injectIdentities(t)
+	if resp := startCommandPipe(t, access, connections, identities, pipeCaller{user: servedUser}).ping(t); !resp.OK {
+		t.Fatalf("ping refused: %s", resp.Error)
+	}
+	second := startCommandPipe(t, access, connections, identities, pipeCaller{user: servedUser})
+	if resp := second.ping(t); resp.Error != tooManyConnectionsReply {
+		t.Fatalf("got %+v, want the refusal for too many connections", resp)
+	}
+	second.waitClosed(t)
+	administrator := pipeCaller{user: madeUpUserSID(t, "500"), administrator: true}
+	if resp := startCommandPipe(t, access, connections, identities, administrator).ping(t); !resp.OK {
+		t.Fatalf("another caller was refused with the first one's share: %s", resp.Error)
+	}
+}
+
+func TestEventPipeRefusesACallerPastItsShare(t *testing.T) {
+	servedUser := madeUpUserSID(t, "1001")
+	hub := newServiceEventHub()
+	access := servedAccess(t, servedUser)
+	connections := newPipeConnections(maxEventConnections, 1)
+	identities := injectIdentities(t)
+	first := startEventPipe(t, hub, access, connections, identities, pipeCaller{user: servedUser})
+	first.subscribe(t)
+	if !first.receives(t, hub) {
+		t.Fatal("the served user received no event")
+	}
+	second := startEventPipe(t, hub, access, connections, identities, pipeCaller{user: servedUser})
+	second.subscribe(t)
+	second.waitClosed(t)
 }
 
 func shortenFirstMessageTimeout(t *testing.T) {
@@ -187,7 +317,7 @@ func limitCommandsTo64Bytes(t *testing.T) {
 	t.Cleanup(func() { maxCommandBytes = previousLimit })
 }
 
-func waitForOpenConnections(t *testing.T, connections *commandConnections, want int) {
+func waitForOpenConnections(t *testing.T, connections *pipeConnections, want int) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for {
@@ -207,7 +337,7 @@ func waitForOpenConnections(t *testing.T, connections *commandConnections, want 
 func TestCommandPipeClosesAConnectionSilentPastTheFirstMessageTimeout(t *testing.T) {
 	shortenFirstMessageTimeout(t)
 
-	client := startCommandPipe(t, newPipeAccess(), newCommandConnections(), injectIdentities(t), pipeCaller{})
+	client := startCommandPipe(t, newPipeAccess(), newCommandPipeConnections(), injectIdentities(t), pipeCaller{})
 	client.waitClosed(t)
 }
 
@@ -215,7 +345,7 @@ func TestCommandPipeRefusesACommandOverTheLimit(t *testing.T) {
 	limitCommandsTo64Bytes(t)
 
 	servedUser := madeUpUserSID(t, "1001")
-	client := startCommandPipe(t, servedAccess(t, servedUser), newCommandConnections(), injectIdentities(t), pipeCaller{user: servedUser})
+	client := startCommandPipe(t, servedAccess(t, servedUser), newCommandPipeConnections(), injectIdentities(t), pipeCaller{user: servedUser})
 	client.conn.SetDeadline(time.Now().Add(5 * time.Second))
 	go fmt.Fprintf(client.conn, `{"action":"ping","payload":"%s"}`+"\n", strings.Repeat("x", 200))
 
@@ -230,7 +360,7 @@ func TestCommandPipeRefusesAnotherUserBeforeReadingTheCommand(t *testing.T) {
 	limitCommandsTo64Bytes(t)
 
 	access := servedAccess(t, madeUpUserSID(t, "1001"))
-	client := startCommandPipe(t, access, newCommandConnections(), injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1002")})
+	client := startCommandPipe(t, access, newCommandPipeConnections(), injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1002")})
 	client.conn.SetDeadline(time.Now().Add(5 * time.Second))
 	go fmt.Fprintf(client.conn, `{"action":"ping","payload":"%s"}`+"\n", strings.Repeat("x", 200))
 
@@ -247,7 +377,7 @@ type eventPipeClient struct {
 	done  chan struct{}
 }
 
-func startEventPipe(t *testing.T, hub *serviceEventHub, access *pipeAccess, identities *fakeIdentities, caller pipeCaller) *eventPipeClient {
+func startEventPipe(t *testing.T, hub *serviceEventHub, access *pipeAccess, connections *pipeConnections, identities *fakeIdentities, caller pipeCaller) *eventPipeClient {
 	t.Helper()
 	server, client := net.Pipe()
 	identities.callers.Store(server, caller)
@@ -255,7 +385,7 @@ func startEventPipe(t *testing.T, hub *serviceEventHub, access *pipeAccess, iden
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
 		defer close(done)
-		handleEventConnection(ctx, server, hub, access)
+		handleEventConnection(ctx, server, hub, access, connections)
 	}()
 	t.Cleanup(func() {
 		cancel()
@@ -303,7 +433,7 @@ func (c *eventPipeClient) receives(t *testing.T, hub *serviceEventHub) bool {
 func TestEventPipeSubscribesTheServedUserAfterItsFirstByte(t *testing.T) {
 	servedUser := madeUpUserSID(t, "1001")
 	hub := newServiceEventHub()
-	client := startEventPipe(t, hub, servedAccess(t, servedUser), injectIdentities(t), pipeCaller{user: servedUser})
+	client := startEventPipe(t, hub, servedAccess(t, servedUser), newEventPipeConnections(), injectIdentities(t), pipeCaller{user: servedUser})
 	client.subscribe(t)
 	if !client.receives(t, hub) {
 		t.Fatalf("the served user received no event: %v", client.lines.Err())
@@ -313,7 +443,7 @@ func TestEventPipeSubscribesTheServedUserAfterItsFirstByte(t *testing.T) {
 func TestEventPipeRefusesAnotherUser(t *testing.T) {
 	hub := newServiceEventHub()
 	access := servedAccess(t, madeUpUserSID(t, "1001"))
-	client := startEventPipe(t, hub, access, injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1002")})
+	client := startEventPipe(t, hub, access, newEventPipeConnections(), injectIdentities(t), pipeCaller{user: madeUpUserSID(t, "1002")})
 	client.subscribe(t)
 	if client.receives(t, hub) {
 		t.Fatal("another user received an event")
@@ -323,39 +453,6 @@ func TestEventPipeRefusesAnotherUser(t *testing.T) {
 func TestEventPipeClosesAConnectionSilentPastTheFirstMessageTimeout(t *testing.T) {
 	shortenFirstMessageTimeout(t)
 
-	client := startEventPipe(t, newServiceEventHub(), newPipeAccess(), injectIdentities(t), pipeCaller{})
+	client := startEventPipe(t, newServiceEventHub(), newPipeAccess(), newEventPipeConnections(), injectIdentities(t), pipeCaller{})
 	client.waitClosed(t)
-}
-
-func TestServedUserChangeDropsOnlyEventSubscribersNoLongerAdmitted(t *testing.T) {
-	first := madeUpUserSID(t, "1001")
-	hub := newServiceEventHub()
-	access := servedAccess(t, first)
-	identities := injectIdentities(t)
-
-	switchedAwayClient := startEventPipe(t, hub, access, identities, pipeCaller{user: first})
-	switchedAwayClient.subscribe(t)
-	if !switchedAwayClient.receives(t, hub) {
-		t.Fatal("the served user received no event")
-	}
-	administrator := startEventPipe(t, hub, access, identities, pipeCaller{user: madeUpUserSID(t, "500"), administrator: true})
-	administrator.subscribe(t)
-	if !administrator.receives(t, hub) {
-		t.Fatal("an administrator received no event")
-	}
-
-	setServedUser(access, madeUpUserSID(t, "1002"))
-	hub.dropSubscribersNotAdmitted(access.admits)
-
-	for switchedAwayClient.lines.Scan() {
-		// Events queued before the drop may still arrive.
-	}
-	if err := switchedAwayClient.lines.Err(); errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatal("the previous user stayed subscribed")
-	} else if err != nil && !errors.Is(err, io.ErrClosedPipe) {
-		t.Fatalf("the previous user's pipe failed with %v", err)
-	}
-	if !administrator.receives(t, hub) {
-		t.Fatal("an administrator lost the event pipe")
-	}
 }
