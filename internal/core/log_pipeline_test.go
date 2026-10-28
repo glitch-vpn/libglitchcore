@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"log"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -264,42 +265,75 @@ func TestEmitStatus_DefersInOrderDuringFFICall(t *testing.T) {
 	}
 }
 
+// stalledSink delivers nothing until release is closed, then records the codes
+// in the order they arrive.
+type stalledSink struct {
+	release chan struct{}
+	mu      sync.Mutex
+	got     []int32
+}
+
+func newStalledSink() *stalledSink {
+	return &stalledSink{release: make(chan struct{})}
+}
+
+func (s *stalledSink) deliver(code int32, _ string) {
+	<-s.release
+	s.mu.Lock()
+	s.got = append(s.got, code)
+	s.mu.Unlock()
+}
+
+// delivered releases the sink and returns what it got once last arrives.
+func (s *stalledSink) delivered(t *testing.T, last int32) []int32 {
+	t.Helper()
+	close(s.release)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		got := slices.Clone(s.got)
+		s.mu.Unlock()
+		if len(got) > 0 && got[len(got)-1] == last {
+			return got
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("event %d never arrived", last)
+	return nil
+}
+
 // A sink that stalls behind a burst sheds the oldest log and connection
 // events, never a lifecycle event.
 func TestDeferredStatus_ShedsOnlyLogAndConnEventsWhenFull(t *testing.T) {
 	var q statusQueue
-	release := make(chan struct{})
-	var mu sync.Mutex
-	var got []int32
-	sink := func(code int32, _ string) {
-		<-release
-		mu.Lock()
-		got = append(got, code)
-		mu.Unlock()
-	}
-	q.offer(statusEvent{sink, EngineConnecting, ""}, true)
+	sink := newStalledSink()
+	q.offer(statusEvent{sink.deliver, EngineConnecting, ""}, true)
 	for i := 0; i < maxDeferredStatus+100; i++ {
-		q.offer(statusEvent{sink, LogEvent, ""}, true)
+		q.offer(statusEvent{sink.deliver, LogEvent, ""}, true)
 	}
-	q.offer(statusEvent{sink, EngineConnected, ""}, true)
-	close(release)
+	q.offer(statusEvent{sink.deliver, EngineConnected, ""}, true)
 
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		mu.Lock()
-		n := len(got)
-		mu.Unlock()
-		if n > 0 && got[n-1] == EngineConnected {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-	mu.Lock()
-	defer mu.Unlock()
-	if got[0] != EngineConnecting || got[len(got)-1] != EngineConnected {
-		t.Fatalf("lifecycle events lost or reordered: first %d, last %d", got[0], got[len(got)-1])
+	got := sink.delivered(t, EngineConnected)
+	if got[0] != EngineConnecting {
+		t.Fatalf("lifecycle events lost or reordered: first %d", got[0])
 	}
 	if len(got) > maxDeferredStatus+2 {
 		t.Fatalf("%d events delivered, the queue holds %d", len(got), maxDeferredStatus)
+	}
+}
+
+func TestDeferredStatus_DropsQueuedTrafficEventsButKeepsTheRest(t *testing.T) {
+	var q statusQueue
+	sink := newStalledSink()
+	q.offer(statusEvent{sink.deliver, EngineConnecting, ""}, true)
+	for _, code := range []int32{LogEvent, ConnEvent, LogError, EngineConnected} {
+		q.offer(statusEvent{sink.deliver, code, ""}, true)
+	}
+	q.dropTrafficEvents()
+
+	// The first event may already be on its way to the sink when the drop runs.
+	want := []int32{EngineConnecting, EngineConnected}
+	if got := sink.delivered(t, EngineConnected); !slices.Equal(got, want) {
+		t.Fatalf("delivered %v, want %v", got, want)
 	}
 }

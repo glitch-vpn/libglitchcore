@@ -1,6 +1,7 @@
 package core
 
 import (
+	"slices"
 	"sync"
 	"sync/atomic"
 )
@@ -64,15 +65,30 @@ func (q *statusQueue) offer(ev statusEvent, mustDefer bool) bool {
 	return true
 }
 
-// Only LogEvent and ConnEvent lines are shed; lifecycle, stats, server and
-// error events stay, and there are few enough of those to keep every one.
+// Only traffic events below the error level are shed; lifecycle, stats,
+// server and error events stay, and there are few enough of those to keep
+// every one.
 func (q *statusQueue) dropOldestDroppable() {
 	for i, ev := range q.pending {
-		if ev.code == LogEvent || ev.code == ConnEvent {
+		if describesTraffic(ev.code) && ev.code != LogError {
 			q.pending = append(q.pending[:i], q.pending[i+1:]...)
 			return
 		}
 	}
+}
+
+// describesTraffic is true of log and connection events: they name what the
+// tunnel carries.
+func describesTraffic(code int32) bool {
+	return code == LogEvent || code == LogError || code == ConnEvent
+}
+
+// dropTrafficEvents discards the queued traffic events, which belong to
+// whoever was served when they were emitted.
+func (q *statusQueue) dropTrafficEvents() {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.pending = slices.DeleteFunc(q.pending, func(ev statusEvent) bool { return describesTraffic(ev.code) })
 }
 
 func (q *statusQueue) drain() {
