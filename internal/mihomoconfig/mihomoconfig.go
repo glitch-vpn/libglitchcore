@@ -605,7 +605,8 @@ func vlessProxy(link, name string) (map[string]any, error) {
 		p["encryption"] = encryption
 	}
 
-	switch strings.ToLower(strings.TrimSpace(q.Get("security"))) {
+	security := strings.ToLower(strings.TrimSpace(q.Get("security")))
+	switch security {
 	case "tls":
 		applyTLS(p, q)
 		if err := applyCertChecks(p, q, "vless"); err != nil {
@@ -619,6 +620,9 @@ func vlessProxy(link, name string) (map[string]any, error) {
 		}
 		applyTLS(p, q)
 		applyRealityOpts(p, q)
+	case "", "none":
+	default:
+		return nil, fmt.Errorf("vless: security %q is not supported", security)
 	}
 
 	switch network {
@@ -731,10 +735,10 @@ func applyTrojanReality(p map[string]any, q url.Values) error {
 	}
 	// mihomo's Trojan dials REALITY only on plain TCP and gRPC; its WebSocket
 	// branch dials ordinary TLS.
-	switch strings.ToLower(strings.TrimSpace(q.Get("type"))) {
+	switch network := strings.ToLower(strings.TrimSpace(q.Get("type"))); network {
 	case "tcp", "raw", "", "grpc":
 	default:
-		return fmt.Errorf("trojan: reality over %q is not supported", q.Get("type"))
+		return fmt.Errorf("trojan: reality over %q is not supported", network)
 	}
 	if q.Get("spx") != "" {
 		return fmt.Errorf("trojan: reality spider path is not supported")
