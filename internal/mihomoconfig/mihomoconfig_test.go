@@ -657,6 +657,35 @@ func TestBuildConfig_TunInbound(t *testing.T) {
 	}
 }
 
+// A name resolves to IPv6 inside the tunnel unless the caller turned IPv6 off.
+func TestBuildConfig_TunDNSAnswersAAAAUnlessIPv6Off(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com&flow=xtls-rprx-vision"
+	for _, mode := range []string{dnsconfig.ModeFakeIP, dnsconfig.ModeNormal} {
+		dns := dnsconfig.Config{Mode: mode, Servers: []string{"1.1.1.1"}}
+		on, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{FileDescriptor: 42, DNS: dns}}, Options{}, routing.Profile{})
+		if err != nil {
+			t.Fatalf("%s, ipv6 on: %v", mode, err)
+		}
+		if !on.DNS.IPv6 {
+			t.Fatalf("%s: dns ipv6 must be on", mode)
+		}
+		if mode == dnsconfig.ModeFakeIP {
+			if on.DNS.FakeIPRange6.String() != fakeIPRange6 {
+				t.Fatalf("fake-ip v6 range = %v, want %s", on.DNS.FakeIPRange6, fakeIPRange6)
+			}
+		}
+
+		dns.DisableIPv6 = true
+		off, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{FileDescriptor: 42, DNS: dns}}, Options{}, routing.Profile{DisableIPv6: true})
+		if err != nil {
+			t.Fatalf("%s, ipv6 off: %v", mode, err)
+		}
+		if off.DNS.IPv6 || off.DNS.FakeIPRange6.IsValid() {
+			t.Fatalf("%s: ipv6 off must leave dns ipv6 and the v6 range unset: %v %v", mode, off.DNS.IPv6, off.DNS.FakeIPRange6)
+		}
+	}
+}
+
 func TestBuildConfig_GeoAssetsAreCallerSupplied(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com&flow=xtls-rprx-vision"
 	home := t.TempDir()

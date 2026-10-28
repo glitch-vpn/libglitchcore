@@ -31,6 +31,8 @@ const (
 	probeURL = "https://www.gstatic.com/generate_204"
 
 	fakeIPRange = "198.18.0.1/16"
+	// Same v6 pool as xray's fakedns (xrayconfig/dns.go).
+	fakeIPRange6 = "fc00::/18"
 
 	// Bridge-path pool: clear of the wireguard/Wintun TUN's own 198.18.0.1, yet
 	// still inside its 128.0.0.0/1 split-default so fake IPs route in.
@@ -435,9 +437,15 @@ func applyTun(raw *config.RawConfig, t *TunInbound) {
 	}
 
 	raw.DNS.Enable = true
+	// AAAA is answered unless the caller turned IPv6 off; without it a name
+	// resolves to IPv6 only for literals.
+	raw.DNS.IPv6 = !t.DNS.DisableIPv6
 	if t.DNS.FakeIP() {
 		raw.DNS.EnhancedMode = C.DNSFakeIP
 		raw.DNS.FakeIPRange = fakeIPRange
+		if raw.DNS.IPv6 {
+			raw.DNS.FakeIPRange6 = fakeIPRange6
+		}
 		if filter := t.DNS.NormalizedFilter(); len(filter) > 0 {
 			raw.DNS.FakeIPFilter = filter
 		}
