@@ -16,7 +16,8 @@ import (
 )
 
 // Windows needs the tun2socks bridge - mihomo's Wintun conflicts with tun2socks'.
-// Android uses native sing-tun (GLITCH_MIHOMO_ANDROID_BRIDGE=1 forces bridge).
+// Android uses native sing-tun: through the bridge, mihomo's fake-ip stopped
+// resolving addresses (GLITCH_MIHOMO_ANDROID_BRIDGE=1 forces the bridge).
 func (x *CoreController) mihomoUsesBridge(proxyPort int) bool {
 	if proxyPort > 0 {
 		return false
