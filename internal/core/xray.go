@@ -150,13 +150,9 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		return err
 	}
 
-	// Master switch off (default) forces xray + tun2socks silent regardless of
-	// the connect logLevel.
-	effectiveLogLevel := logLevel
-	if atomic.LoadInt32(&statusVerbosity) < 0 {
-		effectiveLogLevel = 0
-	}
-	xrayLogLevel, tun2socksLogLevel := xrayconfig.LogLevels(effectiveLogLevel)
+	// Master switch off (default) holds xray at error, which its handler drops, and
+	// tun2socks silent, whatever the connect logLevel.
+	xrayLogLevel, tun2socksLogLevel := xrayconfig.LogLevels(logLevel, atomic.LoadInt32(&statusVerbosity) >= 0)
 	var cfg xrayConf.Config
 
 	log.Printf("[Xray] Parsing link(s)")

@@ -8,18 +8,26 @@ const (
 	tun2socksLogSilentLevel = "silent"
 )
 
+// xray has no "silent": a level it does not know reads as warning. Its "none"
+// turns the access logger off with the error one, and the connection
+// inspector reads the access records, so the quietest level that keeps them
+// is "error".
 const (
-	xrayLogWarnLevel   = "warn"
-	xrayLogInfoLevel   = "info"
-	xrayLogDebugLevel  = "debug"
-	xrayLogErrorLevel  = "error"
-	xrayLogSilentLevel = "silent"
+	xrayLogWarnLevel  = "warning"
+	xrayLogInfoLevel  = "info"
+	xrayLogDebugLevel = "debug"
+	xrayLogErrorLevel = "error"
 )
 
-func LogLevels(level int) (xrayLevel, tun2socksLevel string) {
-	switch level {
-	case 0:
-		return xrayLogSilentLevel, tun2socksLogSilentLevel
+// LogLevels maps the connect logLevel to the levels xray and tun2socks run at.
+// With logging off both are as quiet as they get. With it on, xray runs at
+// warning when the caller asked for none (0), while tun2socks stays silent
+// then: its lines carry full destination addresses, which xray masks.
+func LogLevels(requested int, loggingOn bool) (xrayLevel, tun2socksLevel string) {
+	if !loggingOn {
+		return xrayLogErrorLevel, tun2socksLogSilentLevel
+	}
+	switch requested {
 	case 1:
 		return xrayLogWarnLevel, tun2socksLogWarnLevel
 	case 2:
@@ -28,6 +36,8 @@ func LogLevels(level int) (xrayLevel, tun2socksLevel string) {
 		return xrayLogDebugLevel, tun2socksLogDebugLevel
 	case 4:
 		return xrayLogErrorLevel, tun2socksLogErrorLevel
+	case 0:
+		return xrayLogWarnLevel, tun2socksLogSilentLevel
 	}
-	return xrayLogSilentLevel, tun2socksLogSilentLevel
+	return xrayLogErrorLevel, tun2socksLogSilentLevel
 }
