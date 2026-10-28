@@ -613,14 +613,7 @@ func vlessProxy(link, name string) (map[string]any, error) {
 		}
 	case "reality":
 		applyTLS(p, q)
-		reality := map[string]any{}
-		if pbk := q.Get("pbk"); pbk != "" {
-			reality["public-key"] = pbk
-		}
-		if sid := q.Get("sid"); sid != "" {
-			reality["short-id"] = sid
-		}
-		p["reality-opts"] = reality
+		applyRealityOpts(p, q)
 	}
 
 	switch network {
@@ -656,6 +649,17 @@ func vlessProxy(link, name string) (map[string]any, error) {
 	}
 
 	return p, nil
+}
+
+func applyRealityOpts(p map[string]any, q url.Values) {
+	reality := map[string]any{}
+	if pbk := q.Get("pbk"); pbk != "" {
+		reality["public-key"] = pbk
+	}
+	if sid := q.Get("sid"); sid != "" {
+		reality["short-id"] = sid
+	}
+	p["reality-opts"] = reality
 }
 
 func applyTLS(p map[string]any, q url.Values) {
@@ -701,10 +705,30 @@ func trojanProxy(link, name string) (map[string]any, error) {
 	if err := applyCertChecks(p, q, "trojan"); err != nil {
 		return nil, err
 	}
+	if err := applyTrojanReality(p, q); err != nil {
+		return nil, err
+	}
 	if err := applyTrojanTransport(p, q); err != nil {
 		return nil, err
 	}
 	return p, nil
+}
+
+// mihomo's Trojan carries REALITY as reality-opts with the public key and the
+// short id. Without a public key mihomo dials plain TLS, and it has no option
+// for a spider path, so a link that lacks the key or names one fails.
+func applyTrojanReality(p map[string]any, q url.Values) error {
+	if strings.ToLower(strings.TrimSpace(q.Get("security"))) != "reality" {
+		return nil
+	}
+	if q.Get("pbk") == "" {
+		return fmt.Errorf("trojan: reality needs a public key")
+	}
+	if q.Get("spx") != "" {
+		return fmt.Errorf("trojan: reality spider path is not supported")
+	}
+	applyRealityOpts(p, q)
+	return nil
 }
 
 // mihomo's Trojan outbound runs over plain TCP, WebSocket (HTTPUpgrade as its

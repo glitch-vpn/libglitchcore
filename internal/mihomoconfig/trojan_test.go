@@ -82,3 +82,47 @@ func TestBuildConfig_TrojanTransportsThroughMihomoParser(t *testing.T) {
 		t.Fatal("BuildConfig accepted a Trojan link with an h2 transport")
 	}
 }
+
+const trojanRealityPublicKey = "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI-T4E7RoLJS0"
+
+func TestTrojanProxy_Reality(t *testing.T) {
+	p, err := ProxyMapFromLink("trojan://made-up-password@203.0.113.5:443?security=reality&sni=sni.example.com&fp=chrome&pbk=" +
+		trojanRealityPublicKey + "&sid=ab12")
+	if err != nil {
+		t.Fatalf("ProxyMapFromLink: %v", err)
+	}
+	wantFields(t, p, map[string]any{
+		"client-fingerprint": "chrome",
+		"reality-opts":       map[string]any{"public-key": trojanRealityPublicKey, "short-id": "ab12"},
+	})
+}
+
+func TestTrojanProxy_RealityRefuses(t *testing.T) {
+	cases := map[string]string{
+		"no_public_key": "trojan://made-up-password@203.0.113.5:443?security=reality&sni=sni.example.com&sid=ab12",
+		"spider_path":   "trojan://made-up-password@203.0.113.5:443?security=reality&pbk=" + trojanRealityPublicKey + "&spx=%2Fx",
+	}
+	for name, link := range cases {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ProxyMapFromLink(link); err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
+}
+
+func TestBuildConfig_TrojanRealityThroughMihomoParser(t *testing.T) {
+	link := "trojan://made-up-password@203.0.113.5:443?security=reality&sni=sni.example.com&fp=chrome&pbk=" +
+		trojanRealityPublicKey + "&sid=ab12#Reality"
+	cfg, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	if proxy, ok := cfg.Proxies["Reality"]; !ok || proxy.Type().String() != "Trojan" {
+		t.Fatalf("trojan proxy missing; have %v", cfg.Proxies)
+	}
+	bad := "trojan://made-up-password@203.0.113.5:443?security=reality&pbk=not-a-key&sid=ab12"
+	if _, err := BuildConfig([]string{bad}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{}); err == nil {
+		t.Fatal("BuildConfig accepted a Trojan REALITY link with an invalid public key")
+	}
+}
