@@ -899,3 +899,17 @@ func TestBuildConfig_FakeIPFilterAgreesWithDNSValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestVlessProxy_RealityOnlyOverTransportsMihomoRunsItOver(t *testing.T) {
+	base := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?security=reality&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com"
+	for _, transport := range []string{"", "&type=tcp", "&type=raw", "&type=grpc&serviceName=s", "&type=xhttp&path=%2Fp", "&type=h2", "&type=http"} {
+		if _, err := ProxyMapFromLink(base + transport); err != nil {
+			t.Errorf("%q: %v", transport, err)
+		}
+	}
+	for _, transport := range []string{"&type=ws&path=%2Fp", "&type=httpupgrade&path=%2Fp", "&type=kcp"} {
+		if _, err := ProxyMapFromLink(base + transport); err == nil {
+			t.Errorf("%q: want a refusal, REALITY would run as plain TLS", transport)
+		}
+	}
+}

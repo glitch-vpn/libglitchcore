@@ -126,3 +126,17 @@ func TestBuildConfig_TrojanRealityThroughMihomoParser(t *testing.T) {
 		t.Fatal("BuildConfig accepted a Trojan REALITY link with an invalid public key")
 	}
 }
+
+func TestTrojanProxy_RealityOnlyOverTransportsMihomoRunsItOver(t *testing.T) {
+	base := "trojan://made-up-password@203.0.113.5:443?security=reality&sni=sni.example.com&pbk=" + trojanRealityPublicKey + "&sid=ab12"
+	for _, transport := range []string{"", "&type=tcp", "&type=raw", "&type=grpc&serviceName=s"} {
+		if _, err := ProxyMapFromLink(base + transport); err != nil {
+			t.Errorf("%q: %v", transport, err)
+		}
+	}
+	for _, transport := range []string{"&type=ws&path=%2Fp", "&type=websocket", "&type=httpupgrade", "&type=h2", "&type=kcp"} {
+		if _, err := ProxyMapFromLink(base + transport); err == nil {
+			t.Errorf("%q: want a refusal, REALITY would run as plain TLS", transport)
+		}
+	}
+}
