@@ -212,7 +212,7 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		raw.ProxyGroup = []map[string]any{group}
 	}
 
-	rules := buildRules(prof, target, in.ForceProxy)
+	rules := append(fakePoolRejectRules(raw), buildRules(prof, target, in.ForceProxy)...)
 	raw.Rule = rules
 	geoRules := rules
 	if in.ForceProxy && forceFlowsNeedSubRule(prof) {
@@ -316,6 +316,24 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 		}
 	}
 	rules = append(rules, "MATCH,"+catchAll)
+	return rules
+}
+
+// fakePoolRejectRules refuses a flow still addressed by a fake-ip: one whose
+// record is gone. The sniffer would read a name from its bytes and route it by
+// that name, dialing the fake address. A flow whose record exists has had its
+// address cleared for its name, so no address rule matches it. The rules lead
+// the list, so every flow, force-proxy ones included, meets them first.
+func fakePoolRejectRules(raw *config.RawConfig) []string {
+	if raw.DNS.EnhancedMode != C.DNSFakeIP {
+		return nil
+	}
+	var rules []string
+	for _, pool := range []string{raw.DNS.FakeIPRange, raw.DNS.FakeIPRange6} {
+		if pool != "" {
+			rules = append(rules, "IP-CIDR,"+routing.NormalizeCIDR(pool)+",REJECT,no-resolve")
+		}
+	}
 	return rules
 }
 

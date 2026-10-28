@@ -61,9 +61,9 @@ func sniffedFlow(t *testing.T, p t2sproxy.Proxy, dst net.IP, port int, name stri
 }
 
 // What mihomo did with a flow: "proxy:<destination>" as the recorder behind
-// the proxy saw it, "block" or "direct" as mihomo's own routing line for the
-// flow's address says.
-func flowOutcome(t *testing.T, remote string, port int, proxied <-chan string, routed <-chan mihomoLog.Event) string {
+// the proxy saw it, "direct:<address>" as the listener at that address saw it,
+// "block" as mihomo's routing line for a refused flow says.
+func flowOutcome(t *testing.T, remote string, port int, proxied, direct <-chan string, routed <-chan mihomoLog.Event) string {
 	t.Helper()
 	addr := net.JoinHostPort(remote, fmt.Sprint(port))
 	deadline := time.After(10 * time.Second)
@@ -71,15 +71,11 @@ func flowOutcome(t *testing.T, remote string, port int, proxied <-chan string, r
 		select {
 		case s := <-proxied:
 			return s
+		case s := <-direct:
+			return s
 		case ev := <-routed:
-			if !strings.Contains(ev.Payload, addr) {
-				continue
-			}
-			switch {
-			case strings.Contains(ev.Payload, "REJECT"):
+			if strings.Contains(ev.Payload, addr) && strings.Contains(ev.Payload, "REJECT") {
 				return "block"
-			case strings.Contains(ev.Payload, "DIRECT"):
-				return "direct"
 			}
 		case <-deadline:
 			return "none"
@@ -100,19 +96,26 @@ func TestMihomoBridge_SniffsFlowsAddressedByIP(t *testing.T) {
 			proxied := make(chan string, 8)
 			socksPort := socksRecorder(t, proxied)
 			direct := make(chan string, 8)
+			// Loopback is a local network: with them off it is as public as any
+			// address and, unlike one, a listener can stand on it.
 			lan := net.ParseIP("127.0.0.5")
+			pinned := net.ParseIP("127.0.0.9")
 			public := net.ParseIP("203.0.113.7")
-			for _, port := range []int{80, 443} {
-				listenDirect(t, lan, port, direct)
+			stale := net.ParseIP("198.19.250.250")
+			for _, host := range []net.IP{lan, pinned} {
+				for _, port := range []int{80, 443} {
+					listenDirect(t, host, port, direct)
+				}
 			}
 
+			// A tier that comes after direct.test blocks pinned's address.
 			prof := routing.Profile{
 				Mode:          routing.ModeProxyAll,
 				LocalNetworks: localNetworks,
-				Tiers: []routing.Tier{{
-					Block:  []string{"domain:blocked.test"},
-					Direct: []string{"domain:direct.test"},
-				}},
+				Tiers: []routing.Tier{
+					{Block: []string{"domain:blocked.test"}, Direct: []string{"domain:direct.test"}},
+					{Block: []string{pinned.String() + "/32"}},
+				},
 			}
 			dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}}
 			cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink},
@@ -149,7 +152,22 @@ func TestMihomoBridge_SniffsFlowsAddressedByIP(t *testing.T) {
 				}
 				return ip.String()
 			}
-			lanWant := map[bool]string{true: "direct", false: "proxy:" + lan.String()}[localNetworks]
+			lanDirect, onLAN := "direct:"+lan.String(), "proxy:"+lan.String()
+			if localNetworks {
+				onLAN = lanDirect
+			}
+			blockedLAN := "block"
+			if localNetworks {
+				blockedLAN = lanDirect
+			}
+			directTierLAN := map[bool]string{true: lanDirect, false: "proxy:" + lan.String()}[localNetworks]
+			// With local networks on the address is never sniffed, so its own
+			// block applies.
+			pinnedApp, pinnedForce := "block", "block"
+			if !localNetworks {
+				pinnedApp = "direct:" + pinned.String()
+			}
+			proxyPublic := "proxy:" + public.String()
 			flows := []struct {
 				what     string
 				dst      net.IP
@@ -159,11 +177,22 @@ func TestMihomoBridge_SniffsFlowsAddressedByIP(t *testing.T) {
 			}{
 				{"public IP, blocked name, TLS", public, 443, "blocked.test", "block", "block"},
 				{"public IP, blocked name, HTTP", public, 80, "blocked.test", "block", "block"},
-				{"public IP, direct-tier name, TLS", public, 443, "direct.test", "direct", "proxy:" + public.String()},
-				{"public IP, other name, TLS", public, 443, "other.test", "proxy:" + public.String(), "proxy:" + public.String()},
-				{"public IP, other name, HTTP", public, 80, "other.test", "proxy:" + public.String(), "proxy:" + public.String()},
-				{"LAN IP, nas.local, TLS", lan, 443, "nas.local", lanWant, lanWant},
-				{"LAN IP, nas.local, HTTP", lan, 80, "nas.local", lanWant, lanWant},
+				{"public IP, other name, TLS", public, 443, "other.test", proxyPublic, proxyPublic},
+				{"public IP, other name, HTTP", public, 80, "other.test", proxyPublic, proxyPublic},
+				// With local networks off the loopback listener is a public address.
+				{"listening IP, blocked name, TLS", lan, 443, "blocked.test", blockedLAN, blockedLAN},
+				{"listening IP, direct-tier name, TLS", lan, 443, "direct.test", lanDirect, directTierLAN},
+				{"listening IP, direct-tier name, HTTP", lan, 80, "direct.test", lanDirect, directTierLAN},
+				{"listening IP, other name, TLS", lan, 443, "other.test", onLAN, onLAN},
+				{"LAN IP, nas.local, TLS", lan, 443, "nas.local", onLAN, onLAN},
+				{"LAN IP, nas.local, HTTP", lan, 80, "nas.local", onLAN, onLAN},
+				// The address is blocked by a later tier than the name's direct
+				// rule. Today the name's rule wins for a normal flow and the dial
+				// reaches the blocked address; a force-proxy flow meets every
+				// block first. Which should win is a product decision.
+				{"blocked IP, direct-tier SNI, TLS", pinned, 443, "direct.test", pinnedApp, pinnedForce},
+				// An address in the fake pool with no record behind it.
+				{"stale fake-ip, direct-tier SNI", stale, 443, "direct.test", "block", "block"},
 				{"fake-ip of fake.test, TLS", fake, 443, "fake.test", "proxy:fake.test", "proxy:fake.test"},
 				// The restored name is the flow's name; the bytes cannot rename it.
 				{"fake-ip of fake.test, SNI blocked.test", fake, 443, "blocked.test", "proxy:fake.test", "proxy:fake.test"},
@@ -185,14 +214,14 @@ func TestMihomoBridge_SniffsFlowsAddressedByIP(t *testing.T) {
 							<-routed
 						}
 						sniffedFlow(t, side.proxy, f.dst, f.port, f.name)
-						if got := flowOutcome(t, remoteOf(f.dst), f.port, proxied, routed); got != want {
+						if got := flowOutcome(t, remoteOf(f.dst), f.port, proxied, direct, routed); got != want {
 							t.Fatalf("went %s, want %s", got, want)
 						}
-						if want == "direct" && f.dst.Equal(lan) {
+						if want == "block" {
 							select {
-							case <-direct:
-							case <-time.After(5 * time.Second):
-								t.Fatal("a direct flow never reached the listener")
+							case s := <-direct:
+								t.Fatalf("a blocked flow still reached %s", s)
+							case <-time.After(300 * time.Millisecond):
 							}
 						}
 					})

@@ -39,8 +39,8 @@ func TestBuildConfig_BridgeOpensNoListener(t *testing.T) {
 	if cfg.DNS == nil || !cfg.DNS.Enable || cfg.DNS.Listen != "" {
 		t.Fatalf("bridge fake-ip wants mihomo's resolver with no listener, got %+v", cfg.DNS)
 	}
-	if r := cfg.Rules[0]; r.RuleType() != C.InName || r.Payload() != ForceProxyInName {
-		t.Fatalf("first rule = %s %q, want IN-NAME %s", r.RuleType(), r.Payload(), ForceProxyInName)
+	if r := cfg.Rules[1]; r.RuleType() != C.InName || r.Payload() != ForceProxyInName {
+		t.Fatalf("rule after the fake pool's = %s %q, want IN-NAME %s", r.RuleType(), r.Payload(), ForceProxyInName)
 	}
 }
 
@@ -1019,6 +1019,36 @@ func TestVlessProxy_RealityIsReadTrimmedAndCaseFolded(t *testing.T) {
 		}
 		if _, err := ProxyMapFromLink(link + "&type=WS"); err == nil {
 			t.Errorf("%q over WS: want a refusal", security)
+		}
+	}
+}
+
+// A flow still addressed by a fake-ip has no record behind it, so every rule
+// list opens by refusing each fake pool the config hands out.
+func TestBuildConfig_RefusesFlowsAddressedByAFakePool(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=tls&sni=a.example.com"
+	fake := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
+	for _, tc := range []struct {
+		what string
+		in   Inbound
+		want []string
+	}{
+		{"bridge", Inbound{Bridge: true, ForceProxy: true, DNS: fake}, []string{"198.19.0.0/16"}},
+		{"native tun", Inbound{Tun: &TunInbound{Device: "GlitchVPN", DNS: fake}}, []string{"198.18.0.1/16", "fc00::/18"}},
+		{"bridge without fake-ip", Inbound{Bridge: true, DNS: dnsconfig.Config{}}, nil},
+	} {
+		cfg, err := BuildConfig([]string{link}, tc.in, Options{}, routing.Profile{})
+		if err != nil {
+			t.Fatalf("%s: BuildConfig: %v", tc.what, err)
+		}
+		var got []string
+		for _, rule := range cfg.Rules {
+			if strings.HasSuffix(rule.Adapter(), "REJECT") && strings.HasPrefix(rule.RuleType().String(), "IPCIDR") {
+				got = append(got, rule.Payload())
+			}
+		}
+		if strings.Join(got, " ") != strings.Join(tc.want, " ") {
+			t.Fatalf("%s: refused pools %v, want %v", tc.what, got, tc.want)
 		}
 	}
 }
