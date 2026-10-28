@@ -232,8 +232,10 @@ func TestBuildConfig_NamedFlowNeverGoesDirectOnLocalNetworks(t *testing.T) {
 	})
 }
 
-// The sniffer leaves local destinations alone when local networks go direct.
-func TestBuildConfig_SnifferSkipsLocalNetworks(t *testing.T) {
+// The built config lists the local networks in the sniffer's skip-dst-address
+// exactly when local networks go direct; it checks the config field only, not
+// what the sniffer does with a flow.
+func TestBuildConfig_SnifferSkipDstAddressFollowsLocalNetworks(t *testing.T) {
 	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
 	for _, on := range []bool{true, false} {
 		prof := routing.Profile{LocalNetworks: on}
