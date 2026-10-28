@@ -3,8 +3,10 @@ package core
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 
 	"github.com/glitch-vpn/libglitchcore/internal/conninspect"
@@ -35,6 +37,43 @@ func (x *CoreController) emitConn(rec conninspect.Record) {
 	}
 }
 
+// stdoutMirror copies every line to stdout off the caller's goroutine: engines
+// log from their own loops (mihomo's subscriber, xray's, tun2socks's), and a
+// stdout nobody drains, a full pipe on Linux, must not stall them. A line that
+// finds the queue full is dropped from stdout; the status port still gets it.
+var stdoutMirror = newLineMirror(256)
+
+// lineMirror writes to os.Stdout as it is when a line is written.
+type lineMirror struct {
+	lines   chan string
+	once    sync.Once
+	pending atomic.Int64
+}
+
+func newLineMirror(queued int) *lineMirror {
+	return &lineMirror{lines: make(chan string, queued)}
+}
+
+func (m *lineMirror) write(line string) {
+	m.once.Do(func() {
+		go func() {
+			for l := range m.lines {
+				_, _ = io.WriteString(os.Stdout, l+"\n")
+				m.pending.Add(-1)
+			}
+		}()
+	})
+	m.pending.Add(1)
+	select {
+	case m.lines <- line:
+	default:
+		m.pending.Add(-1)
+	}
+}
+
+// idle reports that no queued line is left to write or being written.
+func (m *lineMirror) idle() bool { return m.pending.Load() == 0 }
+
 func logEnabled(level logfmt.Level) bool {
 	return logfmt.Passes(atomic.LoadInt32(&statusVerbosity), level)
 }
@@ -48,7 +87,7 @@ func emitLog(level logfmt.Level, component, message string) {
 		return
 	}
 	line := logfmt.BuildJSON(level, logfmt.Scrub(component), logfmt.Scrub(message))
-	_, _ = os.Stdout.Write(append([]byte(line), '\n'))
+	stdoutMirror.write(line)
 	if globalController == nil {
 		return
 	}
