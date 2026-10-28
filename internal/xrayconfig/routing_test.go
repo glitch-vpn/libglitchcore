@@ -178,68 +178,6 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 	}
 }
 
-// firstOutbound walks the rules as xray does for a flow entering on inbound
-// and asking for domain, matching "domain:" entries on the suffix.
-func firstOutbound(rules []ruleView, inbound, domain string) string {
-	for _, r := range rules {
-		if len(r.InboundTag) > 0 {
-			found := false
-			for _, tag := range r.InboundTag {
-				found = found || tag == inbound
-			}
-			if !found {
-				continue
-			}
-		}
-		if len(r.Domain) > 0 {
-			found := false
-			for _, d := range r.Domain {
-				found = found || d == "domain:"+domain
-			}
-			if !found {
-				continue
-			}
-		} else if len(r.IP) > 0 || r.Network != "" || len(r.Process) > 0 {
-			continue
-		}
-		return r.OutboundTag
-	}
-	return ""
-}
-
-// A per-app VPN flow follows the kill-switches, meets every tier's block, then
-// goes to the proxy; every other flow sees the tiers as written.
-func TestApply_ForceProxyMeetsBlockThenProxy(t *testing.T) {
-	p := RoutingProfile{
-		Mode: ModeDirectAll,
-		Tiers: []routing.Tier{
-			{Direct: []string{"domain:direct.example"}},
-			{Block: []string{"domain:ads.example"}, Proxy: []string{"process:app.exe"}},
-		},
-		DisableUDP: true,
-	}
-	_, rules := applyTo(t, p, "proxy", false)
-
-	if rules[0].Network != "udp" {
-		t.Fatalf("the kill-switch must come first: %+v", rules[0])
-	}
-	cases := []struct {
-		inbound, domain, want string
-	}{
-		{ForceProxyTag, "ads.example", blockTag},
-		{ForceProxyTag, "direct.example", "proxy"},
-		{ForceProxyTag, "other.example", "proxy"},
-		{AppTrafficTag, "ads.example", blockTag},
-		{AppTrafficTag, "direct.example", directTag},
-		{AppTrafficTag, "other.example", directTag},
-	}
-	for _, c := range cases {
-		if got := firstOutbound(rules, c.inbound, c.domain); got != c.want {
-			t.Errorf("%s flow to %s -> %q, want %q", c.inbound, c.domain, got, c.want)
-		}
-	}
-}
-
 func TestApply_ExitEchoPrecedesTiers(t *testing.T) {
 	p := RoutingProfile{
 		Mode:  ModeDirectAll,

@@ -202,7 +202,7 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	rules := buildRules(prof, target, in.ForceProxy)
 	raw.Rule = rules
 	geoRules := rules
-	if in.ForceProxy && prof.HasBlock() {
+	if in.ForceProxy && forceFlowsNeedSubRule(prof) {
 		raw.SubRules = map[string][]string{forceFlowsSubRule: forceFlowRules(prof, target)}
 		geoRules = append(append([]string{}, rules...), raw.SubRules[forceFlowsSubRule]...)
 	}
@@ -264,7 +264,8 @@ func requireGeoFile(path, listName, label string) error {
 // Priority (first match wins): kill-switches -> tiers in order (block ->
 // direct -> proxy within each) -> local -> mode catch-all. forceProxy adds the
 // bridge's always-tunnel flows right after the kill-switches: they meet every
-// tier's block, then reach the proxy even in direct-all mode.
+// tier's block and the local networks, then reach the proxy even in direct-all
+// mode.
 func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 	var rules []string
 	if p.DisableIPv6 {
@@ -275,11 +276,14 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 		rules = append(rules, "AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT")
 	}
 	if forceProxy {
-		if p.HasBlock() {
+		if forceFlowsNeedSubRule(p) {
 			rules = append(rules, "SUB-RULE,(IN-NAME,"+ForceProxyInName+"),"+forceFlowsSubRule)
 		} else {
 			rules = append(rules, "IN-NAME,"+ForceProxyInName+","+target)
 		}
+		// mihomo skips a matched rule whose proxy lacks UDP and moves on to the
+		// next one; this keeps such a flow from falling through to the tiers.
+		rules = append(rules, "IN-NAME,"+ForceProxyInName+",REJECT")
 	}
 	for _, tier := range p.Tiers {
 		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
@@ -299,12 +303,24 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 	return rules
 }
 
+// forceFlowsNeedSubRule: the force-proxy flows go straight to the proxy unless
+// a tier blocks something or local networks are sent direct.
+func forceFlowsNeedSubRule(p routing.Profile) bool {
+	return p.HasBlock() || p.LocalNetworks
+}
+
 // forceFlowRules is the sub-rule the force-proxy flows enter: every tier's
-// block matchers, in tier order, then the proxy. Only those flows see it.
+// block matchers in tier order, the local networks when the profile sends them
+// direct, then the proxy. Only those flows see it.
 func forceFlowRules(p routing.Profile, target string) []string {
 	var rules []string
 	for _, tier := range p.Tiers {
 		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
+	}
+	if p.LocalNetworks {
+		for _, cidr := range routing.LocalNetworkCIDRs {
+			rules = append(rules, "IP-CIDR,"+cidr+",DIRECT,no-resolve")
+		}
 	}
 	return append(rules, "MATCH,"+target)
 }

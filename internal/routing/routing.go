@@ -62,7 +62,8 @@ type Tier struct {
 // Profile priority: kill-switches -> per-app VPN flows (the bridge's
 // always-tunnel path) -> Tiers in order (block -> direct -> proxy within each)
 // -> local networks -> Mode catch-all. A per-app VPN flow meets every tier's
-// block, whichever tier holds it, and every non-block outcome becomes proxy.
+// block, whichever tier holds it, then the local networks when LocalNetworks is
+// set; every other outcome becomes proxy.
 type Profile struct {
 	Mode  string
 	Tiers []Tier

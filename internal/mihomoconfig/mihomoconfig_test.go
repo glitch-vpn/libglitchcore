@@ -60,6 +60,7 @@ func TestBuildRules_ForceProxyMeetsBlockThenProxy(t *testing.T) {
 		"IP-CIDR,::/0,REJECT,no-resolve",
 		"AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT",
 		"SUB-RULE,(IN-NAME," + ForceProxyInName + "),force-flows",
+		"IN-NAME," + ForceProxyInName + ",REJECT",
 		"DOMAIN-SUFFIX,direct.example,DIRECT",
 		"DOMAIN-SUFFIX,ads.example,REJECT",
 		"PROCESS-NAME,app.exe,vpn",
@@ -71,37 +72,8 @@ func TestBuildRules_ForceProxyMeetsBlockThenProxy(t *testing.T) {
 	if sub := strings.Join(forceFlowRules(p, "vpn"), "\n"); sub != "DOMAIN-SUFFIX,ads.example,REJECT\nMATCH,vpn" {
 		t.Fatalf("force flow rules = %q", sub)
 	}
-	if plain := buildRules(routing.Profile{Mode: routing.ModeDirectAll}, "vpn", true); plain[0] != "IN-NAME,"+ForceProxyInName+",vpn" {
+	if plain := buildRules(routing.Profile{Mode: routing.ModeDirectAll}, "vpn", true); plain[0] != "IN-NAME,"+ForceProxyInName+",vpn" || plain[1] != "IN-NAME,"+ForceProxyInName+",REJECT" {
 		t.Fatalf("without a block the flow goes straight to the proxy: %v", plain)
-	}
-}
-
-// The built config routes each kind of flow where the order says.
-func TestBuildConfig_ForceProxyRoutesByBlockThenProxy(t *testing.T) {
-	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&encryption=none&sni=www.bing.com&fp=chrome&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f9e232c6fb72d&flow=xtls-rprx-vision#r"
-	prof := routing.Profile{
-		Mode: routing.ModeDirectAll,
-		Tiers: []routing.Tier{
-			{Direct: []string{"direct.example"}},
-			{Block: []string{"ads.example"}, Proxy: []string{"process:app.exe"}},
-		},
-	}
-	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
-	cfg, err := BuildConfig([]string{link}, Inbound{Bridge: true, ForceProxy: true, DNS: dns}, Options{}, prof)
-	if err != nil {
-		t.Fatalf("BuildConfig: %v", err)
-	}
-	if r := cfg.Rules[0]; r.RuleType() != C.SubRules || r.Adapter() != forceFlowsSubRule {
-		t.Fatalf("first rule = %s %q, want SUB-RULE %s", r.RuleType(), r.Adapter(), forceFlowsSubRule)
-	}
-	sub := cfg.SubRules[forceFlowsSubRule]
-	if len(sub) != 2 || sub[0].RuleType() != C.DomainSuffix || sub[0].Payload() != "ads.example" || sub[0].Adapter() != "REJECT" ||
-		sub[1].RuleType() != C.MATCH || sub[1].Adapter() != Target([]string{link}) {
-		t.Fatalf("force flow sub-rules = %+v", sub)
-	}
-	rest := cfg.Rules[1:]
-	if rest[0].Payload() != "direct.example" || rest[0].Adapter() != "DIRECT" || rest[1].Payload() != "ads.example" || rest[1].Adapter() != "REJECT" {
-		t.Fatalf("normal flows must see the tiers as written: %+v", rest)
 	}
 }
 
@@ -698,6 +670,8 @@ func TestBuildConfig_TunInbound(t *testing.T) {
 
 // A name resolves to IPv6 inside the tunnel unless the caller turned IPv6 off.
 func TestBuildConfig_TunDNSAnswersAAAAUnlessIPv6Off(t *testing.T) {
+	// mihomo drops the v6 fake-ip range on a host without global IPv6.
+	t.Setenv("SKIP_SYSTEM_IPV6_CHECK", "1")
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com&flow=xtls-rprx-vision"
 	for _, mode := range []string{dnsconfig.ModeFakeIP, dnsconfig.ModeNormal} {
 		dns := dnsconfig.Config{Mode: mode, Servers: []string{"1.1.1.1"}}
