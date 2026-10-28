@@ -43,26 +43,65 @@ func TestBuildConfig_BridgeOpensNoListener(t *testing.T) {
 	}
 }
 
-// A per-app proxy flow follows the kill-switches and precedes every tier, the
-// order routing.Profile documents.
-func TestBuildRules_ForceProxyFollowsKillSwitches(t *testing.T) {
-	got := buildRules(routing.Profile{
-		Mode:        routing.ModeDirectAll,
-		Tiers:       []routing.Tier{{Block: []string{"ads.example"}, Proxy: []string{"process:app.exe"}}},
+// A per-app VPN flow follows the kill-switches, meets every tier's block in a
+// sub-rule of its own, then goes to the proxy; the tiers stay as written.
+func TestBuildRules_ForceProxyMeetsBlockThenProxy(t *testing.T) {
+	p := routing.Profile{
+		Mode: routing.ModeDirectAll,
+		Tiers: []routing.Tier{
+			{Direct: []string{"direct.example"}},
+			{Block: []string{"ads.example"}, Proxy: []string{"process:app.exe"}},
+		},
 		DisableIPv6: true,
 		DisableUDP:  true,
-	}, "vpn", true)
-	want := []string{
+	}
+	got := strings.Join(buildRules(p, "vpn", true), "\n")
+	want := strings.Join([]string{
 		"IP-CIDR,::/0,REJECT,no-resolve",
 		"AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT",
-		"IN-NAME," + ForceProxyInName + ",vpn",
+		"SUB-RULE,(IN-NAME," + ForceProxyInName + "),force-flows",
+		"DOMAIN-SUFFIX,direct.example,DIRECT",
 		"DOMAIN-SUFFIX,ads.example,REJECT",
 		"PROCESS-NAME,app.exe,vpn",
 		"MATCH,DIRECT",
+	}, "\n")
+	if got != want {
+		t.Fatalf("rules =\n%s\nwant\n%s", got, want)
 	}
-	gotJoined, wantJoined := strings.Join(got, "\n"), strings.Join(want, "\n")
-	if gotJoined != wantJoined {
-		t.Fatalf("rules =\n%s\nwant\n%s", gotJoined, wantJoined)
+	if sub := strings.Join(forceFlowRules(p, "vpn"), "\n"); sub != "DOMAIN-SUFFIX,ads.example,REJECT\nMATCH,vpn" {
+		t.Fatalf("force flow rules = %q", sub)
+	}
+	if plain := buildRules(routing.Profile{Mode: routing.ModeDirectAll}, "vpn", true); plain[0] != "IN-NAME,"+ForceProxyInName+",vpn" {
+		t.Fatalf("without a block the flow goes straight to the proxy: %v", plain)
+	}
+}
+
+// The built config routes each kind of flow where the order says.
+func TestBuildConfig_ForceProxyRoutesByBlockThenProxy(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=reality&encryption=none&sni=www.bing.com&fp=chrome&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f9e232c6fb72d&flow=xtls-rprx-vision#r"
+	prof := routing.Profile{
+		Mode: routing.ModeDirectAll,
+		Tiers: []routing.Tier{
+			{Direct: []string{"direct.example"}},
+			{Block: []string{"ads.example"}, Proxy: []string{"process:app.exe"}},
+		},
+	}
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
+	cfg, err := BuildConfig([]string{link}, Inbound{Bridge: true, ForceProxy: true, DNS: dns}, Options{}, prof)
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	if r := cfg.Rules[0]; r.RuleType() != C.SubRules || r.Adapter() != forceFlowsSubRule {
+		t.Fatalf("first rule = %s %q, want SUB-RULE %s", r.RuleType(), r.Adapter(), forceFlowsSubRule)
+	}
+	sub := cfg.SubRules[forceFlowsSubRule]
+	if len(sub) != 2 || sub[0].RuleType() != C.DomainSuffix || sub[0].Payload() != "ads.example" || sub[0].Adapter() != "REJECT" ||
+		sub[1].RuleType() != C.MATCH || sub[1].Adapter() != Target([]string{link}) {
+		t.Fatalf("force flow sub-rules = %+v", sub)
+	}
+	rest := cfg.Rules[1:]
+	if rest[0].Payload() != "direct.example" || rest[0].Adapter() != "DIRECT" || rest[1].Payload() != "ads.example" || rest[1].Adapter() != "REJECT" {
+		t.Fatalf("normal flows must see the tiers as written: %+v", rest)
 	}
 }
 

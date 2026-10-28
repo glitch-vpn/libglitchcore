@@ -142,10 +142,20 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	echoRule := fieldRule{InboundTag: []string{ExitEchoTag}}
 	proxy.apply(&echoRule)
 	rules = append(rules, echoRule.raw())
-	// Force-proxy flows (ForceProxyTag, per-process process->proxy) always
-	// tunnel, so "route only this app through the VPN" holds even in
-	// direct-all mode.
+	// Force-proxy flows (ForceProxyTag, per-process process->proxy) meet
+	// every tier's block, then always tunnel, so "route only this app through
+	// the VPN" holds even in direct-all mode.
 	if hasProcessProxy(p) {
+		// Only those flows see the tiers' block matchers here; the tiers
+		// below stay as they are for everyone else.
+		for _, tier := range p.Tiers {
+			for _, raw := range matcherRules(tier.Block, block) {
+				var r fieldRule
+				_ = json.Unmarshal(raw, &r)
+				r.InboundTag = []string{ForceProxyTag}
+				rules = append(rules, r.raw())
+			}
+		}
 		forceRule := fieldRule{InboundTag: []string{ForceProxyTag}}
 		proxy.apply(&forceRule)
 		rules = append(rules, forceRule.raw())

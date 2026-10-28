@@ -178,46 +178,65 @@ func TestApply_ForceProxyInbound(t *testing.T) {
 	}
 }
 
-// A per-app proxy flow follows the kill-switches and precedes every tier, the
-// order routing.Profile documents.
-func TestApply_ForceProxyFollowsKillSwitches(t *testing.T) {
+// firstOutbound walks the rules as xray does for a flow entering on inbound
+// and asking for domain, matching "domain:" entries on the suffix.
+func firstOutbound(rules []ruleView, inbound, domain string) string {
+	for _, r := range rules {
+		if len(r.InboundTag) > 0 {
+			found := false
+			for _, tag := range r.InboundTag {
+				found = found || tag == inbound
+			}
+			if !found {
+				continue
+			}
+		}
+		if len(r.Domain) > 0 {
+			found := false
+			for _, d := range r.Domain {
+				found = found || d == "domain:"+domain
+			}
+			if !found {
+				continue
+			}
+		} else if len(r.IP) > 0 || r.Network != "" || len(r.Process) > 0 {
+			continue
+		}
+		return r.OutboundTag
+	}
+	return ""
+}
+
+// A per-app VPN flow follows the kill-switches, meets every tier's block, then
+// goes to the proxy; every other flow sees the tiers as written.
+func TestApply_ForceProxyMeetsBlockThenProxy(t *testing.T) {
 	p := RoutingProfile{
-		Mode:        ModeDirectAll,
-		Tiers:       []routing.Tier{{Block: []string{"domain:ads.example"}, Proxy: []string{"process:app.exe"}}},
-		DisableIPv6: true,
-		DisableUDP:  true,
+		Mode: ModeDirectAll,
+		Tiers: []routing.Tier{
+			{Direct: []string{"domain:direct.example"}},
+			{Block: []string{"domain:ads.example"}, Proxy: []string{"process:app.exe"}},
+		},
+		DisableUDP: true,
 	}
 	_, rules := applyTo(t, p, "proxy", false)
 
-	index := func(match func(ruleView) bool) int {
-		for i, r := range rules {
-			if match(r) {
-				return i
-			}
+	if rules[0].Network != "udp" {
+		t.Fatalf("the kill-switch must come first: %+v", rules[0])
+	}
+	cases := []struct {
+		inbound, domain, want string
+	}{
+		{ForceProxyTag, "ads.example", blockTag},
+		{ForceProxyTag, "direct.example", "proxy"},
+		{ForceProxyTag, "other.example", "proxy"},
+		{AppTrafficTag, "ads.example", blockTag},
+		{AppTrafficTag, "direct.example", directTag},
+		{AppTrafficTag, "other.example", directTag},
+	}
+	for _, c := range cases {
+		if got := firstOutbound(rules, c.inbound, c.domain); got != c.want {
+			t.Errorf("%s flow to %s -> %q, want %q", c.inbound, c.domain, got, c.want)
 		}
-		return -1
-	}
-	hasTag := func(tag string) func(ruleView) bool {
-		return func(r ruleView) bool {
-			for _, got := range r.InboundTag {
-				if got == tag {
-					return true
-				}
-			}
-			return false
-		}
-	}
-	udp := index(func(r ruleView) bool { return r.Network == "udp" })
-	force := index(hasTag(ForceProxyTag))
-	block := index(func(r ruleView) bool { return len(r.Domain) == 1 && r.Domain[0] == "domain:ads.example" })
-	if udp < 0 || force < 0 || block < 0 {
-		t.Fatalf("want a udp kill-switch, a force-proxy rule and a block tier, got %+v", rules)
-	}
-	if !(udp < force && force < block) {
-		t.Fatalf("order must be kill-switches, force-proxy, tiers; indexes udp=%d force=%d block=%d", udp, force, block)
-	}
-	if rules[force].OutboundTag != "proxy" {
-		t.Fatalf("force-proxy rule must route to the proxy: %+v", rules[force])
 	}
 }
 

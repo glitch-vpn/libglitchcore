@@ -73,6 +73,9 @@ type Inbound struct {
 // ForceProxyInName is the inbound name the bridge's force-proxy flows carry.
 const ForceProxyInName = "forceproxy"
 
+// forceFlowsSubRule names the sub-rule that holds the force-proxy flows' rules.
+const forceFlowsSubRule = "force-flows"
+
 // ProxyInName names the proxy-mode listener that carries credentials.
 const ProxyInName = "proxy"
 
@@ -198,8 +201,13 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 
 	rules := buildRules(prof, target, in.ForceProxy)
 	raw.Rule = rules
+	geoRules := rules
+	if in.ForceProxy && prof.HasBlock() {
+		raw.SubRules = map[string][]string{forceFlowsSubRule: forceFlowRules(prof, target)}
+		geoRules = append(append([]string{}, rules...), raw.SubRules[forceFlowsSubRule]...)
+	}
 
-	if err := checkGeoAssets(rules, raw.DNS.FakeIPFilter); err != nil {
+	if err := checkGeoAssets(geoRules, raw.DNS.FakeIPFilter); err != nil {
 		return nil, err
 	}
 	return config.ParseRawConfig(raw)
@@ -255,8 +263,8 @@ func requireGeoFile(path, listName, label string) error {
 // where unlisted traffic goes; an empty profile yields just MATCH,target.
 // Priority (first match wins): kill-switches -> tiers in order (block ->
 // direct -> proxy within each) -> local -> mode catch-all. forceProxy adds the
-// bridge's always-tunnel flows right after the kill-switches, so they reach the
-// proxy even in direct-all mode but never past a kill-switch.
+// bridge's always-tunnel flows right after the kill-switches: they meet every
+// tier's block, then reach the proxy even in direct-all mode.
 func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 	var rules []string
 	if p.DisableIPv6 {
@@ -267,7 +275,11 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 		rules = append(rules, "AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT")
 	}
 	if forceProxy {
-		rules = append(rules, "IN-NAME,"+ForceProxyInName+","+target)
+		if p.HasBlock() {
+			rules = append(rules, "SUB-RULE,(IN-NAME,"+ForceProxyInName+"),"+forceFlowsSubRule)
+		} else {
+			rules = append(rules, "IN-NAME,"+ForceProxyInName+","+target)
+		}
 	}
 	for _, tier := range p.Tiers {
 		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
@@ -285,6 +297,16 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 		rules = append(rules, "MATCH,"+target)
 	}
 	return rules
+}
+
+// forceFlowRules is the sub-rule the force-proxy flows enter: every tier's
+// block matchers, in tier order, then the proxy. Only those flows see it.
+func forceFlowRules(p routing.Profile, target string) []string {
+	var rules []string
+	for _, tier := range p.Tiers {
+		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
+	}
+	return append(rules, "MATCH,"+target)
 }
 
 // matcherRules classifies a flat matcher list (routing.Classify) into mihomo rule
