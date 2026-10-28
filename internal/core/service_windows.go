@@ -24,10 +24,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
-const (
-	serviceName         = "GlitchVpnCore"
-	pipeBufferSizeBytes = 64 * 1024
-)
+const pipeBufferSizeBytes = 64 * 1024
 
 // maxCommandBytes bounds one command line. The largest real command is an
 // engine_start whose request carries the app's config and routing, each under

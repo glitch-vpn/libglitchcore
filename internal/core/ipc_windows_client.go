@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/registry"
@@ -82,7 +83,8 @@ func serviceEventLoop() {
 }
 
 // dialService opens the pipe the service published under valueName, and only
-// if LocalSystem or the Administrators group owns it.
+// if LocalSystem or the Administrators group owns it and the service's own
+// process serves it.
 func dialService(valueName string, timeout time.Duration) (net.Conn, error) {
 	pipeName, err := readServicePipeName(valueName)
 	if err != nil {
@@ -93,6 +95,10 @@ func dialService(valueName string, timeout time.Duration) (net.Conn, error) {
 		return nil, err
 	}
 	if err := verifyServicePipeOwner(conn); err != nil {
+		conn.Close()
+		return nil, fmt.Errorf("%s: %w", pipeName, err)
+	}
+	if err := verifyServicePipeServer(conn); err != nil {
 		conn.Close()
 		return nil, fmt.Errorf("%s: %w", pipeName, err)
 	}
@@ -134,10 +140,65 @@ func verifyServicePipeOwner(conn net.Conn) error {
 	if err != nil {
 		return fmt.Errorf("read the pipe owner: %w", err)
 	}
-	if owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+	if ownedByTheService(owner) {
 		return nil
 	}
 	return fmt.Errorf("%w: it is owned by %s", errServicePipeNotOwned, owner)
+}
+
+// ownedByTheService admits the Administrators group too, since LocalSystem
+// creates objects with that group as their owner.
+func ownedByTheService(owner *windows.SID) bool {
+	return owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid)
+}
+
+var serviceProcessID = runningServiceProcessID
+
+// runningServiceProcessID asks the service manager with query-status access
+// only, which a standard account holds.
+func runningServiceProcessID() (uint32, error) {
+	manager, err := windows.OpenSCManager(nil, nil, windows.SC_MANAGER_CONNECT)
+	if err != nil {
+		return 0, fmt.Errorf("open the service manager: %w", err)
+	}
+	defer windows.CloseServiceHandle(manager)
+	name, err := windows.UTF16PtrFromString(serviceName)
+	if err != nil {
+		return 0, err
+	}
+	service, err := windows.OpenService(manager, name, windows.SERVICE_QUERY_STATUS)
+	if err != nil {
+		return 0, fmt.Errorf("open the service: %w", err)
+	}
+	defer windows.CloseServiceHandle(service)
+	var status windows.SERVICE_STATUS_PROCESS
+	var needed uint32
+	if err := windows.QueryServiceStatusEx(service, windows.SC_STATUS_PROCESS_INFO, (*byte)(unsafe.Pointer(&status)), uint32(unsafe.Sizeof(status)), &needed); err != nil {
+		return 0, fmt.Errorf("query the service: %w", err)
+	}
+	if status.ProcessId == 0 {
+		return 0, errServicePipesNotPublished
+	}
+	return status.ProcessId, nil
+}
+
+func verifyServicePipeServer(conn net.Conn) error {
+	pipe, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return errors.New("not a named pipe")
+	}
+	var serverProcessID uint32
+	if err := windows.GetNamedPipeServerProcessId(windows.Handle(pipe.Fd()), &serverProcessID); err != nil {
+		return fmt.Errorf("read the pipe's server: %w", err)
+	}
+	servicePID, err := serviceProcessID()
+	if err != nil {
+		return err
+	}
+	if serverProcessID != servicePID {
+		return fmt.Errorf("%w: process %d serves it, and the service runs as process %d", errServicePipeNotOwned, serverProcessID, servicePID)
+	}
+	return nil
 }
 
 func callService(action string, payload map[string]any) (serviceResponse, error) {

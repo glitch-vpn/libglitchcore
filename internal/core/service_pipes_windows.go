@@ -23,6 +23,7 @@ type registryLocation struct {
 }
 
 const (
+	serviceName          = "GlitchVpnCore"
 	commandPipeValueName = "CommandPipe"
 	eventPipeValueName   = "EventPipe"
 	servicePipePrefix    = `\\.\pipe\glitch_vpn_core_`

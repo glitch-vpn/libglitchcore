@@ -290,8 +290,9 @@ functions carry nothing.
 - Events need nothing: every `emitStatus` pair traverses the pipe as-is.
 - A client reaches the service only through `dialService`, which takes the
   pipe name the service published, dials at identification level (the service
-  reads the caller's token from it) and refuses a pipe that LocalSystem or the
-  Administrators group does not own. An event client writes one byte first,
+  reads the caller's token from it), and refuses a pipe that LocalSystem or the
+  Administrators group does not own or that a process other than the
+  service's serves. An event client writes one byte first,
   so the service can read who subscribes.
 - The service checks the caller on every command, not once per connection,
   and runs the command under `pipeAccess.runAdmitted`, which a change of

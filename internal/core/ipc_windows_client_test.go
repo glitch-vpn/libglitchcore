@@ -84,3 +84,61 @@ func TestServiceDialRefusesAPublishedNameOutsideTheServicePipes(t *testing.T) {
 		t.Fatalf("dial failed with %v, want a refusal of the name", err)
 	}
 }
+
+func TestServicePipeOwnerIsLocalSystemOrTheAdministrators(t *testing.T) {
+	system, _ := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	administrators, _ := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	user, err := windows.StringToSid("S-1-5-21-1111111111-2222222222-3333333333-1001")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for owner, want := range map[*windows.SID]bool{system: true, administrators: true, user: false} {
+		if got := ownedByTheService(owner); got != want {
+			t.Errorf("a pipe owned by %s passes as the service's: %v, want %v", owner, got, want)
+		}
+	}
+}
+
+func TestServiceDialChecksThePipeIsServedByTheServiceProcess(t *testing.T) {
+	name := fmt.Sprintf(`%sserver_test_%d`, servicePipePrefix, os.Getpid())
+	listener, err := winio.ListenPipe(name, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			conn.Close()
+		}
+	}()
+	previousProcessID := serviceProcessID
+	t.Cleanup(func() { serviceProcessID = previousProcessID })
+
+	for servicePID, want := range map[uint32]error{uint32(os.Getpid()): nil, uint32(os.Getpid()) + 4: errServicePipeNotOwned} {
+		serviceProcessID = func() (uint32, error) { return servicePID, nil }
+		conn, err := dialPipeAtIdentification(name, 2*time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := verifyServicePipeServer(conn); !errors.Is(got, want) {
+			t.Errorf("with the service as process %d: %v, want %v", servicePID, got, want)
+		}
+		conn.Close()
+	}
+}
+
+// Reads the installed service's state, which needs no more than a standard
+// account holds; skipped where no service is installed.
+func TestServiceProcessIDIsReadableWithQueryStatusAccess(t *testing.T) {
+	_, err := runningServiceProcessID()
+	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
+		t.Skip("no service installed")
+	}
+	if err != nil && !errors.Is(err, errServicePipesNotPublished) {
+		t.Fatal(err)
+	}
+}
