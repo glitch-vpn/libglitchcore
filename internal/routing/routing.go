@@ -68,9 +68,11 @@ type Tier struct {
 type Profile struct {
 	Mode  string
 	Tiers []Tier
-	// DomainStrategy feeds xray's router-level domainStrategy (whether the
-	// router resolves domain-form requests to match IP rules); "" = engine
-	// default (AsIs). mihomo has no equivalent knob and ignores it.
+	// DomainStrategy feeds xray's router: AsIs ("", the default) never
+	// resolves a name for routing, IPIfNonMatch resolves one no domain rule
+	// matched, IPOnDemand one at its first IP rule. A resolved name goes
+	// direct on a geoip or CIDR entry only to an address the entry holds.
+	// mihomo has no equivalent knob and ignores it.
 	DomainStrategy    string
 	LocalNetworks     bool
 	DirectSendThrough string // bind direct egress to this NIC IP (Windows, source IP)

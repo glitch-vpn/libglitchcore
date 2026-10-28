@@ -71,7 +71,7 @@ set by the app process would not.
   fails the whole config on a value it cannot parse and xray drops the whole
   table.
 
-## domainStrategy is a privacy trade-off
+## domainStrategy: privacy and matching
 
 `asis` (the default) never resolves for routing. `ipifnonmatch` and
 `ipondemand` make xray's router resolve domain-form requests so IP rules can
@@ -80,11 +80,21 @@ direct outbound whenever one exists. The browsing domain list then leaves the
 machine in the clear, which is what fake-ip otherwise prevents. Enable it only
 when IP-rule matching for domain traffic is worth that.
 
-A `geoip:` or CIDR `direct` entry sends a flow direct only to an address it
-holds. A name it covers only in part is refused, not tunnelled: xray picks the
-outbound before it picks the address, and cannot fall back from one outbound
-to another. A fully covered name goes direct. With IPv6 on, a name whose AAAA
-address an IPv4-only list does not hold counts as covered in part.
+`ipifnonmatch` resolves a name that no domain rule matched; `ipondemand`
+resolves it at the first IP rule it meets. Under either of them:
+
+* A `geoip:` or CIDR `block` or `proxy` entry takes a name when any of its
+  addresses is in it. A `block` entry does so on flows a `process:` proxy
+  entry sends through the VPN too, so their names are looked up as well.
+* A `geoip:` or CIDR `direct` entry sends a flow direct only to an address it
+  holds. A name it covers only in part is refused, not tunnelled: xray picks
+  the outbound before it picks the address, and cannot fall back from one
+  outbound to another. A fully covered name goes direct. With IPv6 on, a name
+  whose AAAA address an IPv4-only list does not hold counts as covered in
+  part.
+* Under `ipifnonmatch`, a name xray cannot resolve matches no rule and goes to
+  the first proxy server, whatever the mode. A profile with no `geoip:` or
+  CIDR entry resolves nothing.
 
 ## Per-process rules are tier-blind on desktop
 

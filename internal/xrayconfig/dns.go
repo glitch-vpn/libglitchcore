@@ -16,8 +16,9 @@ import (
 
 const (
 	dnsOutboundTag = "dns-out"
-	// Untagged, the module's own upstream queries hit the app :53 rule and get
-	// fake IPs, so the direct path dials the fake pool (blackhole).
+	// The module's own upstream queries. Untagged, they would hit the app :53
+	// rule under fake-ip and get fake IPs, so the direct path dials the fake
+	// pool (blackhole). The tiers name this inbound so they apply to them.
 	dnsInternalTag = "dns-internal"
 
 	// v4 pool: upper /16 of xray's default 198.18.0.0/15, clear of the Windows
@@ -82,7 +83,7 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfi
 		}
 		return
 	}
-	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: nsList, Hosts: hosts, QueryStrategy: queryStrategy(dns)}
+	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: nsList, Hosts: hosts, QueryStrategy: queryStrategy(dns), Tag: dnsInternalTag}
 }
 
 func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {

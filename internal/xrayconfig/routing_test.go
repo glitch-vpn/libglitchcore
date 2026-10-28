@@ -363,3 +363,40 @@ func TestDirectOutbound_ResolvesThroughSockopt(t *testing.T) {
 		t.Fatalf("sockopt = %+v", socket)
 	}
 }
+
+// Under IPIfNonMatch a catch-all waits for a name to resolve only where an IP
+// rule could still take it; per-app VPN flows meet only the tiers' blocks.
+func TestApply_IPIfNonMatchResolvesOnlyForIPRules(t *testing.T) {
+	catchAllIPs := func(p RoutingProfile) (app, force []string) {
+		_, rules := applyTo(t, p, "proxy", false)
+		for _, r := range rules {
+			if len(r.InboundTag) != 1 || len(r.Domain) > 0 || r.OutboundTag != "proxy" {
+				continue
+			}
+			switch r.InboundTag[0] {
+			case AppTrafficTag:
+				app = r.IP
+			case ForceProxyTag:
+				force = r.IP
+			}
+		}
+		return app, force
+	}
+	cases := []struct {
+		name                string
+		tier                routing.Tier
+		strategy            string
+		wantApp, wantPerApp bool
+	}{
+		{"domain entries only", routing.Tier{Direct: []string{"domain:ru"}, Proxy: []string{"process:app.exe"}}, "IPIfNonMatch", false, false},
+		{"a direct geoip entry", routing.Tier{Direct: []string{"geoip:ru"}, Proxy: []string{"process:app.exe"}}, "ipifnonmatch", true, false},
+		{"a block CIDR entry", routing.Tier{Block: []string{"192.0.2.0/24"}, Proxy: []string{"process:app.exe"}}, "IPIfNonMatch", true, true},
+		{"IPOnDemand", routing.Tier{Block: []string{"192.0.2.0/24"}, Proxy: []string{"process:app.exe"}}, "IPOnDemand", false, false},
+	}
+	for _, c := range cases {
+		app, force := catchAllIPs(RoutingProfile{Tiers: []routing.Tier{c.tier}, DomainStrategy: c.strategy})
+		if (len(app) > 0) != c.wantApp || (len(force) > 0) != c.wantPerApp {
+			t.Errorf("%s: catch-all IPs app %v, per-app %v; want app %v, per-app %v", c.name, app, force, c.wantApp, c.wantPerApp)
+		}
+	}
+}

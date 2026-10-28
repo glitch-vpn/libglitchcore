@@ -23,6 +23,13 @@ const (
 	ModeDirectAll = routing.ModeDirectAll
 )
 
+// xray's router domain strategies.
+const (
+	strategyAsIs         = "AsIs"
+	strategyIPIfNonMatch = "IPIfNonMatch"
+	strategyIPOnDemand   = "IPOnDemand"
+)
+
 // RoutingProfile aliases the engine-neutral routing type. The home is
 // internal/routing; mihomoconfig consumes the same type (no cross-import).
 type RoutingProfile = routing.Profile
@@ -112,6 +119,15 @@ func matcherRules(matchers []string, inbounds []string, outcome, ipOutcome targe
 // anyDomain matches every flow addressed by a name.
 const anyDomain = "regexp:."
 
+// anyIP matches every flow addressed by IP, and a name once xray resolves it.
+var anyIP = []string{"0.0.0.0/0", "::/0"}
+
+// tierInbounds are every inbound that reaches the tiers: the exit echo and the
+// per-app VPN flows are settled ahead of them. Naming them keeps a per-app VPN
+// flow addressed by a name off the tiers on the first IPIfNonMatch pass, which
+// it must leave unmatched to be resolved.
+var tierInbounds = []string{AppTrafficTag, dnsInternalTag}
+
 // applyRouting is a free function because RoutingProfile aliases a type from
 // another package; existing balancers on cfg.RouterConfig are preserved.
 func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targetIsBalancer bool) {
@@ -127,6 +143,22 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	}
 	if needBlock {
 		ensureOutbound(cfg, blockTag, xrayConf.OutboundDetourConfig{Protocol: "blackhole", Tag: blockTag})
+	}
+
+	// IPIfNonMatch resolves a name only when no rule matched it, so a
+	// catch-all, and the rule keeping names off the local networks, must not
+	// match a name before it resolves. Each waits only where an IP rule could
+	// still take the name, since the lookup is a DNS query of its own, sent in
+	// the clear under fake-ip. A name that does not resolve matches no rule and
+	// takes the first outbound, a proxy.
+	var appResolveIP, forceResolveIP []string
+	if strategy, _ := NormalizeDomainStrategy(p.DomainStrategy); strategy == strategyIPIfNonMatch {
+		if tiersHoldIPs(p.Tiers, func(t routing.Tier) [][]string { return [][]string{t.Block, t.Direct, t.Proxy} }) {
+			appResolveIP = anyIP
+		}
+		if tiersHoldIPs(p.Tiers, func(t routing.Tier) [][]string { return [][]string{t.Block} }) {
+			forceResolveIP = anyIP
+		}
 	}
 
 	// Priority (first match wins): protocol kill-switches -> exit echo ->
@@ -163,26 +195,26 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 			// A name the router resolves into the local networks stays off the
 			// LAN rule: the direct outbound would resolve it again and could
 			// dial a public address.
-			named := fieldRule{InboundTag: forceInbound, Domain: []string{anyDomain}}
+			named := fieldRule{InboundTag: forceInbound, Domain: []string{anyDomain}, IP: localNetworksOnceResolved(forceResolveIP)}
 			proxy.apply(&named)
 			rules = append(rules, named.raw())
 			lan := fieldRule{InboundTag: forceInbound, IP: routing.LocalNetworkCIDRs}
 			direct.apply(&lan)
 			rules = append(rules, lan.raw())
 		}
-		forceRule := fieldRule{InboundTag: forceInbound}
+		forceRule := fieldRule{InboundTag: forceInbound, IP: forceResolveIP}
 		proxy.apply(&forceRule)
 		rules = append(rules, forceRule.raw())
 	}
 	for i, tier := range p.Tiers {
-		rules = append(rules, matcherRules(tier.Block, nil, block, block)...)
+		rules = append(rules, matcherRules(tier.Block, tierInbounds, block, block)...)
 		directByIP := direct
 		if _, ips, _ := splitMatchers(tier.Direct); len(ips) > 0 {
 			directByIP = target{tag: tierDirectTag(i)}
 			ensureOutbound(cfg, directByIP.tag, tierDirectOutbound(p, directByIP.tag, ips))
 		}
-		rules = append(rules, matcherRules(tier.Direct, nil, direct, directByIP)...)
-		rules = append(rules, matcherRules(tier.Proxy, nil, proxy, proxy)...)
+		rules = append(rules, matcherRules(tier.Direct, tierInbounds, direct, directByIP)...)
+		rules = append(rules, matcherRules(tier.Proxy, tierInbounds, proxy, proxy)...)
 	}
 
 	appInbound := []string{AppTrafficTag}
@@ -193,14 +225,14 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	if p.LocalNetworks {
 		// Only a flow addressed by IP goes direct on the LAN rule; a name takes
 		// the catch-all outcome it would reach anyway.
-		named := fieldRule{InboundTag: appInbound, Domain: []string{anyDomain}}
+		named := fieldRule{InboundTag: appInbound, Domain: []string{anyDomain}, IP: localNetworksOnceResolved(appResolveIP)}
 		modeOutcome.apply(&named)
 		rules = append(rules, named.raw())
 		r := fieldRule{IP: routing.LocalNetworkCIDRs}
 		direct.apply(&r)
 		rules = append(rules, r.raw())
 	}
-	catchAll := fieldRule{InboundTag: appInbound}
+	catchAll := fieldRule{InboundTag: appInbound, IP: appResolveIP}
 	modeOutcome.apply(&catchAll)
 	rules = append(rules, catchAll.raw())
 
@@ -214,6 +246,27 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	}
 }
 
+// localNetworksOnceResolved narrows the rule keeping names off the local
+// networks to names resolved into them when the catch-all waits for names to
+// resolve; otherwise the rule takes every name, without a lookup.
+func localNetworksOnceResolved(resolveIP []string) []string {
+	if resolveIP == nil {
+		return nil
+	}
+	return routing.LocalNetworkCIDRs
+}
+
+func tiersHoldIPs(tiers []routing.Tier, lists func(routing.Tier) [][]string) bool {
+	for _, tier := range tiers {
+		for _, list := range lists(tier) {
+			if _, ips, _ := splitMatchers(list); len(ips) > 0 {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // NormalizeDomainStrategy maps a caller value onto xray's router strategies
 // ("" = leave the engine default, AsIs). Unknown values are reported instead
 // of inheriting xray's silent AsIs fallback - a typo would silently disable
@@ -223,11 +276,11 @@ func NormalizeDomainStrategy(s string) (string, bool) {
 	case "":
 		return "", true
 	case "asis":
-		return "AsIs", true
+		return strategyAsIs, true
 	case "ipifnonmatch":
-		return "IPIfNonMatch", true
+		return strategyIPIfNonMatch, true
 	case "ipondemand":
-		return "IPOnDemand", true
+		return strategyIPOnDemand, true
 	}
 	return "", false
 }

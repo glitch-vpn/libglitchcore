@@ -200,6 +200,29 @@ func TestApply_NamedFlowNeverGoesDirectOnLocalNetworks(t *testing.T) {
 	}
 }
 
+// Under the strategies that resolve, a tier's geoip block applies to a name
+// that resolves into it, on normal and per-app flows alike.
+func TestApply_IPBlockAppliesToNames(t *testing.T) {
+	for _, strategy := range []string{"IPIfNonMatch", "IPOnDemand"} {
+		t.Run(strategy, func(t *testing.T) {
+			useGeoFiles(t)
+			prof := routing.Profile{
+				Mode:           routing.ModeProxyAll,
+				Tiers:          []routing.Tier{{Block: []string{"geoip:cn"}, Proxy: []string{"process:app.exe"}}},
+				LocalNetworks:  true,
+				DomainStrategy: strategy,
+			}
+			tcp := xnet.Network_TCP
+			routeFlows(t, prof, []routedFlow{
+				{"normal name in the block", AppTrafficTag, tcp, "cn.test", 443, blockTag},
+				{"force name in the block", ForceProxyTag, tcp, "cn.test", 443, blockTag},
+				{"normal address outside the block", AppTrafficTag, tcp, "198.51.100.7", 443, OutboundTag},
+				{"force address outside the block", ForceProxyTag, tcp, "198.51.100.7", 443, OutboundTag},
+			})
+		})
+	}
+}
+
 // dialCounter accepts on a loopback address and counts each connection before
 // closing it, so the count is in when the dialer reads the close.
 type dialCounter struct {
@@ -277,9 +300,9 @@ func TestApply_TierDirectByIPDialsOnlyItsAddresses(t *testing.T) {
 	}
 	flows := []flow{
 		{"fully covered name", "covered.test", "",
-			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "proxy", "IPOnDemand": "covered"}, everywhere("proxy")},
+			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "covered", "IPOnDemand": "covered"}, everywhere("proxy")},
 		{"partly covered name", "part.test", "",
-			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "proxy", "IPOnDemand": "none"}, everywhere("proxy")},
+			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "none", "IPOnDemand": "none"}, everywhere("proxy")},
 		{"address in the rule", covered, "", everywhere("covered"), everywhere("proxy")},
 		{"sniffed name in the rule, address outside", outside, "covered.test",
 			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "proxy", "IPOnDemand": "none"}, everywhere("proxy")},
