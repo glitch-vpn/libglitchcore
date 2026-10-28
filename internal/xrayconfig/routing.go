@@ -2,6 +2,7 @@ package xrayconfig
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 
 	xrayConf "github.com/xtls/xray-core/infra/conf"
@@ -59,8 +60,7 @@ func (t target) apply(r *fieldRule) {
 
 // The core runs routing.Profile.Validate first, so every geo code here is one
 // xray can look up.
-func matcherRules(matchers []string, t target) []json.RawMessage {
-	var domains, ips, processes []string
+func splitMatchers(matchers []string) (domains, ips, processes []string) {
 	for _, m := range matchers {
 		kind, val, ok := routing.Classify(m)
 		if !ok {
@@ -85,21 +85,25 @@ func matcherRules(matchers []string, t target) []json.RawMessage {
 			processes = append(processes, val)
 		}
 	}
+	return domains, ips, processes
+}
 
+func matcherRules(matchers []string, inbounds []string, outcome, ipOutcome target) []json.RawMessage {
+	domains, ips, processes := splitMatchers(matchers)
 	var rules []json.RawMessage
 	if len(domains) > 0 {
-		r := fieldRule{Domain: domains}
-		t.apply(&r)
+		r := fieldRule{InboundTag: inbounds, Domain: domains}
+		outcome.apply(&r)
 		rules = append(rules, r.raw())
 	}
 	if len(ips) > 0 {
-		r := fieldRule{IP: ips}
-		t.apply(&r)
+		r := fieldRule{InboundTag: inbounds, IP: ips}
+		ipOutcome.apply(&r)
 		rules = append(rules, r.raw())
 	}
 	if len(processes) > 0 {
-		r := fieldRule{Process: processes}
-		t.apply(&r)
+		r := fieldRule{InboundTag: inbounds, Process: processes}
+		outcome.apply(&r)
 		rules = append(rules, r.raw())
 	}
 	return rules
@@ -119,7 +123,7 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	needBlock := p.HasBlock() || p.DisableIPv6 || p.DisableUDP
 
 	if needDirect {
-		ensureDirectOutbound(p, cfg)
+		ensureOutbound(cfg, directTag, directOutbound(p, directTag))
 	}
 	if needBlock {
 		ensureOutbound(cfg, blockTag, xrayConf.OutboundDetourConfig{Protocol: "blackhole", Tag: blockTag})
@@ -151,51 +155,53 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	if hasProcessProxy(p) {
 		// Only those flows see these rules; the tiers below stay as they are
 		// for everyone else.
+		forceInbound := []string{ForceProxyTag}
 		for _, tier := range p.Tiers {
-			for _, raw := range matcherRules(tier.Block, block) {
-				var r fieldRule
-				_ = json.Unmarshal(raw, &r)
-				r.InboundTag = []string{ForceProxyTag}
-				rules = append(rules, r.raw())
-			}
+			rules = append(rules, matcherRules(tier.Block, forceInbound, block, block)...)
 		}
 		if p.LocalNetworks {
-			// A name-addressed flow stays off the LAN rule: the router may
-			// resolve it to a local address while the direct outbound dials
-			// another one.
-			named := fieldRule{InboundTag: []string{ForceProxyTag}, Domain: []string{anyDomain}}
+			// A name the router resolves into the local networks stays off the
+			// LAN rule: the direct outbound would resolve it again and could
+			// dial a public address.
+			named := fieldRule{InboundTag: forceInbound, Domain: []string{anyDomain}}
 			proxy.apply(&named)
 			rules = append(rules, named.raw())
-			lan := fieldRule{InboundTag: []string{ForceProxyTag}, IP: routing.LocalNetworkCIDRs}
+			lan := fieldRule{InboundTag: forceInbound, IP: routing.LocalNetworkCIDRs}
 			direct.apply(&lan)
 			rules = append(rules, lan.raw())
 		}
-		forceRule := fieldRule{InboundTag: []string{ForceProxyTag}}
+		forceRule := fieldRule{InboundTag: forceInbound}
 		proxy.apply(&forceRule)
 		rules = append(rules, forceRule.raw())
 	}
-	for _, tier := range p.Tiers {
-		rules = append(rules, matcherRules(tier.Block, block)...)
-		rules = append(rules, matcherRules(tier.Direct, direct)...)
-		rules = append(rules, matcherRules(tier.Proxy, proxy)...)
+	for i, tier := range p.Tiers {
+		rules = append(rules, matcherRules(tier.Block, nil, block, block)...)
+		directByIP := direct
+		if _, ips, _ := splitMatchers(tier.Direct); len(ips) > 0 {
+			directByIP = target{tag: tierDirectTag(i)}
+			ensureOutbound(cfg, directByIP.tag, tierDirectOutbound(p, directByIP.tag, ips))
+		}
+		rules = append(rules, matcherRules(tier.Direct, nil, direct, directByIP)...)
+		rules = append(rules, matcherRules(tier.Proxy, nil, proxy, proxy)...)
 	}
 
-	catchAll := fieldRule{InboundTag: []string{AppTrafficTag}}
+	appInbound := []string{AppTrafficTag}
+	modeOutcome := proxy
 	if p.ResolvedMode() == ModeDirectAll {
-		direct.apply(&catchAll)
-	} else {
-		proxy.apply(&catchAll)
+		modeOutcome = direct
 	}
-
 	if p.LocalNetworks {
 		// Only a flow addressed by IP goes direct on the LAN rule; a name takes
 		// the catch-all outcome it would reach anyway.
-		named := fieldRule{InboundTag: []string{AppTrafficTag}, Domain: []string{anyDomain}, OutboundTag: catchAll.OutboundTag, BalancerTag: catchAll.BalancerTag}
+		named := fieldRule{InboundTag: appInbound, Domain: []string{anyDomain}}
+		modeOutcome.apply(&named)
 		rules = append(rules, named.raw())
 		r := fieldRule{IP: routing.LocalNetworkCIDRs}
 		direct.apply(&r)
 		rules = append(rules, r.raw())
 	}
+	catchAll := fieldRule{InboundTag: appInbound}
+	modeOutcome.apply(&catchAll)
 	rules = append(rules, catchAll.raw())
 
 	if cfg.RouterConfig == nil {
@@ -235,10 +241,10 @@ func hasProcessProxy(p RoutingProfile) bool {
 	return false
 }
 
-func ensureDirectOutbound(p RoutingProfile, cfg *xrayConf.Config) {
+func directOutbound(p RoutingProfile, tag string) xrayConf.OutboundDetourConfig {
 	ob := xrayConf.OutboundDetourConfig{
 		Protocol: "freedom",
-		Tag:      directTag,
+		Tag:      tag,
 		StreamSetting: &xrayConf.StreamConfig{
 			SocketSettings: &xrayConf.SocketConfig{DomainStrategy: "UseIP"},
 		},
@@ -253,7 +259,36 @@ func ensureDirectOutbound(p RoutingProfile, cfg *xrayConf.Config) {
 	if p.DirectInterface != "" {
 		ob.StreamSetting.SocketSettings.Interface = p.DirectInterface
 	}
-	ensureOutbound(cfg, directTag, ob)
+	return ob
+}
+
+func tierDirectTag(tierIndex int) string {
+	return fmt.Sprintf("%s-%d", directTag, tierIndex)
+}
+
+type freedomFinalRule struct {
+	Action     string   `json:"action"`
+	IP         []string `json:"ip,omitempty"`
+	BlockDelay *int     `json:"blockDelay,omitempty"`
+}
+
+// tierDirectOutbound dials only an address ips hold: the router takes a name
+// when any of its addresses is in them, and the outbound resolves it again.
+// Its finalRules refuse a name ips cover in part, or a sniffed flow whose own
+// address they miss, here and at once; xray cannot move a flow to another
+// outbound once routing has chosen this one, so it is not tunnelled.
+func tierDirectOutbound(p RoutingProfile, tag string, ips []string) xrayConf.OutboundDetourConfig {
+	ob := directOutbound(p, tag)
+	noDelay := 0
+	settings, _ := json.Marshal(struct {
+		FinalRules []freedomFinalRule `json:"finalRules"`
+	}{[]freedomFinalRule{
+		{Action: "allow", IP: ips},
+		{Action: "block", BlockDelay: &noDelay},
+	}})
+	raw := json.RawMessage(settings)
+	ob.Settings = &raw
+	return ob
 }
 
 func ensureOutbound(cfg *xrayConf.Config, tag string, ob xrayConf.OutboundDetourConfig) {

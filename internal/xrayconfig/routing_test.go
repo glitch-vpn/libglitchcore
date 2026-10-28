@@ -317,8 +317,10 @@ func TestMatcherRules_Classification(t *testing.T) {
 
 	var domains, ips []string
 	for _, r := range rules {
-		if r.OutboundTag == directTag {
+		switch r.OutboundTag {
+		case directTag:
 			domains = append(domains, r.Domain...)
+		case tierDirectTag(0):
 			ips = append(ips, r.IP...)
 		}
 	}
@@ -352,9 +354,7 @@ func TestMatcherRules_Classification(t *testing.T) {
 }
 
 func TestDirectOutbound_ResolvesThroughSockopt(t *testing.T) {
-	cfg := &xrayConf.Config{}
-	ensureDirectOutbound(RoutingProfile{DirectInterface: "Ethernet"}, cfg)
-	ob := cfg.OutboundConfigs[0]
+	ob := directOutbound(RoutingProfile{DirectInterface: "Ethernet"}, directTag)
 	if ob.Settings != nil {
 		t.Fatalf("freedom settings = %s, want none: its domainStrategy is deprecated", *ob.Settings)
 	}

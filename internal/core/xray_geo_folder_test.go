@@ -34,7 +34,8 @@ func writeGeoIPFolder(t *testing.T, code string, cidr *geodata.CIDR) string {
 }
 
 // routeInXraySession runs the start path's geo steps over dir, builds xray's
-// router from a `direct geoip:XX` rule and returns the tag chosen for ip.
+// router from a `direct geoip:XX` rule and returns the tag chosen for ip; the
+// rule's own direct outbound is tagged "direct-0".
 func routeInXraySession(t *testing.T, dir, ip string) string {
 	t.Helper()
 	applyGeoAssetsDir(dir)
@@ -61,7 +62,7 @@ func routeInXraySession(t *testing.T, dir, ip string) string {
 	router := inst.GetFeature(xrouting.RouterType()).(xrouting.Router)
 	dest := xnet.TCPDestination(xnet.ParseAddress(ip), 443)
 	ctx := session.ContextWithOutbounds(context.Background(), []*session.Outbound{{Target: dest}})
-	ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: "probe-in"})
+	ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: xrayconfig.AppTrafficTag})
 	route, err := router.PickRoute(rsession.AsRoutingContext(ctx))
 	if err != nil {
 		return "(catch-all)"
@@ -77,16 +78,16 @@ func TestXrayGeoFolderChange_NextSessionReadsItsOwnFile(t *testing.T) {
 	first := writeGeoIPFolder(t, "XX", &geodata.CIDR{Ip: []byte{5, 0, 0, 0}, Prefix: 8})
 	second := writeGeoIPFolder(t, "XX", &geodata.CIDR{Ip: []byte{7, 0, 0, 0}, Prefix: 8})
 
-	if got := routeInXraySession(t, first, "5.1.1.1"); got != "direct" {
-		t.Fatalf("first folder, 5.1.1.1 routed %q, want direct", got)
+	if got := routeInXraySession(t, first, "5.1.1.1"); got != "direct-0" {
+		t.Fatalf("first folder, 5.1.1.1 routed %q, want direct-0", got)
 	}
 	// No collection between the sessions: the first session's matcher is
 	// still reachable from the cache unless the start path drops it.
-	if got := routeInXraySession(t, second, "5.1.1.1"); got == "direct" {
+	if got := routeInXraySession(t, second, "5.1.1.1"); got == "direct-0" {
 		t.Fatalf("second folder still matches the first folder's list for 5.1.1.1")
 	}
-	if got := routeInXraySession(t, second, "7.1.1.1"); got != "direct" {
-		t.Fatalf("second folder, 7.1.1.1 routed %q, want direct", got)
+	if got := routeInXraySession(t, second, "7.1.1.1"); got != "direct-0" {
+		t.Fatalf("second folder, 7.1.1.1 routed %q, want direct-0", got)
 	}
 }
 

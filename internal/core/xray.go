@@ -23,6 +23,7 @@ import (
 	xrayCore "github.com/xtls/xray-core/core"
 	xrayStats "github.com/xtls/xray-core/features/stats"
 	xrayConf "github.com/xtls/xray-core/infra/conf"
+	"github.com/xtls/xray-core/transport/internet"
 )
 
 type xrayEngine struct{}
@@ -112,12 +113,15 @@ var xrayGeoFolder string
 // a session would otherwise match a list an earlier folder's file gave. The
 // collector runs first so matchers of ended sessions are not rebuilt, then
 // xray's own Reload swaps in empty caches. A reload that fails ends the start:
-// continuing would route by the old lists.
+// continuing would route by the old lists. xray's system dialer holds the last
+// instance's outbounds after it closes, and with them the geoip lists of a
+// direct outbound's finalRules, so it lets go of them first.
 func dropXrayGeoMatchersOnFolderChange() error {
 	folder := os.Getenv(xrayAsset)
 	if folder == xrayGeoFolder {
 		return nil
 	}
+	internet.InitSystemDialer(nil, nil)
 	runtime.GC()
 	runtime.GC()
 	if err := geodata.IPReg.Reload(); err != nil {

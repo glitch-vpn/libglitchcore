@@ -61,6 +61,11 @@ set by the app process would not.
 * **A hosts entry opts its name out of fake-ip.** Static hosts are consulted
   before any nameserver, so the app gets the real address and domain-plane
   routing for that name depends on sniffing.
+* **A sniffed name decides the route; the dial keeps the address.** A client
+  whose SNI or Host does not match the address it dials meets the rules of the
+  name. A flow a `domain:` entry sends direct by its sniffed name dials the
+  flow's own address; one a `geoip:` or CIDR entry sends direct is refused
+  when the entry does not hold that address.
 * **Hosts values are filtered per entry.** An entry with several values keeps
   only IPs (an alias target is single-valued by definition), because mihomo
   fails the whole config on a value it cannot parse and xray drops the whole
@@ -74,6 +79,12 @@ match them — and in fake-ip mode those internal lookups are routed to the
 direct outbound whenever one exists. The browsing domain list then leaves the
 machine in the clear, which is what fake-ip otherwise prevents. Enable it only
 when IP-rule matching for domain traffic is worth that.
+
+A `geoip:` or CIDR `direct` entry sends a flow direct only to an address it
+holds. A name it covers only in part is refused, not tunnelled: xray picks the
+outbound before it picks the address, and cannot fall back from one outbound
+to another. A fully covered name goes direct. With IPv6 on, a name whose AAAA
+address an IPv4-only list does not hold counts as covered in part.
 
 ## Per-process rules are tier-blind on desktop
 
