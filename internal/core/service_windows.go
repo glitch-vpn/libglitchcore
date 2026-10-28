@@ -581,7 +581,13 @@ func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAcc
 		}
 
 		var resp pipeResponse
-		if !access.runAdmitted(*caller, func() { resp = dispatchCommand(cmd) }) {
+		if !access.runAdmitted(*caller, func() {
+			if turnsTrafficOn(cmd) && !access.mayShowTrafficLocked(*caller) {
+				resp = pipeResponse{OK: false, Error: trafficHiddenReply}
+				return
+			}
+			resp = dispatchCommand(cmd)
+		}) {
 			refuse(caller)
 			return
 		}
@@ -589,6 +595,24 @@ func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAcc
 			return
 		}
 	}
+}
+
+// turnsTrafficOn is true of a command that would show the tunnel's traffic:
+// the connection inspector turned on, or logging at any level.
+func turnsTrafficOn(cmd pipeCommand) bool {
+	switch strings.ToLower(strings.TrimSpace(cmd.Action)) {
+	case "set_conn_inspector":
+		var payload struct {
+			Enabled bool `json:"enabled"`
+		}
+		return json.Unmarshal(cmd.Payload, &payload) == nil && payload.Enabled
+	case "set_status_verbosity":
+		var payload struct {
+			Level int `json:"level"`
+		}
+		return json.Unmarshal(cmd.Payload, &payload) == nil && payload.Level >= 0
+	}
+	return false
 }
 
 // dispatchCommand runs under pipeAccess's read lock (runAdmitted), which a

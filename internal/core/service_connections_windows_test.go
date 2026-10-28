@@ -66,10 +66,15 @@ func startCommandPipe(t *testing.T, access *pipeAccess, connections *pipeConnect
 
 func (c *commandPipeClient) ping(t *testing.T) pipeResponse {
 	t.Helper()
+	return c.send(t, `{"action":"ping"}`)
+}
+
+func (c *commandPipeClient) send(t *testing.T, command string) pipeResponse {
+	t.Helper()
 	c.conn.SetDeadline(time.Now().Add(5 * time.Second))
 	// The service may refuse before it reads, and an in-memory pipe has no
-	// buffer to hold the ping meanwhile.
-	go fmt.Fprintln(c.conn, `{"action":"ping"}`)
+	// buffer to hold the command meanwhile.
+	go fmt.Fprintln(c.conn, command)
 	return c.reply(t)
 }
 
@@ -455,4 +460,75 @@ func TestEventPipeClosesAConnectionSilentPastTheFirstMessageTimeout(t *testing.T
 
 	client := startEventPipe(t, newServiceEventHub(), newPipeAccess(), newEventPipeConnections(), injectIdentities(t), pipeCaller{})
 	client.waitClosed(t)
+}
+
+func TestEventPipeRefusesConnectionsPastTheTotal(t *testing.T) {
+	servedUser := madeUpUserSID(t, "1001")
+	hub := newServiceEventHub()
+	access := servedAccess(t, servedUser)
+	connections := newPipeConnections(1, maxEventConnectionsPerCaller)
+	identities := injectIdentities(t)
+	first := startEventPipe(t, hub, access, connections, identities, pipeCaller{user: servedUser})
+	first.subscribe(t)
+	if !first.receives(t, hub) {
+		t.Fatal("the served user received no event")
+	}
+	startEventPipe(t, hub, access, connections, identities, pipeCaller{user: servedUser}).waitClosed(t)
+}
+
+func TestTrafficStaysHiddenFromTheServedUserWhileTheActiveUserCannotBeRead(t *testing.T) {
+	shortenActiveUserRetries(t)
+	activeUserReadGrace = time.Minute
+	servedUser := madeUpUserSID(t, "1001")
+	service := servedService(t, servedUser)
+	identities := injectIdentities(t)
+	showTraffic(t)
+
+	readable := make(chan struct{})
+	readActiveUser = func() (*windows.SID, error) {
+		select {
+		case <-readable:
+			return servedUser, nil
+		default:
+			return nil, windows.ERROR_ACCESS_DENIED
+		}
+	}
+	hidden := make(chan struct{})
+	refreshed := make(chan struct{})
+	go func() {
+		defer close(refreshed)
+		service.access.refresh(context.Background(), service.onServedUserChange, func() {
+			service.hideTraffic()
+			close(hidden)
+		})
+	}()
+	<-hidden
+
+	served := startCommandPipe(t, service.access, service.commandConnections, identities, pipeCaller{user: servedUser})
+	for _, command := range []string{
+		`{"action":"set_conn_inspector","payload":{"enabled":true}}`,
+		`{"action":"set_status_verbosity","payload":{"level":0}}`,
+	} {
+		if resp := served.send(t, command); resp.OK || resp.Error != trafficHiddenReply {
+			t.Fatalf("%s: got %+v, want the refusal while the active user cannot be read", command, resp)
+		}
+		served = startCommandPipe(t, service.access, service.commandConnections, identities, pipeCaller{user: servedUser})
+	}
+	if resp := served.send(t, `{"action":"set_conn_inspector","payload":{"enabled":false}}`); !resp.OK {
+		t.Fatalf("turning the inspector off was refused: %s", resp.Error)
+	}
+	administrator := startCommandPipe(t, service.access, service.commandConnections, identities, pipeCaller{user: madeUpUserSID(t, "500"), administrator: true})
+	if resp := administrator.send(t, `{"action":"set_conn_inspector","payload":{"enabled":true}}`); !resp.OK {
+		t.Fatalf("an administrator was refused: %s", resp.Error)
+	}
+	applyConnInspector(false)
+
+	close(readable)
+	<-refreshed
+	if resp := served.send(t, `{"action":"set_conn_inspector","payload":{"enabled":true}}`); !resp.OK {
+		t.Fatalf("the served user was still refused once the active user was read: %s", resp.Error)
+	}
+	if !connInspectEnabled.Load() {
+		t.Fatal("the inspector stayed off")
+	}
 }

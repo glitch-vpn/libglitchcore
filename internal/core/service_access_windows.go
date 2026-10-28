@@ -26,6 +26,7 @@ const pipeClientAccessMask windows.ACCESS_MASK = 0x12019b
 const (
 	accessDeniedReply       = "access denied"
 	tooManyConnectionsReply = "too many connections"
+	trafficHiddenReply      = "the active user cannot be read"
 )
 
 // servicePipeSDDL admits LocalSystem and the Administrators group in full and
@@ -54,6 +55,9 @@ type pipeAccess struct {
 	mu         sync.RWMutex
 	servedUser *windows.SID
 	changed    chan struct{} // closed when servedUser changes, then replaced
+	// From the first failed read of the active user until a read succeeds,
+	// only LocalSystem and elevated administrators may show the traffic.
+	trafficHidden bool
 }
 
 func newPipeAccess() *pipeAccess {
@@ -71,6 +75,10 @@ func (a *pipeAccess) current() (*windows.SID, <-chan struct{}) {
 func (a *pipeAccess) changeServedUser(user *windows.SID, onChange func()) (changed bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	return a.changeServedUserLocked(user, onChange)
+}
+
+func (a *pipeAccess) changeServedUserLocked(user *windows.SID, onChange func()) (changed bool) {
 	if sameSID(a.servedUser, user) {
 		return false
 	}
@@ -101,13 +109,17 @@ func (a *pipeAccess) refresh(ctx context.Context, onChange, onUnreadable func())
 	for {
 		user, err := readActiveUser()
 		if err == nil {
-			a.changeServedUser(user, onChange)
+			a.mu.Lock()
+			a.trafficHidden = false
+			a.changeServedUserLocked(user, onChange)
+			a.mu.Unlock()
 			return
 		}
 		if !hidden {
 			hidden = true
 			logfmt.Warnf("[service] cannot read the active user, keeping the one served: %v", err)
 			a.mu.Lock()
+			a.trafficHidden = true
 			onUnreadable()
 			a.mu.Unlock()
 		}
@@ -138,10 +150,18 @@ func (a *pipeAccess) admits(caller pipeCaller) bool {
 }
 
 func (a *pipeAccess) admitsLocked(caller pipeCaller) bool {
-	if caller.administrator || caller.user.IsWellKnown(windows.WinLocalSystemSid) {
+	if caller.privileged() {
 		return true
 	}
 	return a.servedUser != nil && caller.user.Equals(a.servedUser)
+}
+
+func (a *pipeAccess) mayShowTrafficLocked(caller pipeCaller) bool {
+	return !a.trafficHidden || caller.privileged()
+}
+
+func (c pipeCaller) privileged() bool {
+	return c.administrator || c.user.IsWellKnown(windows.WinLocalSystemSid)
 }
 
 // runAdmitted runs action only if caller is admitted, and holds off any change
