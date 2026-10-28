@@ -24,7 +24,11 @@ const (
 	probeSamples = 3
 )
 
+// Engine, when set, is the engine the caller pinned ("xray", "mihomo" or
+// "awg"): every link is measured on it alone, and a link it cannot carry is
+// reported unreachable, never on another engine. Empty keeps the per-link choice.
 type Request struct {
+	Engine      string   `json:"engine,omitempty"`
 	Links       []string `json:"links"`
 	ProbeURL    string   `json:"probeUrl"`
 	TimeoutMs   int      `json:"timeoutMs"`
@@ -83,6 +87,28 @@ func classify(link string) (engine string, m measurer) {
 	return "", nil
 }
 
+// classifyOn is classify for a pinned engine: the measurer of that engine if it
+// carries the link, else none. Never a fallback to another engine.
+func classifyOn(pinned, link string) (engine string, m measurer, ok bool) {
+	trimmed := strings.TrimSpace(link)
+	lower := strings.ToLower(trimmed)
+	for _, em := range measurers {
+		if em.engine == pinned {
+			if em.match(trimmed, lower) {
+				return em.engine, em.measure, true
+			}
+			return pinned, nil, false
+		}
+	}
+	// The awg engine carries awg links only, so the fallback engine's measurer
+	// is not offered one.
+	if fallback != nil && fallback.engine == pinned && !matchAwgLink(trimmed, lower) &&
+		fallback.match(trimmed, lower) {
+		return fallback.engine, fallback.measure, true
+	}
+	return pinned, nil, false
+}
+
 // Measure: results are index-aligned; a dead link sets Alive=false, doesn't fail the batch.
 func Measure(req Request) []Result {
 	probeURL := strings.TrimSpace(req.ProbeURL)
@@ -103,16 +129,28 @@ func Measure(req Request) []Result {
 	var wg sync.WaitGroup
 
 	for i, link := range req.Links {
-		engine, m := classify(link)
-		results[i] = Result{Index: i, Engine: engine}
-		if m == nil {
-			results[i].Error = "unsupported link scheme"
-			continue
+		var engine string
+		var m measurer
+		if pinned := strings.TrimSpace(req.Engine); pinned != "" {
+			engine, m, _ = classifyOn(pinned, link)
+			results[i] = Result{Index: i, Engine: engine}
+			if m == nil {
+				results[i].Error = "link not carried by the pinned engine"
+				continue
+			}
+		} else {
+			engine, m = classify(link)
+			results[i] = Result{Index: i, Engine: engine}
+			if m == nil {
+				results[i].Error = "unsupported link scheme"
+				continue
+			}
 		}
+		pinnedRun := strings.TrimSpace(req.Engine) != ""
 
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, link string, m measurer) {
+		go func(i int, link string, m measurer, pinnedRun bool) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
@@ -121,7 +159,7 @@ func Measure(req Request) []Result {
 
 			delay, err := m(ctx, link, probeURL)
 			var refused fallsBack
-			if trimmed := strings.TrimSpace(link); errors.As(err, &refused) && fallback != nil &&
+			if trimmed := strings.TrimSpace(link); errors.As(err, &refused) && !pinnedRun && fallback != nil &&
 				fallback.match(trimmed, strings.ToLower(trimmed)) {
 				results[i].Engine = fallback.engine
 				delay, err = fallback.measure(ctx, link, probeURL)
@@ -133,7 +171,7 @@ func Measure(req Request) []Result {
 			}
 			results[i].Alive = true
 			results[i].DelayMs = delay.Milliseconds()
-		}(i, link, m)
+		}(i, link, m, pinnedRun)
 	}
 
 	wg.Wait()
