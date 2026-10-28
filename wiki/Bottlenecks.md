@@ -84,8 +84,9 @@ when IP-rule matching for domain traffic is worth that.
 resolves it at the first IP rule it meets. Under either of them:
 
 * A `geoip:` or CIDR `block` or `proxy` entry takes a name when any of its
-  addresses is in it. A `block` entry does so on flows a `process:` proxy
-  entry sends through the VPN too, so their names are looked up as well.
+  addresses is in it. For a flow a `process:` proxy entry sends through the
+  VPN, a `block` entry does so only under `ipondemand`: under `ipifnonmatch`
+  that flow's name is never looked up.
 * A `geoip:` or CIDR `direct` entry sends a flow direct only to an address it
   holds. A name it covers only in part is refused, not tunnelled: xray picks
   the outbound before it picks the address, and cannot fall back from one

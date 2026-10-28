@@ -364,8 +364,8 @@ func TestDirectOutbound_ResolvesThroughSockopt(t *testing.T) {
 	}
 }
 
-// Under IPIfNonMatch a catch-all waits for a name to resolve only where an IP
-// rule could still take it; per-app VPN flows meet only the tiers' blocks.
+// Under IPIfNonMatch the app's catch-all waits for a name to resolve only where
+// an IP rule could still take it; a per-app VPN flow's never does.
 func TestApply_IPIfNonMatchResolvesOnlyForIPRules(t *testing.T) {
 	catchAllIPs := func(p RoutingProfile) (app, force []string) {
 		_, rules := applyTo(t, p, "proxy", false)
@@ -383,20 +383,20 @@ func TestApply_IPIfNonMatchResolvesOnlyForIPRules(t *testing.T) {
 		return app, force
 	}
 	cases := []struct {
-		name                string
-		tier                routing.Tier
-		strategy            string
-		wantApp, wantPerApp bool
+		name     string
+		tier     routing.Tier
+		strategy string
+		wantApp  bool
 	}{
-		{"domain entries only", routing.Tier{Direct: []string{"domain:ru"}, Proxy: []string{"process:app.exe"}}, "IPIfNonMatch", false, false},
-		{"a direct geoip entry", routing.Tier{Direct: []string{"geoip:ru"}, Proxy: []string{"process:app.exe"}}, "ipifnonmatch", true, false},
-		{"a block CIDR entry", routing.Tier{Block: []string{"192.0.2.0/24"}, Proxy: []string{"process:app.exe"}}, "IPIfNonMatch", true, true},
-		{"IPOnDemand", routing.Tier{Block: []string{"192.0.2.0/24"}, Proxy: []string{"process:app.exe"}}, "IPOnDemand", false, false},
+		{"domain entries only", routing.Tier{Direct: []string{"domain:ru"}, Proxy: []string{"process:app.exe"}}, "IPIfNonMatch", false},
+		{"a direct geoip entry", routing.Tier{Direct: []string{"geoip:ru"}, Proxy: []string{"process:app.exe"}}, "ipifnonmatch", true},
+		{"a block CIDR entry", routing.Tier{Block: []string{"192.0.2.0/24"}, Proxy: []string{"process:app.exe"}}, "IPIfNonMatch", true},
+		{"IPOnDemand", routing.Tier{Block: []string{"192.0.2.0/24"}, Proxy: []string{"process:app.exe"}}, "IPOnDemand", false},
 	}
 	for _, c := range cases {
 		app, force := catchAllIPs(RoutingProfile{Tiers: []routing.Tier{c.tier}, DomainStrategy: c.strategy})
-		if (len(app) > 0) != c.wantApp || (len(force) > 0) != c.wantPerApp {
-			t.Errorf("%s: catch-all IPs app %v, per-app %v; want app %v, per-app %v", c.name, app, force, c.wantApp, c.wantPerApp)
+		if (len(app) > 0) != c.wantApp || len(force) > 0 {
+			t.Errorf("%s: catch-all IPs app %v, per-app %v; want app %v, per-app none", c.name, app, force, c.wantApp)
 		}
 	}
 }

@@ -122,12 +122,6 @@ const anyDomain = "regexp:."
 // anyIP matches every flow addressed by IP, and a name once xray resolves it.
 var anyIP = []string{"0.0.0.0/0", "::/0"}
 
-// tierInbounds are every inbound that reaches the tiers: the exit echo and the
-// per-app VPN flows are settled ahead of them. Naming them keeps a per-app VPN
-// flow addressed by a name off the tiers on the first IPIfNonMatch pass, which
-// it must leave unmatched to be resolved.
-var tierInbounds = []string{AppTrafficTag, dnsInternalTag}
-
 // applyRouting is a free function because RoutingProfile aliases a type from
 // another package; existing balancers on cfg.RouterConfig are preserved.
 func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targetIsBalancer bool) {
@@ -145,20 +139,17 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		ensureOutbound(cfg, blockTag, xrayConf.OutboundDetourConfig{Protocol: "blackhole", Tag: blockTag})
 	}
 
-	// IPIfNonMatch resolves a name only when no rule matched it, so a
-	// catch-all, and the rule keeping names off the local networks, must not
-	// match a name before it resolves. Each waits only where an IP rule could
+	// IPIfNonMatch resolves a name only when no rule matched it, so the app's
+	// catch-all, and its rule keeping names off the local networks, must not
+	// match a name before it resolves. They wait only where an IP rule could
 	// still take the name, since the lookup is a DNS query of its own, sent in
 	// the clear under fake-ip. A name that does not resolve matches no rule and
-	// takes the first outbound, a proxy.
-	var appResolveIP, forceResolveIP []string
-	if strategy, _ := NormalizeDomainStrategy(p.DomainStrategy); strategy == strategyIPIfNonMatch {
-		if tiersHoldIPs(p.Tiers, func(t routing.Tier) [][]string { return [][]string{t.Block, t.Direct, t.Proxy} }) {
-			appResolveIP = anyIP
-		}
-		if tiersHoldIPs(p.Tiers, func(t routing.Tier) [][]string { return [][]string{t.Block} }) {
-			forceResolveIP = anyIP
-		}
+	// takes the first outbound, a proxy. A per-app VPN flow's catch-all
+	// matches a name on the first pass, so under IPIfNonMatch its names are
+	// never looked up and its blocks by address take a flow addressed by IP.
+	var appResolveIP []string
+	if strategy, _ := NormalizeDomainStrategy(p.DomainStrategy); strategy == strategyIPIfNonMatch && tiersHoldIPs(p.Tiers) {
+		appResolveIP = anyIP
 	}
 
 	// Priority (first match wins): protocol kill-switches -> exit echo ->
@@ -195,26 +186,26 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 			// A name the router resolves into the local networks stays off the
 			// LAN rule: the direct outbound would resolve it again and could
 			// dial a public address.
-			named := fieldRule{InboundTag: forceInbound, Domain: []string{anyDomain}, IP: localNetworksOnceResolved(forceResolveIP)}
+			named := fieldRule{InboundTag: forceInbound, Domain: []string{anyDomain}}
 			proxy.apply(&named)
 			rules = append(rules, named.raw())
 			lan := fieldRule{InboundTag: forceInbound, IP: routing.LocalNetworkCIDRs}
 			direct.apply(&lan)
 			rules = append(rules, lan.raw())
 		}
-		forceRule := fieldRule{InboundTag: forceInbound, IP: forceResolveIP}
+		forceRule := fieldRule{InboundTag: forceInbound}
 		proxy.apply(&forceRule)
 		rules = append(rules, forceRule.raw())
 	}
 	for i, tier := range p.Tiers {
-		rules = append(rules, matcherRules(tier.Block, tierInbounds, block, block)...)
+		rules = append(rules, matcherRules(tier.Block, nil, block, block)...)
 		directByIP := direct
 		if _, ips, _ := splitMatchers(tier.Direct); len(ips) > 0 {
 			directByIP = target{tag: tierDirectTag(i)}
 			ensureOutbound(cfg, directByIP.tag, tierDirectOutbound(p, directByIP.tag, ips))
 		}
-		rules = append(rules, matcherRules(tier.Direct, tierInbounds, direct, directByIP)...)
-		rules = append(rules, matcherRules(tier.Proxy, tierInbounds, proxy, proxy)...)
+		rules = append(rules, matcherRules(tier.Direct, nil, direct, directByIP)...)
+		rules = append(rules, matcherRules(tier.Proxy, nil, proxy, proxy)...)
 	}
 
 	appInbound := []string{AppTrafficTag}
@@ -256,9 +247,9 @@ func localNetworksOnceResolved(resolveIP []string) []string {
 	return routing.LocalNetworkCIDRs
 }
 
-func tiersHoldIPs(tiers []routing.Tier, lists func(routing.Tier) [][]string) bool {
+func tiersHoldIPs(tiers []routing.Tier) bool {
 	for _, tier := range tiers {
-		for _, list := range lists(tier) {
+		for _, list := range [][]string{tier.Block, tier.Direct, tier.Proxy} {
 			if _, ips, _ := splitMatchers(list); len(ips) > 0 {
 				return true
 			}

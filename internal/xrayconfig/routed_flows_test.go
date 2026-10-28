@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	D "github.com/miekg/dns"
 	"github.com/xtls/xray-core/common/geodata"
 	xnet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
@@ -84,9 +85,14 @@ type routedFlow struct {
 	want    string
 }
 
-// startRoutedInstance runs the built config in a started xray instance whose proxy
-// outbound dials proxyAddress and whose DNS answers hosts.
-func startRoutedInstance(t *testing.T, prof routing.Profile, proxyAddress string, hosts map[string][]string) *xrayCore.Instance {
+// fakeIPHosts is fake-ip DNS whose own lookups answer from hosts alone.
+func fakeIPHosts(hosts map[string][]string) dnsconfig.Config {
+	return dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}, Hosts: hosts}
+}
+
+// startRoutedInstance runs the built config in a started xray instance whose
+// proxy outbound dials proxyAddress.
+func startRoutedInstance(t *testing.T, prof routing.Profile, proxyAddress string, dns dnsconfig.Config) *xrayCore.Instance {
 	t.Helper()
 	if err := prof.Validate(); err != nil {
 		t.Fatal(err)
@@ -95,7 +101,7 @@ func startRoutedInstance(t *testing.T, prof routing.Profile, proxyAddress string
 	if err != nil {
 		t.Fatal(err)
 	}
-	ApplyDNS(res.Config, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}, Hosts: hosts}, prof)
+	ApplyDNS(res.Config, dns, prof)
 	built, err := res.Config.Build()
 	if err != nil {
 		t.Fatal(err)
@@ -114,10 +120,15 @@ func startRoutedInstance(t *testing.T, prof routing.Profile, proxyAddress string
 // routeFlows runs each flow through xray's own router on the built config.
 func routeFlows(t *testing.T, prof routing.Profile, flows []routedFlow) {
 	t.Helper()
-	inst := startRoutedInstance(t, prof, "192.0.2.1:443", map[string][]string{
+	inst := startRoutedInstance(t, prof, "192.0.2.1:443", fakeIPHosts(map[string][]string{
 		"mixed.test": {"10.255.255.1", "203.0.113.7"},
 		"cn.test":    {"203.0.113.7"},
-	})
+	}))
+	pickRoutes(t, inst, flows)
+}
+
+func pickRoutes(t *testing.T, inst *xrayCore.Instance, flows []routedFlow) {
+	t.Helper()
 	router := inst.GetFeature(xrouting.RouterType()).(xrouting.Router)
 	for _, f := range flows {
 		dest := xnet.Destination{Network: f.network, Address: xnet.ParseAddress(f.address), Port: xnet.Port(f.port)}
@@ -201,8 +212,10 @@ func TestApply_NamedFlowNeverGoesDirectOnLocalNetworks(t *testing.T) {
 }
 
 // Under the strategies that resolve, a tier's geoip block applies to a name
-// that resolves into it, on normal and per-app flows alike.
+// that resolves into it. Under IPIfNonMatch a per-app VPN flow's name is never
+// resolved, so the block takes it by address only.
 func TestApply_IPBlockAppliesToNames(t *testing.T) {
+	perAppName := map[string]string{"IPIfNonMatch": OutboundTag, "IPOnDemand": blockTag}
 	for _, strategy := range []string{"IPIfNonMatch", "IPOnDemand"} {
 		t.Run(strategy, func(t *testing.T) {
 			useGeoFiles(t)
@@ -215,11 +228,71 @@ func TestApply_IPBlockAppliesToNames(t *testing.T) {
 			tcp := xnet.Network_TCP
 			routeFlows(t, prof, []routedFlow{
 				{"normal name in the block", AppTrafficTag, tcp, "cn.test", 443, blockTag},
-				{"force name in the block", ForceProxyTag, tcp, "cn.test", 443, blockTag},
+				{"force name in the block", ForceProxyTag, tcp, "cn.test", 443, perAppName[strategy]},
+				{"force address in the block", ForceProxyTag, tcp, "203.0.113.7", 443, blockTag},
 				{"normal address outside the block", AppTrafficTag, tcp, "198.51.100.7", 443, OutboundTag},
 				{"force address outside the block", ForceProxyTag, tcp, "198.51.100.7", 443, OutboundTag},
 			})
 		})
+	}
+}
+
+// countDNSQueries answers every A query with 198.51.100.9 and counts the queries.
+func countDNSQueries(t *testing.T) (address string, queries *atomic.Int32) {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	queries = new(atomic.Int32)
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			queries.Add(1)
+			var query D.Msg
+			if query.Unpack(buf[:n]) != nil {
+				continue
+			}
+			answer := new(D.Msg)
+			answer.SetReply(&query)
+			if len(query.Question) == 1 && query.Question[0].Qtype == D.TypeA {
+				answer.Answer = []D.RR{&D.A{
+					Hdr: D.RR_Header{Name: query.Question[0].Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60},
+					A:   net.ParseIP("198.51.100.9").To4(),
+				}}
+			}
+			if packed, err := answer.Pack(); err == nil {
+				_, _ = conn.WriteTo(packed, from)
+			}
+		}
+	}()
+	return conn.LocalAddr().String(), queries
+}
+
+// Under IPIfNonMatch a per-app VPN flow to a name no rule matches goes to the
+// proxy without a lookup, while a normal flow's name is resolved.
+func TestApply_PerAppNamesAreNotLookedUp(t *testing.T) {
+	resolver, queries := countDNSQueries(t)
+	prof := routing.Profile{
+		Mode:           routing.ModeProxyAll,
+		Tiers:          []routing.Tier{{Block: []string{"192.0.2.0/24"}, Proxy: []string{"process:app.exe"}}},
+		LocalNetworks:  true,
+		DomainStrategy: "IPIfNonMatch",
+	}
+	inst := startRoutedInstance(t, prof, "192.0.2.1:443", dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{resolver}})
+	tcp := xnet.Network_TCP
+	pickRoutes(t, inst, []routedFlow{{"force unmatched name", ForceProxyTag, tcp, "unmatched.test", 443, OutboundTag}})
+	if n := queries.Load(); n != 0 {
+		t.Fatalf("a per-app VPN flow's name was looked up %d times", n)
+	}
+	pickRoutes(t, inst, []routedFlow{{"normal unmatched name", AppTrafficTag, tcp, "unmatched.test", 443, OutboundTag}})
+	if queries.Load() == 0 {
+		t.Fatal("a normal flow's name was not looked up, so the resolver is not reached")
 	}
 }
 
@@ -322,10 +395,10 @@ func TestApply_TierDirectByIPDialsOnlyItsAddresses(t *testing.T) {
 				}},
 				DomainStrategy: strategy,
 			}
-			inst := startRoutedInstance(t, prof, net.JoinHostPort(outside, strconv.Itoa(proxyDials.port)), map[string][]string{
+			inst := startRoutedInstance(t, prof, net.JoinHostPort(outside, strconv.Itoa(proxyDials.port)), fakeIPHosts(map[string][]string{
 				"covered.test": {covered},
 				"part.test":    {covered, outside},
-			})
+			}))
 			for _, f := range flows {
 				for _, side := range []struct {
 					inbound string
