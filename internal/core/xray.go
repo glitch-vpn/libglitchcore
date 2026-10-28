@@ -8,6 +8,7 @@ import (
 	"log"
 	"net"
 	"os"
+	"runtime"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -17,6 +18,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 	xrayNet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/geodata"
 	"github.com/xtls/xray-core/common/session"
 	xrayCore "github.com/xtls/xray-core/core"
 	xrayStats "github.com/xtls/xray-core/features/stats"
@@ -100,6 +102,34 @@ func (x *CoreController) HandleXrayIsRunning() int32 {
 	return glitchCoreResultError
 }
 
+// xrayGeoFolder is the geo folder the process-wide matcher caches of xray were
+// last filled from. Guarded by coreMutex.
+var xrayGeoFolder string
+
+// dropXrayGeoMatchersOnFolderChange makes a session on a new geo folder read
+// that folder's files. xray caches built matchers per process, keyed by list
+// code without the folder, and drops one only when the collector frees it, so
+// a session would otherwise match a list an earlier folder's file gave. The
+// collector runs first so matchers of ended sessions are not rebuilt, then
+// xray's own Reload swaps in empty caches. A reload that fails ends the start:
+// continuing would route by the old lists.
+func dropXrayGeoMatchersOnFolderChange() error {
+	folder := os.Getenv(xrayAsset)
+	if folder == xrayGeoFolder {
+		return nil
+	}
+	runtime.GC()
+	runtime.GC()
+	if err := geodata.IPReg.Reload(); err != nil {
+		return fmt.Errorf("[Xray] reset geoip lists for %q: %w", folder, err)
+	}
+	if err := geodata.DomainReg.Reload(); err != nil {
+		return fmt.Errorf("[Xray] reset geosite lists for %q: %w", folder, err)
+	}
+	xrayGeoFolder = folder
+	return nil
+}
+
 func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer string, logLevel int, o engineOpts, mark int64) (err error) {
 	engineStartGate("xray", mark)
 	x.coreMutex.Lock()
@@ -116,6 +146,9 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 	// Before cfg.Build(): xray resolves geoip.dat/geosite.dat lazily from the
 	// env during the build.
 	applyGeoAssetsDir(o.geoAssetsDir)
+	if err := dropXrayGeoMatchersOnFolderChange(); err != nil {
+		return err
+	}
 
 	// Master switch off (default) forces xray + tun2socks silent regardless of
 	// the connect logLevel.
