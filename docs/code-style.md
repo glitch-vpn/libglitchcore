@@ -288,6 +288,9 @@ functions carry nothing.
   `serviceXxx()` wrapper in `ipc_windows_client.go`, no-op stub in
   `ipc_stub.go`.
 - Events need nothing: every `emitStatus` pair traverses the pipe as-is.
+- A client reaches the service only through `dialService`, which dials at
+  identification level (the service reads the caller's token from it) and
+  refuses a pipe that LocalSystem or the Administrators group does not own.
 - The command payload is a flat JSON object with snake_case action names
   (`replay_session`, `listen_stats`) and explicit field names — no positional
   data.

@@ -7,10 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"sync"
 	"time"
 
-	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
@@ -22,6 +23,8 @@ const (
 
 var (
 	serviceIPCOnce sync.Once
+
+	errServicePipeNotOwned = errors.New("the pipe does not belong to the service")
 )
 
 type serviceResponse struct {
@@ -46,7 +49,7 @@ func ensureServiceIPC() {
 func serviceEventLoop() {
 	retryDelay := time.Second
 	for {
-		conn, err := winio.DialPipe(serviceEventPipe, nil)
+		conn, err := dialService(serviceEventPipe, 2*time.Second)
 		if err != nil {
 			logfmt.Warnf("[IPC] dial event pipe failed: %v", err)
 			time.Sleep(retryDelay)
@@ -73,9 +76,43 @@ func serviceEventLoop() {
 	}
 }
 
+// dialService opens one of the service's pipes only if it belongs to
+// LocalSystem or the Administrators group: any account can create a pipe under
+// a name that is free, as these are while the service is stopped or reopening
+// them.
+func dialService(pipeName string, timeout time.Duration) (net.Conn, error) {
+	conn, err := dialPipeAtIdentification(pipeName, timeout)
+	if err != nil {
+		return nil, err
+	}
+	if err := verifyServicePipeOwner(conn); err != nil {
+		conn.Close()
+		return nil, err
+	}
+	return conn, nil
+}
+
+func verifyServicePipeOwner(conn net.Conn) error {
+	pipe, ok := conn.(interface{ Fd() uintptr })
+	if !ok {
+		return errors.New("not a named pipe")
+	}
+	descriptor, err := windows.GetSecurityInfo(windows.Handle(pipe.Fd()), windows.SE_KERNEL_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		return fmt.Errorf("read the pipe owner: %w", err)
+	}
+	owner, _, err := descriptor.Owner()
+	if err != nil {
+		return fmt.Errorf("read the pipe owner: %w", err)
+	}
+	if owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
+		return nil
+	}
+	return fmt.Errorf("%w: its owner is %s", errServicePipeNotOwned, owner)
+}
+
 func callService(action string, payload map[string]any) (serviceResponse, error) {
-	timeout := 5 * time.Second
-	conn, err := winio.DialPipe(serviceCommandPipe, &timeout)
+	conn, err := dialService(serviceCommandPipe, 5*time.Second)
 	if err != nil {
 		return serviceResponse{}, fmt.Errorf("dial command pipe: %w", err)
 	}
