@@ -7,11 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	xrayAppLog "github.com/xtls/xray-core/app/log"
 	xrayNet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/serial"
 	xrayCore "github.com/xtls/xray-core/core"
 
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
@@ -52,6 +55,11 @@ func measureXray(ctx context.Context, link, probeURL string) (time.Duration, err
 	if err != nil {
 		return 0, fmt.Errorf("build core config: %w", err)
 	}
+	// An instance registers its log app's handler with xray's log package and
+	// leaves it there after it closes, which would take the running session's
+	// lines with it.
+	logApp := string((&xrayAppLog.Config{}).ProtoReflect().Descriptor().FullName())
+	built.App = slices.DeleteFunc(built.App, func(app *serial.TypedMessage) bool { return app.Type == logApp })
 	inst, err := xrayCore.New(built)
 	if err != nil {
 		return 0, fmt.Errorf("new instance: %w", err)

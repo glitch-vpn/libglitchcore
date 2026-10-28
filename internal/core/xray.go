@@ -372,6 +372,7 @@ func (x *CoreController) xrayRollback() {
 		_ = x.xrayCoreInstance.Close()
 		x.xrayCoreInstance = nil
 	}
+	registerCoreLogHandler()
 }
 
 func (x *CoreController) xrayStop(stopGen int64) error {
@@ -400,6 +401,7 @@ func (x *CoreController) xrayStopLocked() {
 		x.xrayCoreInstance = nil
 		x.xraySession.running.Store(false)
 		x.xrayTraffic.Store(nil)
+		registerCoreLogHandler()
 	}
 
 	log.Println("[Xray] Core stopped")

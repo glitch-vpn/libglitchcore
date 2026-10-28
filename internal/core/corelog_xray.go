@@ -12,7 +12,13 @@ import (
 	_ "github.com/xtls/xray-core/main/distro/all" // registers all xray protocols/transports
 )
 
+// Before the first xray instance exists, xray logs through a default handler
+// that writes raw stdout whatever the verbosity: the geodata reload and the
+// config build run then, and again after an instance closes, which leaves
+// its own handler registered. The core's handler is registered at
+// initialization and after each instance.
 func registerCoreLogHandler() {
+	xrayCommonLog.RegisterHandler(xrayLogHandler{})
 	if err := xrayAppLog.RegisterHandlerCreator(
 		xrayAppLog.LogType_Console,
 		func(xrayAppLog.LogType, xrayAppLog.HandlerCreatorOptions) (xrayCommonLog.Handler, error) {
@@ -29,11 +35,20 @@ func registerCoreLogHandler() {
 // unmasked access record inside.
 type xrayLogHandler struct{}
 
+// What MaskAddress "half" keeps of an address; a line xray writes outside an
+// instance, with no config to say, is masked the same way as one inside.
+const (
+	halfMaskIPv4 = 16
+	halfMaskIPv6 = 32
+)
+
 func (xrayLogHandler) Handle(msg xrayCommonLog.Message) {
-	inner := msg
-	if masked, ok := msg.(*xrayAppLog.MaskedMsgWrapper); ok {
-		inner = masked.Message
+	masked, ok := msg.(*xrayAppLog.MaskedMsgWrapper)
+	if !ok {
+		masked = &xrayAppLog.MaskedMsgWrapper{Message: msg, Mask4: halfMaskIPv4, Mask6: halfMaskIPv6}
+		msg = masked
 	}
+	inner := masked.Message
 	switch m := inner.(type) {
 	case *xrayCommonLog.AccessMessage:
 		handleXrayAccess(m)
