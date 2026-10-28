@@ -61,11 +61,11 @@ set by the app process would not.
 * **A hosts entry opts its name out of fake-ip.** Static hosts are consulted
   before any nameserver, so the app gets the real address and domain-plane
   routing for that name depends on sniffing.
-* **A sniffed name decides the route; the dial keeps the address.** A client
-  whose SNI or Host does not match the address it dials meets the rules of the
-  name. A flow a `domain:` entry sends direct by its sniffed name dials the
-  flow's own address; one a `geoip:` or CIDR entry sends direct is refused
-  when the entry does not hold that address.
+* **A sniffed name decides the route, not the address dialed.** A client
+  whose SNI or Host names something other than the address it dials meets the
+  rules of that name, so a `domain:` direct entry sends whatever address it
+  dials direct. In `proxy-all` mode a `geoip:` or CIDR direct entry refuses an
+  address it does not hold.
 * **Hosts values are filtered per entry.** An entry with several values keeps
   only IPs (an alias target is single-valued by definition), because mihomo
   fails the whole config on a value it cannot parse and xray drops the whole
@@ -87,12 +87,13 @@ resolves it at the first IP rule it meets. Under either of them:
   addresses is in it. For a flow a `process:` proxy entry sends through the
   VPN, a `block` entry does so only under `ipondemand`: under `ipifnonmatch`
   that flow's name is never looked up.
-* A `geoip:` or CIDR `direct` entry sends a flow direct only to an address it
-  holds. A name it covers only in part is refused, not tunnelled: xray picks
-  the outbound before it picks the address, and cannot fall back from one
-  outbound to another. A fully covered name goes direct. With IPv6 on, a name
-  whose AAAA address an IPv4-only list does not hold counts as covered in
-  part.
+* In `proxy-all` mode a `geoip:` or CIDR `direct` entry sends a flow direct
+  only to an address it holds. A name it covers only in part is refused, not
+  tunnelled: xray picks the outbound before it picks the address, and cannot
+  fall back from one outbound to another. A fully covered name goes direct.
+  With IPv6 on, a name whose AAAA address an IPv4-only list does not hold
+  counts as covered in part. In `direct-all` mode such a name goes direct, as
+  an unlisted one does.
 * Under `ipifnonmatch`, a name xray cannot resolve matches no rule and goes to
   the first proxy server, whatever the mode. A profile with no `geoip:` or
   CIDR entry resolves nothing.

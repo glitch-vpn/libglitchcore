@@ -168,7 +168,7 @@ func TestApply_ForceProxyRoutesByBlockThenProxy(t *testing.T) {
 		{"force udp kill-switch", f, udp, "8.8.8.8", 443, blockTag},
 		{"force v6 kill-switch", f, tcp, "2001:db8::1", 443, blockTag},
 		{"normal keyword block", app, tcp, "xkw(1)y.org", 443, blockTag},
-		{"normal direct geoip wins over cn block", app, tcp, "203.0.113.9", 443, tierDirectTag(0)},
+		{"normal direct geoip wins over cn block", app, tcp, "203.0.113.9", 443, directTag},
 		{"normal cidr block", app, tcp, "192.0.2.4", 443, blockTag},
 		{"normal direct domain", app, tcp, "www.example.com", 443, directTag},
 		{"normal local network", app, tcp, "192.168.1.1", 80, directTag},
@@ -427,6 +427,43 @@ func TestApply_TierDirectByIPDialsOnlyItsAddresses(t *testing.T) {
 						t.Errorf("%s as %s: dials landed %v, want %v", f.name, side.inbound, got, want)
 					}
 				}
+			}
+		})
+	}
+}
+
+// A dual-stack name an IPv4-only direct list covers in part is refused in
+// proxy-all mode and goes direct in direct-all, where unlisted names do too.
+func TestApply_PartlyCoveredNameByMode(t *testing.T) {
+	const dials = 16
+	for _, mode := range []string{routing.ModeProxyAll, routing.ModeDirectAll} {
+		t.Run(mode, func(t *testing.T) {
+			proxyDials := countDials(t, "127.0.0.1", 0)
+			v4Dials := countDials(t, "127.0.0.2", 0)
+			v6Dials := countDials(t, "::1", v4Dials.port)
+			prof := routing.Profile{
+				Mode:           mode,
+				Tiers:          []routing.Tier{{Direct: []string{"127.0.0.2/32"}}},
+				DomainStrategy: "IPOnDemand",
+			}
+			inst := startRoutedInstance(t, prof, net.JoinHostPort("127.0.0.1", strconv.Itoa(proxyDials.port)),
+				fakeIPHosts(map[string][]string{"dual.test": {"127.0.0.2", "::1"}}))
+			var wg sync.WaitGroup
+			for range dials {
+				wg.Add(1)
+				go func() {
+					defer wg.Done()
+					dialThrough(t, inst, AppTrafficTag, "dual.test", v4Dials.port, "")
+				}()
+			}
+			wg.Wait()
+			direct, proxied := v4Dials.hits.Load()+v6Dials.hits.Load(), proxyDials.hits.Load()
+			wantDirect := int32(0)
+			if mode == routing.ModeDirectAll {
+				wantDirect = dials
+			}
+			if direct != wantDirect || proxied != 0 {
+				t.Errorf("direct dials %d, proxied %d; want direct %d, proxied 0", direct, proxied, wantDirect)
 			}
 		})
 	}

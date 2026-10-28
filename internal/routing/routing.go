@@ -70,8 +70,9 @@ type Profile struct {
 	Tiers []Tier
 	// DomainStrategy feeds xray's router: AsIs ("", the default) never
 	// resolves a name for routing, IPIfNonMatch resolves one no domain rule
-	// matched, IPOnDemand one at its first IP rule. A resolved name goes
-	// direct on a geoip or CIDR entry only to an address the entry holds.
+	// matched, IPOnDemand one at its first IP rule. In proxy-all mode a
+	// resolved name goes direct on a geoip or CIDR entry only to an address
+	// the entry holds.
 	// mihomo has no equivalent knob and ignores it.
 	DomainStrategy    string
 	LocalNetworks     bool

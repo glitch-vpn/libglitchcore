@@ -199,8 +199,10 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	}
 	for i, tier := range p.Tiers {
 		rules = append(rules, matcherRules(tier.Block, nil, block, block)...)
+		// In direct-all the catch-all sends a name direct anyway, so the IP
+		// entries keep the plain direct outbound there.
 		directByIP := direct
-		if _, ips, _ := splitMatchers(tier.Direct); len(ips) > 0 {
+		if _, ips, _ := splitMatchers(tier.Direct); len(ips) > 0 && p.ResolvedMode() == ModeProxyAll {
 			directByIP = target{tag: tierDirectTag(i)}
 			ensureOutbound(cfg, directByIP.tag, tierDirectOutbound(p, directByIP.tag, ips))
 		}
