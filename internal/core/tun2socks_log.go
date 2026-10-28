@@ -22,9 +22,10 @@ func capTun2socksLogLevel(level string) string {
 }
 
 // useTun2socksSink replaces the stderr logger tun2socks builds for itself on
-// every engine start. Lines it writes before the swap stay on its own logger.
-// It runs right after engine.Start: the swap must follow its own, and the
-// logger is tun2socks's to guard.
+// every engine start. Lines it writes before the swap, the [STACK] one naming
+// the proxy URL among them, stay on its own logger: hence capTun2socksLogLevel.
+// It runs right after engine.Start, whose own swap it must follow; tun2socks
+// guards the swap against the stack's goroutines reading the logger.
 func useTun2socksSink(level string) {
 	parsed, err := tun2socksLog.ParseLevel(level)
 	if err != nil || parsed == tun2socksLog.SilentLevel {
