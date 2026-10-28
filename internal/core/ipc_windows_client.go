@@ -22,8 +22,9 @@ import (
 var (
 	serviceIPCOnce sync.Once
 
-	errServicePipeNotOwned      = errors.New("the pipe does not belong to the service")
+	errNotTheServicePipe        = errors.New("the pipe is not the service's")
 	errServicePipesNotPublished = errors.New("the service has published no pipes; it is not running")
+	errServiceNotRunning        = errors.New("the service is not running")
 )
 
 type serviceResponse struct {
@@ -143,7 +144,7 @@ func verifyServicePipeOwner(conn net.Conn) error {
 	if ownedByTheService(owner) {
 		return nil
 	}
-	return fmt.Errorf("%w: it is owned by %s", errServicePipeNotOwned, owner)
+	return fmt.Errorf("%w: it is owned by %s", errNotTheServicePipe, owner)
 }
 
 // ownedByTheService admits the Administrators group too, since LocalSystem
@@ -152,7 +153,7 @@ func ownedByTheService(owner *windows.SID) bool {
 	return owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid)
 }
 
-var serviceProcessID = runningServiceProcessID
+var lookUpServiceProcessID = runningServiceProcessID
 
 // runningServiceProcessID asks the service manager with query-status access
 // only, which a standard account holds.
@@ -177,7 +178,7 @@ func runningServiceProcessID() (uint32, error) {
 		return 0, fmt.Errorf("query the service: %w", err)
 	}
 	if status.ProcessId == 0 {
-		return 0, errServicePipesNotPublished
+		return 0, errServiceNotRunning
 	}
 	return status.ProcessId, nil
 }
@@ -191,12 +192,12 @@ func verifyServicePipeServer(conn net.Conn) error {
 	if err := windows.GetNamedPipeServerProcessId(windows.Handle(pipe.Fd()), &serverProcessID); err != nil {
 		return fmt.Errorf("read the pipe's server: %w", err)
 	}
-	servicePID, err := serviceProcessID()
+	serviceProcessID, err := lookUpServiceProcessID()
 	if err != nil {
 		return err
 	}
-	if serverProcessID != servicePID {
-		return fmt.Errorf("%w: process %d serves it, and the service runs as process %d", errServicePipeNotOwned, serverProcessID, servicePID)
+	if serverProcessID != serviceProcessID {
+		return fmt.Errorf("%w: process %d serves it, and the service runs as process %d", errNotTheServicePipe, serverProcessID, serviceProcessID)
 	}
 	return nil
 }

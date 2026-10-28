@@ -62,7 +62,7 @@ func TestServiceDialRefusesAPipeAnOrdinaryAccountOwns(t *testing.T) {
 		conn.Close()
 		t.Fatal("dialled a pipe the service does not own")
 	}
-	if !errors.Is(err, errServicePipeNotOwned) {
+	if !errors.Is(err, errNotTheServicePipe) {
 		t.Fatalf("dial failed with %v, want an owner refusal", err)
 	}
 }
@@ -115,17 +115,17 @@ func TestServiceDialChecksThePipeIsServedByTheServiceProcess(t *testing.T) {
 			conn.Close()
 		}
 	}()
-	previousProcessID := serviceProcessID
-	t.Cleanup(func() { serviceProcessID = previousProcessID })
+	previousProcessID := lookUpServiceProcessID
+	t.Cleanup(func() { lookUpServiceProcessID = previousProcessID })
 
-	for servicePID, want := range map[uint32]error{uint32(os.Getpid()): nil, uint32(os.Getpid()) + 4: errServicePipeNotOwned} {
-		serviceProcessID = func() (uint32, error) { return servicePID, nil }
+	for serviceProcessID, want := range map[uint32]error{uint32(os.Getpid()): nil, uint32(os.Getpid()) + 4: errNotTheServicePipe} {
+		lookUpServiceProcessID = func() (uint32, error) { return serviceProcessID, nil }
 		conn, err := dialPipeAtIdentification(name, 2*time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if got := verifyServicePipeServer(conn); !errors.Is(got, want) {
-			t.Errorf("with the service as process %d: %v, want %v", servicePID, got, want)
+			t.Errorf("with the service as process %d: %v, want %v", serviceProcessID, got, want)
 		}
 		conn.Close()
 	}
@@ -138,7 +138,7 @@ func TestServiceProcessIDIsReadableWithQueryStatusAccess(t *testing.T) {
 	if errors.Is(err, windows.ERROR_SERVICE_DOES_NOT_EXIST) {
 		t.Skip("no service installed")
 	}
-	if err != nil && !errors.Is(err, errServicePipesNotPublished) {
+	if err != nil && !errors.Is(err, errServiceNotRunning) {
 		t.Fatal(err)
 	}
 }
