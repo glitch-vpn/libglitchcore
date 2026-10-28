@@ -291,6 +291,12 @@ functions carry nothing.
 - A client reaches the service only through `dialService`, which dials at
   identification level (the service reads the caller's token from it) and
   refuses a pipe that LocalSystem or the Administrators group does not own.
+  The service checks the caller on every command, not once per connection.
+- A service pipe is never closed while the service runs: a name freed for a
+  moment is any account's to take, and the service cannot listen on it again.
+  `listenServicePipe` holds it and, when the served user changes, rewrites its
+  descriptor in place; what an open connection may still do is the caller
+  check's job, and the event pipe drops its subscribers.
 - The command payload is a flat JSON object with snake_case action names
   (`replay_session`, `listen_stats`) and explicit field names — no positional
   data.

@@ -112,8 +112,13 @@ name once the direct outbound resolves it. Domain and IP matchers honour tier or
 * TUN needs elevation. Without the shipped system service the caller must run
   elevated; with it, engine commands cross a named pipe and the user sees no
   prompt. Proxy mode needs neither.
-* The command pipe's ACL is open to all local users, and the service runs as
-  LocalSystem. Treat it as a local-trust boundary when you design an installer.
+* The service runs as LocalSystem, and its pipes admit LocalSystem, the
+  Administrators group and the user at the console — or, with nobody there,
+  the one user of an active remote session. Every command is checked against
+  that user, so after a switch of users the one switched away from is refused
+  until they come back. A running tunnel survives the switch; the connection
+  inspector and logging are turned off. With several remote users at once and
+  nobody at the console, only administrators get through.
 * Direct egress binds the physical NIC (`IP_UNICAST_IF`), which is what keeps
   direct traffic out of the TUN default route — but it also means a loopback
   service on 127.0.0.1 is unreachable from the direct outbound.

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/Microsoft/go-winio"
+	"golang.org/x/sys/windows"
 	"golang.org/x/sys/windows/svc"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
@@ -24,7 +25,6 @@ const (
 	serviceName         = "GlitchVpnCore"
 	commandPipeName     = `\\.\pipe\glitch_vpn_core_cmd`
 	eventPipeName       = `\\.\pipe\glitch_vpn_core_events`
-	servicePipeSDDL     = "D:(A;;GA;;;WD)"
 	pipeBufferSizeBytes = 64 * 1024
 )
 
@@ -58,6 +58,16 @@ func (h *serviceEventHub) removeSubscriber(id int) {
 	}
 	h.mu.Unlock()
 	if ok {
+		close(ch)
+	}
+}
+
+func (h *serviceEventHub) dropSubscribers() {
+	h.mu.Lock()
+	dropped := h.subscribers
+	h.subscribers = make(map[int]chan string)
+	h.mu.Unlock()
+	for _, ch := range dropped {
 		close(ch)
 	}
 }
@@ -119,11 +129,12 @@ type pipeResponse struct {
 }
 
 type glitchService struct {
-	hub *serviceEventHub
+	hub    *serviceEventHub
+	access *pipeAccess
 }
 
 func runServiceMain() {
-	svc := &glitchService{hub: newServiceEventHub()}
+	svc := &glitchService{hub: newServiceEventHub(), access: newPipeAccess()}
 	if err := svc.Run(); err != nil {
 		log.Fatalf("glitch service run failed: %v", err)
 	}
@@ -152,10 +163,13 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 		}
 	})
 
-	go serveCommandPipe(ctx, s.hub)
-	go serveEventPipe(ctx, s.hub)
+	s.refreshServedUser()
+	go serveCommandPipe(ctx, s.access)
+	go serveEventPipe(ctx, s.hub, s.access)
 
-	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown}
+	changes <- svc.Status{State: svc.Running, Accepts: svc.AcceptStop | svc.AcceptShutdown | svc.AcceptSessionChange}
+	// A logon before session changes were accepted sends no notice.
+	s.refreshServedUser()
 
 	for {
 		select {
@@ -169,122 +183,138 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 				return
 			case svc.Interrogate:
 				changes <- c.CurrentStatus
+			case svc.SessionChange:
+				s.refreshServedUser()
 			default:
 			}
 		}
 	}
 }
 
-func serveCommandPipe(ctx context.Context, hub *serviceEventHub) {
-	cfg := &winio.PipeConfig{
-		SecurityDescriptor: servicePipeSDDL,
-		MessageMode:        true,
-		InputBufferSize:    pipeBufferSizeBytes,
-		OutputBufferSize:   pipeBufferSizeBytes,
-	}
-
-	for {
-		listener, err := winio.ListenPipe(commandPipeName, cfg)
-		if err != nil {
-			logfmt.Errorf("[service] command pipe listen error: %v", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Second):
-				continue
-			}
-		}
-
-		var wg sync.WaitGroup
-		acceptCtx, cancel := context.WithCancel(ctx)
-		go func() {
-			<-acceptCtx.Done()
-			listener.Close()
-		}()
-
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				if acceptCtx.Err() != nil {
-					break
-				}
-				logfmt.Errorf("[service] command pipe accept error: %v", err)
-				continue
-			}
-			wg.Add(1)
-			go func(c net.Conn) {
-				defer wg.Done()
-				handleCommandConnection(acceptCtx, c)
-			}(conn)
-		}
-
-		wg.Wait()
-		cancel()
-		listener.Close()
-		if ctx.Err() != nil {
-			return
-		}
+// refreshServedUser turns off what shows the tunnel's traffic when the user it
+// is shown to changes: the tunnel itself outlives a switch of users.
+func (s *glitchService) refreshServedUser() {
+	if s.access.refresh() {
+		applyConnInspector(false)
+		applyStatusVerbosity(-1)
 	}
 }
 
-func serveEventPipe(ctx context.Context, hub *serviceEventHub) {
-	cfg := &winio.PipeConfig{
-		SecurityDescriptor: servicePipeSDDL,
-		MessageMode:        false,
+func servicePipeConfig(servedUser *windows.SID, messageMode bool) *winio.PipeConfig {
+	return &winio.PipeConfig{
+		SecurityDescriptor: servicePipeSDDL(servedUser),
+		MessageMode:        messageMode,
 		InputBufferSize:    pipeBufferSizeBytes,
 		OutputBufferSize:   pipeBufferSizeBytes,
 	}
+}
 
+// listenServicePipe holds the pipe name for as long as ctx lives: a listener
+// closed even for a moment frees the name for any account to take. A change of
+// served user rewrites the descriptor in place and then runs
+// onServedUserChange. It returns nil only when ctx ends first.
+func listenServicePipe(ctx context.Context, name string, access *pipeAccess, messageMode bool, onServedUserChange func()) net.Listener {
 	for {
-		listener, err := winio.ListenPipe(eventPipeName, cfg)
-		if err != nil {
-			logfmt.Errorf("[service] event pipe listen error: %v", err)
-			select {
-			case <-ctx.Done():
-				return
-			case <-time.After(time.Second):
-				continue
-			}
-		}
-
-		acceptCtx, cancel := context.WithCancel(ctx)
-		go func() {
-			<-acceptCtx.Done()
-			listener.Close()
-		}()
-
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				if acceptCtx.Err() != nil {
-					break
-				}
-				logfmt.Errorf("[service] event pipe accept error: %v", err)
-				continue
-			}
-			sessionCtx, sessionCancel := context.WithCancel(acceptCtx)
-			hub.Subscribe(sessionCtx, conn)
+		servedUser, changed := access.current()
+		listener, err := winio.ListenPipe(name, servicePipeConfig(servedUser, messageMode))
+		if err == nil {
 			go func() {
-				buf := make([]byte, 1)
-				for {
-					if _, err := conn.Read(buf); err != nil {
-						sessionCancel()
-						return
-					}
-				}
+				<-ctx.Done()
+				listener.Close()
 			}()
+			go followServedUser(ctx, name, access, changed, onServedUserChange)
+			return listener
 		}
-
-		cancel()
-		listener.Close()
-		if ctx.Err() != nil {
-			return
+		logfmt.Errorf("[service] %s listen error: %v", name, err)
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(time.Second):
 		}
 	}
 }
 
-func handleCommandConnection(ctx context.Context, conn net.Conn) {
-	defer conn.Close()
+func followServedUser(ctx context.Context, name string, access *pipeAccess, changed <-chan struct{}, onChange func()) {
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-changed:
+		}
+		var servedUser *windows.SID
+		servedUser, changed = access.current()
+		if err := setPipeDescriptor(name, servicePipeSDDL(servedUser)); err != nil {
+			logfmt.Errorf("[service] cannot rewrite the descriptor of %s: %v", name, err)
+		}
+		onChange()
+	}
+}
+
+func serveCommandPipe(ctx context.Context, access *pipeAccess) {
+	listener := listenServicePipe(ctx, commandPipeName, access, true, func() {})
+	if listener == nil {
+		return
+	}
+	var wg sync.WaitGroup
+	defer wg.Wait()
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logfmt.Errorf("[service] command pipe accept error: %v", err)
+			continue
+		}
+		wg.Add(1)
+		go func(c net.Conn) {
+			defer wg.Done()
+			handleCommandConnection(ctx, c, access)
+		}(conn)
+	}
+}
+
+// serveEventPipe drops every subscriber when the served user changes; the
+// descriptor then decides who may subscribe again.
+func serveEventPipe(ctx context.Context, hub *serviceEventHub, access *pipeAccess) {
+	listener := listenServicePipe(ctx, eventPipeName, access, false, hub.dropSubscribers)
+	if listener == nil {
+		return
+	}
+	for {
+		conn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			logfmt.Errorf("[service] event pipe accept error: %v", err)
+			continue
+		}
+		sessionCtx, sessionCancel := context.WithCancel(ctx)
+		hub.Subscribe(sessionCtx, conn)
+		go func() {
+			buf := make([]byte, 1)
+			for {
+				if _, err := conn.Read(buf); err != nil {
+					sessionCancel()
+					return
+				}
+			}
+		}()
+	}
+}
+
+var identifyPipeClient = pipeClientIdentity
+
+// handleCommandConnection checks the caller on every command, since the served
+// user can change while a connection stays open.
+func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAccess) {
+	connCtx, stop := context.WithCancel(ctx)
+	defer stop()
+	go func() {
+		<-connCtx.Done()
+		conn.Close()
+	}()
 
 	decoder := json.NewDecoder(conn)
 	emitter := json.NewEncoder(conn)
@@ -297,6 +327,7 @@ func handleCommandConnection(ctx context.Context, conn net.Conn) {
 		return true
 	}
 
+	var caller *pipeCaller
 	for {
 		select {
 		case <-ctx.Done():
@@ -310,6 +341,21 @@ func handleCommandConnection(ctx context.Context, conn net.Conn) {
 				return
 			}
 			emit(pipeResponse{OK: false, Error: fmt.Sprintf("decode error: %v", err)})
+			return
+		}
+
+		if caller == nil {
+			identity, err := identifyPipeClient(conn)
+			if err != nil {
+				logfmt.Errorf("[service] cannot identify a command pipe client: %v", err)
+				emit(pipeResponse{OK: false, Error: accessDeniedReply})
+				return
+			}
+			caller = &identity
+		}
+		if !access.admits(*caller) {
+			logfmt.Warnf("[service] refused a command from %s", caller.user)
+			emit(pipeResponse{OK: false, Error: accessDeniedReply})
 			return
 		}
 
