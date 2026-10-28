@@ -36,6 +36,7 @@ func mihomoSessionHome(t *testing.T) string {
 
 func newMihomoSessionController(t *testing.T) *CoreController {
 	t.Helper()
+	skipWhereMihomoRaces(t)
 	x := &CoreController{}
 	x.initEngineState()
 	t.Cleanup(func() {

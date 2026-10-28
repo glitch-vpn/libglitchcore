@@ -82,6 +82,12 @@ jobs:
       - name: Test
         run: CGO_ENABLED=0 go test -tags="${{ matrix.tags }} with_gvisor" ./internal/...
 
+      # -race needs cgo. The tests that run a live mihomo skip themselves
+      # under it (internal/core/race_test.go).
+      - name: Test (race detector)
+        if: matrix.tags == ''
+        run: CGO_ENABLED=1 go test -race -tags="with_gvisor" ./internal/...
+
       - name: License guard (excluded engines stay out of the link)
         if: matrix.forbidden != ''
         run: |

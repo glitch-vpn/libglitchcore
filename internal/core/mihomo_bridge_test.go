@@ -41,6 +41,7 @@ var bridgeTestProfile = routing.Profile{Mode: routing.ModeDirectAll, Tiers: []ro
 // mihomoStartBridge hands tun2socks.
 func startMihomoBridge(t *testing.T, x *CoreController) (app, force t2sproxy.Proxy) {
 	t.Helper()
+	skipWhereMihomoRaces(t)
 	mihomoTestHome(t)
 	dns := dnsconfig.Config{}
 	in, b := mihomoBridgeInbound(&dns, bridgeTestProfile)

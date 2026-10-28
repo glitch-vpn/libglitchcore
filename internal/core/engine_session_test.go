@@ -13,6 +13,37 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 )
 
+// gateHook is the test's side of engineStartGate and engineStopGate. A stop
+// or start a test left behind still reads the gate after the test is over, so
+// the package variable is written once, before any test runs, and a test swaps
+// only the hook under the lock.
+type gateHook struct {
+	mu sync.RWMutex
+	fn func(engine string, generation int64)
+}
+
+func (h *gateHook) set(fn func(engine string, generation int64)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.fn = fn
+}
+
+func (h *gateHook) call(engine string, generation int64) {
+	h.mu.RLock()
+	fn := h.fn
+	h.mu.RUnlock()
+	if fn != nil {
+		fn(engine, generation)
+	}
+}
+
+var startGates, stopGates gateHook
+
+func init() {
+	engineStartGate = startGates.call
+	engineStopGate = stopGates.call
+}
+
 // holdStarts parks every start of engine before it takes coreMutex until the
 // test lets the start of that session generation go.
 func holdStarts(t *testing.T, engine string) (release func(mark int64)) {
@@ -27,26 +58,24 @@ func holdStarts(t *testing.T, engine string) (release func(mark int64)) {
 		}
 		return gates[mark]
 	}
-	prev := engineStartGate
-	engineStartGate = func(e string, mark int64) {
+	startGates.set(func(e string, mark int64) {
 		if e == engine {
 			<-gate(mark)
 		}
-	}
-	t.Cleanup(func() { engineStartGate = prev })
+	})
+	t.Cleanup(func() { startGates.set(nil) })
 	return func(mark int64) { close(gate(mark)) }
 }
 
 func holdStops(t *testing.T, engine string) (release func()) {
 	t.Helper()
 	gate := make(chan struct{})
-	prev := engineStopGate
-	engineStopGate = func(e string, _ int64) {
+	stopGates.set(func(e string, _ int64) {
 		if e == engine {
 			<-gate
 		}
-	}
-	t.Cleanup(func() { engineStopGate = prev })
+	})
+	t.Cleanup(func() { stopGates.set(nil) })
 	return func() { close(gate) }
 }
 
