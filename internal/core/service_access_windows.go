@@ -45,7 +45,10 @@ type pipeCaller struct {
 // at the console. The tunnel is machine-wide, so it belongs to whoever is at
 // the machine; a user switched away from loses the pipes.
 type pipeAccess struct {
-	mu         sync.Mutex
+	// Held for reading across a command's check and its dispatch, and for
+	// writing across a change of served user and what the change resets, so no
+	// command of the previous user runs after it.
+	mu         sync.RWMutex
 	servedUser *windows.SID
 	changed    chan struct{} // closed when servedUser changes, then replaced
 }
@@ -55,12 +58,14 @@ func newPipeAccess() *pipeAccess {
 }
 
 func (a *pipeAccess) current() (*windows.SID, <-chan struct{}) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.servedUser, a.changed
 }
 
-func (a *pipeAccess) setServedUser(user *windows.SID) (changed bool) {
+// changeServedUser runs onChange under the write lock when user differs from
+// the one served.
+func (a *pipeAccess) changeServedUser(user *windows.SID, onChange func()) (changed bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if sameSID(a.servedUser, user) {
@@ -69,23 +74,69 @@ func (a *pipeAccess) setServedUser(user *windows.SID) (changed bool) {
 	a.servedUser = user
 	close(a.changed)
 	a.changed = make(chan struct{})
+	onChange()
 	return true
 }
 
-func (a *pipeAccess) refresh() (changed bool) {
-	user, err := activeUserSID()
-	if err != nil {
-		logfmt.Errorf("[service] cannot read the active user: %v", err)
+var readActiveUser = activeUserSID
+
+var (
+	activeUserRetryDelay    = time.Second
+	activeUserMaxRetryDelay = 8 * time.Second
+	activeUserReadGrace     = 30 * time.Second
+)
+
+// refresh reads the active user until a read succeeds. Meanwhile it keeps the
+// served user, since a failed read says nothing about who is at the machine,
+// but not past activeUserReadGrace: a user who left could keep the pipes.
+func (a *pipeAccess) refresh(ctx context.Context, onChange func()) {
+	delay := activeUserRetryDelay
+	failingSince := time.Now()
+	for {
+		user, err := readActiveUser()
+		if err == nil {
+			a.changeServedUser(user, onChange)
+			return
+		}
+		if time.Since(failingSince) >= activeUserReadGrace {
+			logfmt.Errorf("[service] cannot read the active user, serving nobody: %v", err)
+			a.changeServedUser(nil, onChange)
+			return
+		}
+		logfmt.Warnf("[service] cannot read the active user, keeping the one served: %v", err)
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		delay = min(delay*2, activeUserMaxRetryDelay)
 	}
-	return a.setServedUser(user)
 }
 
 func (a *pipeAccess) admits(caller pipeCaller) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.admitsLocked(caller)
+}
+
+func (a *pipeAccess) admitsLocked(caller pipeCaller) bool {
 	if caller.administrator || caller.user.IsWellKnown(windows.WinLocalSystemSid) {
 		return true
 	}
-	served, _ := a.current()
-	return served != nil && caller.user.Equals(served)
+	return a.servedUser != nil && caller.user.Equals(a.servedUser)
+}
+
+// runAdmitted runs action only if caller is admitted, and holds off any change
+// of served user until it returns: an action that never returns stalls the
+// change, and once the change waits, every other command.
+func (a *pipeAccess) runAdmitted(caller pipeCaller, action func()) bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	if !a.admitsLocked(caller) {
+		return false
+	}
+	action()
+	return true
 }
 
 func sameSID(a, b *windows.SID) bool {
@@ -95,11 +146,17 @@ func sameSID(a, b *windows.SID) bool {
 	return a.Equals(b)
 }
 
+// activeUserSID returns nil with no error when nobody is at the machine, or
+// when several remote users are and none of them is the machine's.
 func activeUserSID() (*windows.SID, error) {
 	consoleSession := windows.WTSGetActiveConsoleSessionId()
 	if consoleSession != 0xFFFFFFFF {
-		if user, err := sessionUserSID(consoleSession); err == nil {
+		user, err := sessionUserSID(consoleSession)
+		if err == nil {
 			return user, nil
+		}
+		if !errors.Is(err, windows.ERROR_NO_TOKEN) {
+			return nil, fmt.Errorf("console session %d: %w", consoleSession, err)
 		}
 	}
 
@@ -116,11 +173,14 @@ func activeUserSID() (*windows.SID, error) {
 			continue
 		}
 		user, err := sessionUserSID(session.SessionID)
-		if err != nil {
+		if errors.Is(err, windows.ERROR_NO_TOKEN) || errors.Is(err, windows.ERROR_FILE_NOT_FOUND) || errors.Is(err, windows.ERROR_CTX_WINSTATION_NOT_FOUND) {
+			// Nobody signed in there, or the session ended since the listing.
 			continue
 		}
+		if err != nil {
+			return nil, fmt.Errorf("session %d: %w", session.SessionID, err)
+		}
 		if found != nil {
-			// Several remote users at once: none of them is the machine's.
 			return nil, nil
 		}
 		found = user
@@ -145,14 +205,6 @@ func sessionUserSID(session uint32) (*windows.SID, error) {
 // handle to a pipe is always a client end, so the rewrite takes one waiting
 // instance for a moment: its accept loop sees a client that leaves at once.
 func setPipeDescriptor(name, sddl string) error {
-	descriptor, err := windows.SecurityDescriptorFromString(sddl)
-	if err != nil {
-		return err
-	}
-	dacl, _, err := descriptor.DACL()
-	if err != nil {
-		return err
-	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	conn, err := winio.DialPipeAccess(ctx, name, windows.GENERIC_READ|windows.READ_CONTROL|windows.WRITE_DAC)
@@ -164,7 +216,21 @@ func setPipeDescriptor(name, sddl string) error {
 	if !ok {
 		return errors.New("not a named pipe")
 	}
-	return windows.SetSecurityInfo(windows.Handle(pipe.Fd()), windows.SE_KERNEL_OBJECT,
+	return setProtectedDACL(windows.Handle(pipe.Fd()), windows.SE_KERNEL_OBJECT, sddl)
+}
+
+// setProtectedDACL replaces the object's DACL with the one in sddl and stops
+// it inheriting entries from its parent.
+func setProtectedDACL(handle windows.Handle, objectType windows.SE_OBJECT_TYPE, sddl string) error {
+	descriptor, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		return err
+	}
+	dacl, _, err := descriptor.DACL()
+	if err != nil {
+		return err
+	}
+	return windows.SetSecurityInfo(handle, objectType,
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 

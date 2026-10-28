@@ -288,15 +288,23 @@ functions carry nothing.
   `serviceXxx()` wrapper in `ipc_windows_client.go`, no-op stub in
   `ipc_stub.go`.
 - Events need nothing: every `emitStatus` pair traverses the pipe as-is.
-- A client reaches the service only through `dialService`, which dials at
-  identification level (the service reads the caller's token from it) and
-  refuses a pipe that LocalSystem or the Administrators group does not own.
-  The service checks the caller on every command, not once per connection.
+- A client reaches the service only through `dialService`, which takes the
+  pipe name the service published, dials at identification level (the service
+  reads the caller's token from it) and refuses a pipe that LocalSystem or the
+  Administrators group does not own. An event client writes one byte first,
+  so the service can read who subscribes.
+- The service checks the caller on every command, not once per connection,
+  and runs the command under `pipeAccess.runAdmitted`, which a change of
+  served user waits for.
 - A service pipe is never closed while the service runs: a name freed for a
-  moment is any account's to take, and the service cannot listen on it again.
-  `listenServicePipe` holds it and, when the served user changes, rewrites its
-  descriptor in place; what an open connection may still do is the caller
-  check's job, and the event pipe drops its subscribers.
+  moment is any account's to take. The service opens both pipes under fresh
+  names before it publishes them; a change of served user closes the
+  connections no longer admitted under the change's write lock
+  (`onServedUserChange`), and `followServedUser` rewrites each descriptor in
+  place.
+- A read the service's access rests on is retried, not trusted to the next
+  notice: `pipeAccess.refresh` doubles its delay up to a cap and, past a grace
+  period, falls back to the state that admits the fewest (nobody served).
 - The command payload is a flat JSON object with snake_case action names
   (`replay_session`, `listen_stats`) and explicit field names — no positional
   data.

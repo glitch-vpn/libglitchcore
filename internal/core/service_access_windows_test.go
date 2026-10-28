@@ -3,9 +3,7 @@
 package core
 
 import (
-	"bufio"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -97,125 +95,22 @@ func TestServicePipeDescriptorWithNobodyServedAdmitsOnlySystemAndAdministrators(
 	}
 }
 
-type commandPipeClient struct {
-	conn    net.Conn
-	replies *bufio.Scanner
-	done    chan struct{}
+func setServedUser(access *pipeAccess, user *windows.SID) bool {
+	return access.changeServedUser(user, func() {})
 }
 
-func startCommandPipe(t *testing.T, access *pipeAccess, caller pipeCaller) *commandPipeClient {
+func servedAccess(t *testing.T, user *windows.SID) *pipeAccess {
 	t.Helper()
-	Initialize()
-	previousIdentify := identifyPipeClient
-	identifyPipeClient = func(net.Conn) (pipeCaller, error) { return caller, nil }
-	t.Cleanup(func() { identifyPipeClient = previousIdentify })
-	server, client := net.Pipe()
-	done := make(chan struct{})
-	ctx, cancel := context.WithCancel(context.Background())
-	go func() {
-		defer close(done)
-		handleCommandConnection(ctx, server, access)
-	}()
-	t.Cleanup(func() {
-		cancel()
-		client.Close()
-		<-done
-	})
-	return &commandPipeClient{conn: client, replies: bufio.NewScanner(client), done: done}
-}
-
-func (c *commandPipeClient) ping(t *testing.T) pipeResponse {
-	t.Helper()
-	c.conn.SetDeadline(time.Now().Add(5 * time.Second))
-	if _, err := fmt.Fprintln(c.conn, `{"action":"ping"}`); err != nil {
-		t.Fatalf("send ping: %v", err)
-	}
-	if !c.replies.Scan() {
-		t.Fatalf("no reply: %v", c.replies.Err())
-	}
-	var resp pipeResponse
-	if err := json.Unmarshal(c.replies.Bytes(), &resp); err != nil {
-		t.Fatal(err)
-	}
-	return resp
-}
-
-func (c *commandPipeClient) waitClosed(t *testing.T) {
-	t.Helper()
-	select {
-	case <-c.done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("the connection stayed open")
-	}
-}
-
-func TestCommandPipeAnswersTheServedUser(t *testing.T) {
-	servedUser := madeUpUserSID(t, "1001")
 	access := newPipeAccess()
-	access.setServedUser(servedUser)
-
-	client := startCommandPipe(t, access, pipeCaller{user: servedUser})
-	if resp := client.ping(t); !resp.OK {
-		t.Fatalf("ping refused: %s", resp.Error)
-	}
-}
-
-func TestCommandPipeRefusesAnotherUser(t *testing.T) {
-	access := newPipeAccess()
-	access.setServedUser(madeUpUserSID(t, "1001"))
-
-	client := startCommandPipe(t, access, pipeCaller{user: madeUpUserSID(t, "1002")})
-	if resp := client.ping(t); resp.OK || resp.Error != accessDeniedReply {
-		t.Fatalf("got %+v, want access denied", resp)
-	}
-	client.waitClosed(t)
-}
-
-func TestCommandPipeRefusesEveryUserWhenNobodyIsServed(t *testing.T) {
-	client := startCommandPipe(t, newPipeAccess(), pipeCaller{user: madeUpUserSID(t, "1001")})
-	if resp := client.ping(t); resp.OK {
-		t.Fatal("a command passed with nobody served")
-	}
-}
-
-func TestCommandPipeAnswersSystemAndAdministrators(t *testing.T) {
-	system, _ := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
-	for name, caller := range map[string]pipeCaller{
-		"system":        {user: system},
-		"administrator": {user: madeUpUserSID(t, "500"), administrator: true},
-	} {
-		t.Run(name, func(t *testing.T) {
-			access := newPipeAccess()
-			access.setServedUser(madeUpUserSID(t, "1001"))
-			client := startCommandPipe(t, access, caller)
-			if resp := client.ping(t); !resp.OK {
-				t.Fatalf("ping refused: %s", resp.Error)
-			}
-		})
-	}
-}
-
-func TestCommandPipeChecksEveryCommandAgainstTheUserServedNow(t *testing.T) {
-	first := madeUpUserSID(t, "1001")
-	access := newPipeAccess()
-	access.setServedUser(first)
-
-	client := startCommandPipe(t, access, pipeCaller{user: first})
-	if resp := client.ping(t); !resp.OK {
-		t.Fatalf("ping refused: %s", resp.Error)
-	}
-	access.setServedUser(madeUpUserSID(t, "1002"))
-	if resp := client.ping(t); resp.OK {
-		t.Fatal("a command passed after the served user changed")
-	}
+	setServedUser(access, user)
+	return access
 }
 
 func TestServedUserChangeSignalsOnlyOnAChange(t *testing.T) {
-	access := newPipeAccess()
-	access.setServedUser(madeUpUserSID(t, "1001"))
+	access := servedAccess(t, madeUpUserSID(t, "1001"))
 	_, changed := access.current()
 
-	if access.setServedUser(madeUpUserSID(t, "1001")) {
+	if setServedUser(access, madeUpUserSID(t, "1001")) {
 		t.Error("the same user reported a change")
 	}
 	select {
@@ -224,7 +119,7 @@ func TestServedUserChangeSignalsOnlyOnAChange(t *testing.T) {
 	default:
 	}
 
-	if !access.setServedUser(nil) {
+	if !setServedUser(access, nil) {
 		t.Error("a logoff reported no change")
 	}
 	select {
@@ -234,10 +129,84 @@ func TestServedUserChangeSignalsOnlyOnAChange(t *testing.T) {
 	}
 }
 
+func shortenActiveUserRetries(t *testing.T) {
+	t.Helper()
+	previousRead, previousDelay, previousMaxDelay, previousGrace := readActiveUser, activeUserRetryDelay, activeUserMaxRetryDelay, activeUserReadGrace
+	activeUserRetryDelay, activeUserMaxRetryDelay, activeUserReadGrace = time.Millisecond, 4*time.Millisecond, 50*time.Millisecond
+	t.Cleanup(func() {
+		readActiveUser, activeUserRetryDelay, activeUserMaxRetryDelay, activeUserReadGrace = previousRead, previousDelay, previousMaxDelay, previousGrace
+	})
+}
+
+func TestServedUserIsKeptWhileTheActiveUserCannotBeRead(t *testing.T) {
+	shortenActiveUserRetries(t)
+	served := madeUpUserSID(t, "1001")
+	next := madeUpUserSID(t, "1002")
+	access := servedAccess(t, served)
+
+	failures := 0
+	readActiveUser = func() (*windows.SID, error) {
+		if failures < 3 {
+			failures++
+			if user, _ := access.current(); !sameSID(user, served) {
+				t.Errorf("the served user is %v during failed reads, want %s", user, served)
+			}
+			return nil, windows.ERROR_ACCESS_DENIED
+		}
+		return next, nil
+	}
+	access.refresh(context.Background(), func() {})
+	if user, _ := access.current(); !sameSID(user, next) {
+		t.Fatalf("the served user is %v once a read succeeded, want %s", user, next)
+	}
+}
+
+func TestNobodyIsServedWhenTheActiveUserStaysUnreadable(t *testing.T) {
+	shortenActiveUserRetries(t)
+	access := servedAccess(t, madeUpUserSID(t, "1001"))
+
+	readActiveUser = func() (*windows.SID, error) { return nil, windows.ERROR_ACCESS_DENIED }
+	ran := false
+	access.refresh(context.Background(), func() { ran = true })
+	if user, _ := access.current(); user != nil || !ran {
+		t.Fatalf("the served user is %v after the grace, want nobody", user)
+	}
+}
+
+func TestChangeOfServedUserWaitsForTheCommandInFlight(t *testing.T) {
+	first := madeUpUserSID(t, "1001")
+	access := servedAccess(t, first)
+
+	running := make(chan struct{})
+	release := make(chan struct{})
+	go access.runAdmitted(pipeCaller{user: first}, func() {
+		close(running)
+		<-release
+	})
+	<-running
+
+	changed := make(chan struct{})
+	go access.changeServedUser(madeUpUserSID(t, "1002"), func() { close(changed) })
+	select {
+	case <-changed:
+		t.Fatal("the served user changed while a command of the previous one ran")
+	case <-time.After(100 * time.Millisecond):
+	}
+	close(release)
+	select {
+	case <-changed:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the change never ran")
+	}
+	if access.runAdmitted(pipeCaller{user: first}, func() { t.Error("a command of the previous user ran") }) {
+		t.Error("the previous user is still admitted")
+	}
+}
+
 var testPipeSequence atomic.Int32
 
 func testPipeName() string {
-	return fmt.Sprintf(`\\.\pipe\glitch_vpn_core_test_%d_%d`, os.Getpid(), testPipeSequence.Add(1))
+	return fmt.Sprintf("%stest_%d_%d", servicePipePrefix, os.Getpid(), testPipeSequence.Add(1))
 }
 
 func currentProcessUser(t *testing.T) (*windows.SID, bool) {
@@ -367,19 +336,33 @@ func TestDescriptorRewriteShutsOutAUserOnAPipeAlreadyListening(t *testing.T) {
 	}
 }
 
-func TestDroppedEventSubscribersAreDisconnected(t *testing.T) {
-	hub := newServiceEventHub()
-	server, client := net.Pipe()
-	defer client.Close()
-	hub.Subscribe(context.Background(), server)
+func TestServicePipesAreOpenedUnderFreshNamesWhenANameIsTaken(t *testing.T) {
+	taken := testPipeName()
+	squatter, err := winio.ListenPipe(taken, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer squatter.Close()
 
-	hub.dropSubscribers()
-	hub.Publish("after the drop")
+	fresh := servicePipeNames{command: testPipeName(), event: testPipeName()}
+	draws := []servicePipeNames{{command: taken, event: testPipeName()}, fresh}
+	previousDraw := drawServicePipeNames
+	drawServicePipeNames = func() (servicePipeNames, error) {
+		names := draws[0]
+		draws = draws[1:]
+		return names, nil
+	}
+	t.Cleanup(func() { drawServicePipeNames = previousDraw })
 
-	client.SetReadDeadline(time.Now().Add(5 * time.Second))
-	if n, err := client.Read(make([]byte, 64)); err == nil {
-		t.Fatalf("a dropped subscriber read %d bytes", n)
-	} else if errors.Is(err, os.ErrDeadlineExceeded) {
-		t.Fatal("a dropped subscriber stayed connected")
+	user, _ := currentProcessUser(t)
+	access := servedAccess(t, user)
+	command, event, err := openServicePipes(access)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer command.listener.Close()
+	defer event.listener.Close()
+	if command.name != fresh.command || event.name != fresh.event {
+		t.Fatalf("listening on %s and %s, want the fresh %s and %s", command.name, event.name, fresh.command, fresh.event)
 	}
 }

@@ -8,23 +8,21 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
-)
-
-const (
-	serviceCommandPipe = `\\.\pipe\glitch_vpn_core_cmd`
-	serviceEventPipe   = `\\.\pipe\glitch_vpn_core_events`
 )
 
 var (
 	serviceIPCOnce sync.Once
 
-	errServicePipeNotOwned = errors.New("the pipe does not belong to the service")
+	errServicePipeNotOwned      = errors.New("the pipe does not belong to the service")
+	errServicePipesNotPublished = errors.New("the service has published no pipes; it is not running")
 )
 
 type serviceResponse struct {
@@ -49,9 +47,16 @@ func ensureServiceIPC() {
 func serviceEventLoop() {
 	retryDelay := time.Second
 	for {
-		conn, err := dialService(serviceEventPipe, 2*time.Second)
+		conn, err := dialService(eventPipeValueName, 2*time.Second)
 		if err != nil {
 			logfmt.Warnf("[IPC] dial event pipe failed: %v", err)
+			time.Sleep(retryDelay)
+			continue
+		}
+		// The service reads who subscribes once a byte has arrived.
+		if _, err := conn.Write([]byte{'\n'}); err != nil {
+			logfmt.Warnf("[IPC] event pipe write error: %v", err)
+			_ = conn.Close()
 			time.Sleep(retryDelay)
 			continue
 		}
@@ -76,20 +81,44 @@ func serviceEventLoop() {
 	}
 }
 
-// dialService opens one of the service's pipes only if it belongs to
-// LocalSystem or the Administrators group: any account can create a pipe under
-// a name that is free, as these are while the service is stopped or reopening
-// them.
-func dialService(pipeName string, timeout time.Duration) (net.Conn, error) {
+// dialService opens the pipe the service published under valueName, and only
+// if LocalSystem or the Administrators group owns it.
+func dialService(valueName string, timeout time.Duration) (net.Conn, error) {
+	pipeName, err := readServicePipeName(valueName)
+	if err != nil {
+		return nil, err
+	}
 	conn, err := dialPipeAtIdentification(pipeName, timeout)
 	if err != nil {
 		return nil, err
 	}
 	if err := verifyServicePipeOwner(conn); err != nil {
 		conn.Close()
-		return nil, err
+		return nil, fmt.Errorf("%s: %w", pipeName, err)
 	}
 	return conn, nil
+}
+
+func readServicePipeName(valueName string) (string, error) {
+	key, err := registry.OpenKey(servicePipesLocation.root, servicePipesLocation.path, registry.QUERY_VALUE)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", errServicePipesNotPublished
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the service's pipe names: %w", err)
+	}
+	defer key.Close()
+	pipeName, _, err := key.GetStringValue(valueName)
+	if errors.Is(err, registry.ErrNotExist) {
+		return "", errServicePipesNotPublished
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the service's pipe names: %w", err)
+	}
+	if !strings.HasPrefix(pipeName, servicePipePrefix) {
+		return "", fmt.Errorf("the service published %q, which is not a local pipe of its own", pipeName)
+	}
+	return pipeName, nil
 }
 
 func verifyServicePipeOwner(conn net.Conn) error {
@@ -108,11 +137,11 @@ func verifyServicePipeOwner(conn net.Conn) error {
 	if owner.IsWellKnown(windows.WinLocalSystemSid) || owner.IsWellKnown(windows.WinBuiltinAdministratorsSid) {
 		return nil
 	}
-	return fmt.Errorf("%w: its owner is %s", errServicePipeNotOwned, owner)
+	return fmt.Errorf("%w: it is owned by %s", errServicePipeNotOwned, owner)
 }
 
 func callService(action string, payload map[string]any) (serviceResponse, error) {
-	conn, err := dialService(serviceCommandPipe, 5*time.Second)
+	conn, err := dialService(commandPipeValueName, 5*time.Second)
 	if err != nil {
 		return serviceResponse{}, fmt.Errorf("dial command pipe: %w", err)
 	}

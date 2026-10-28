@@ -172,3 +172,6 @@ TUN mode needs elevation. The release ships `glitch_vpn_core_service.exe`: if
 your installer registers it as a system service, the unprivileged library
 forwards engine commands to it over a named pipe and the user sees no prompt.
 Without the service, the caller has to run elevated. Proxy mode needs neither.
+The service serves the user at the console; see
+[Bottlenecks](Bottlenecks#windows). It keeps its pipe names under
+`HKLM\SOFTWARE\glitch_vpn_core`, which an uninstaller may remove.

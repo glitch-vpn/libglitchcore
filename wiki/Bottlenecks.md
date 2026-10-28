@@ -112,13 +112,19 @@ name once the direct outbound resolves it. Domain and IP matchers honour tier or
 * TUN needs elevation. Without the shipped system service the caller must run
   elevated; with it, engine commands cross a named pipe and the user sees no
   prompt. Proxy mode needs neither.
-* The service runs as LocalSystem, and its pipes admit LocalSystem, the
-  Administrators group and the user at the console — or, with nobody there,
-  the one user of an active remote session. Every command is checked against
-  that user, so after a switch of users the one switched away from is refused
-  until they come back. A running tunnel survives the switch; the connection
-  inspector and logging are turned off. With several remote users at once and
-  nobody at the console, only administrators get through.
+* The service runs as LocalSystem, and its pipes admit LocalSystem, elevated
+  administrators and the user at the console — or, with nobody there, the one
+  user of an active remote session. Every command and every event subscriber
+  is checked against that user, so after a switch of users the one switched
+  away from is refused until they come back. A running tunnel survives the
+  switch; the connection inspector and logging are turned off. With several
+  remote users at once and nobody at the console, only elevated
+  administrators get through.
+* The service draws new pipe names at each start and publishes them under
+  `HKLM\SOFTWARE\glitch_vpn_core` (`CommandPipe`, `EventPipe`), a key only
+  LocalSystem may write; it withdraws them when it stops. The library reads
+  them there and refuses a pipe that LocalSystem or the Administrators group
+  does not own.
 * Direct egress binds the physical NIC (`IP_UNICAST_IF`), which is what keeps
   direct traffic out of the TUN default route — but it also means a loopback
   service on 127.0.0.1 is unreachable from the direct outbound.
