@@ -580,7 +580,7 @@ func vlessProxy(link, name string) (map[string]any, error) {
 		return nil, fmt.Errorf("invalid port: %w", err)
 	}
 	q := u.Query()
-	network := q.Get("type")
+	network := strings.ToLower(strings.TrimSpace(q.Get("type")))
 	if network == "" {
 		network = "tcp"
 	}
@@ -605,7 +605,7 @@ func vlessProxy(link, name string) (map[string]any, error) {
 		p["encryption"] = encryption
 	}
 
-	switch q.Get("security") {
+	switch strings.ToLower(strings.TrimSpace(q.Get("security"))) {
 	case "tls":
 		applyTLS(p, q)
 		if err := applyCertChecks(p, q, "vless"); err != nil {

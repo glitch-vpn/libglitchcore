@@ -913,3 +913,19 @@ func TestVlessProxy_RealityOnlyOverTransportsMihomoRunsItOver(t *testing.T) {
 		}
 	}
 }
+
+func TestVlessProxy_RealityIsReadTrimmedAndCaseFolded(t *testing.T) {
+	for _, security := range []string{"Reality", "%20reality", "REALITY%20"} {
+		link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?security=" + security + "&pbk=gdtgDEXry6dpwsJIyDnd6qVxUDMk9jRAthZnqHyDIUI&sid=455f&sni=a.com"
+		p, err := ProxyMapFromLink(link)
+		if err != nil {
+			t.Fatalf("%q: %v", security, err)
+		}
+		if _, ok := p["reality-opts"]; !ok {
+			t.Errorf("%q: REALITY dropped: %v", security, p)
+		}
+		if _, err := ProxyMapFromLink(link + "&type=WS"); err == nil {
+			t.Errorf("%q over WS: want a refusal", security)
+		}
+	}
+}
