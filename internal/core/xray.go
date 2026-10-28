@@ -218,7 +218,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		if perr != nil {
 			return fmt.Errorf("[Xray] proxy inbound: %w", perr)
 		}
-		xrayconfig.ApplySniffing(&cfg, o.sniffing)
+		xrayconfig.ApplySniffing(&cfg, o.sniffing, routing.LocalNetworks)
 		builtCfg, berr := cfg.Build()
 		if berr != nil {
 			return fmt.Errorf("[Xray] Config build failed: %w", berr)
@@ -274,7 +274,11 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 	}
 	log.Println("[Xray] Core initialized")
 
-	sniffing := xrayconfig.AppSniffing(o.sniffing)
+	sniffing, err := xrayconfig.AppSniffing(o.sniffing, routing.LocalNetworks)
+	if err != nil {
+		x.xrayRollback()
+		return fmt.Errorf("[Xray] sniffing: %w", err)
+	}
 	appProxy, err := x.newXrayBridgeProxy(x.xrayCoreInstance, xrayconfig.AppTrafficTag, sniffing, mark)
 	if err != nil {
 		x.xrayRollback()

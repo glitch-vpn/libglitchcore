@@ -2,6 +2,7 @@ package xrayconfig
 
 import (
 	"encoding/json"
+	"net"
 	"slices"
 	"testing"
 
@@ -73,14 +74,14 @@ func TestApplySniffing(t *testing.T) {
 		t.Fatalf("ApplyProxyInbound: %v", err)
 	}
 
-	ApplySniffing(cfg, true)
+	ApplySniffing(cfg, true, false)
 	for _, in := range cfg.InboundConfigs {
 		if got := len(in.SniffingConfig.DestOverride); got != 4 {
 			t.Fatalf("sniffing on: inbound %q destOverride = %v, want full set", in.Tag, in.SniffingConfig.DestOverride)
 		}
 	}
 
-	ApplySniffing(cfg, false)
+	ApplySniffing(cfg, false, false)
 	for _, in := range cfg.InboundConfigs {
 		sc := in.SniffingConfig
 		if sc == nil || !sc.Enabled || !sc.RouteOnly {
@@ -101,7 +102,7 @@ func TestApplySniffing(t *testing.T) {
 	if _, err := ApplyProxyInbound(full, 10808, "", ""); err != nil {
 		t.Fatalf("ApplyProxyInbound: %v", err)
 	}
-	ApplySniffing(full, false)
+	ApplySniffing(full, false, false)
 	if _, err := full.Build(); err != nil {
 		t.Fatalf("cfg.Build() with fakedns-only sniffing failed: %v", err)
 	}
@@ -115,9 +116,12 @@ func TestAppSniffing_MatchesTheInboundSet(t *testing.T) {
 		if _, err := ApplyProxyInbound(cfg, 10808, "", ""); err != nil {
 			t.Fatalf("ApplyProxyInbound: %v", err)
 		}
-		ApplySniffing(cfg, content)
+		ApplySniffing(cfg, content, false)
 		sc := cfg.InboundConfigs[0].SniffingConfig
-		got := AppSniffing(content)
+		got, err := AppSniffing(content, false)
+		if err != nil {
+			t.Fatalf("AppSniffing: %v", err)
+		}
 		if !got.Enabled || got.RouteOnly != sc.RouteOnly || !slices.Equal(got.OverrideDestinationForProtocol, []string(sc.DestOverride)) {
 			t.Fatalf("content sniffing %v: AppSniffing = %+v, inbound = %+v", content, got, sc)
 		}
@@ -139,6 +143,49 @@ func TestBuildConfig_OpensNoInbound(t *testing.T) {
 		t.Fatalf("TUN-path config has %d inbounds, want none", n)
 	}
 	if _, err := res.Config.Build(); err != nil {
+		t.Fatalf("cfg.Build(): %v", err)
+	}
+}
+
+// Content sniffing skips every local network except the fake-IP pools, whose
+// restoration is a sniffer too.
+func TestAppSniffing_ExcludesLocalNetworksButNotTheFakePools(t *testing.T) {
+	request, err := AppSniffing(true, true)
+	if err != nil {
+		t.Fatalf("AppSniffing: %v", err)
+	}
+	for ip, excluded := range map[string]bool{
+		"192.168.1.1":  true,
+		"10.0.0.1":     true,
+		"127.0.0.1":    true,
+		"169.254.1.1":  true,
+		"fd00::1":      true,
+		"fe80::1":      true,
+		"fc00:4000::1": true,
+		"fc01::1":      true,
+		"fc00::1":      false,
+		"fc00:3fff::1": false,
+		"198.19.0.5":   false,
+		"8.8.8.8":      false,
+		"2001:db8::1":  false,
+	} {
+		if got := request.ExcludeForIP.Match(net.ParseIP(ip)); got != excluded {
+			t.Errorf("%s excluded = %v, want %v", ip, got, excluded)
+		}
+	}
+	if open, err := AppSniffing(true, false); err != nil || open.ExcludeForIP != nil {
+		t.Fatalf("local networks must be sniffed when the option is off: %v %v", open.ExcludeForIP, err)
+	}
+
+	cfg := &xrayConf.Config{}
+	if _, err := ApplyProxyInbound(cfg, 10808, "", ""); err != nil {
+		t.Fatalf("ApplyProxyInbound: %v", err)
+	}
+	ApplySniffing(cfg, true, true)
+	if len(cfg.InboundConfigs[0].SniffingConfig.IPsExcluded) == 0 {
+		t.Fatal("the proxy inbound must exclude the local networks too")
+	}
+	if _, err := cfg.Build(); err != nil {
 		t.Fatalf("cfg.Build(): %v", err)
 	}
 }

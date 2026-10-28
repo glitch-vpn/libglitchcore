@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"net/netip"
 	"strconv"
 
+	"github.com/xtls/xray-core/common/geodata"
 	"github.com/xtls/xray-core/common/session"
 	xrayConf "github.com/xtls/xray-core/infra/conf"
+
+	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
 const (
@@ -48,33 +52,89 @@ func sniffingConfig() *xrayConf.SniffingConfig {
 	}
 }
 
-// ApplySniffing (call after ApplyProxyInbound) trims destOverride to just
-// "fakedns" when contentSniffing=false.
-func ApplySniffing(cfg *xrayConf.Config, contentSniffing bool) {
-	if contentSniffing {
-		return // ApplyProxyInbound already installed the full sniffer set
+// localSniffExclusions lists the local networks content sniffing leaves
+// alone: a LAN device reached by IP keeps its address-based routing instead of
+// being re-routed by a name read from its traffic. The fake-IP pools stay out
+// of it, since fake-DNS restoration is itself a sniffer and fc00::/18 lies
+// inside the local fc00::/7.
+func localSniffExclusions() []string {
+	hole := netip.MustParsePrefix(fakeIPv6Pool)
+	var out []string
+	for _, c := range routing.LocalNetworkCIDRs {
+		p := netip.MustParsePrefix(c)
+		if !p.Overlaps(hole) {
+			out = append(out, c)
+			continue
+		}
+		for _, rest := range prefixesWithout(p, hole) {
+			out = append(out, rest.String())
+		}
 	}
-	dest := sniffedProtocols(false)
+	return out
+}
+
+// prefixesWithout returns the prefixes covering base minus hole, which lies
+// inside base.
+func prefixesWithout(base, hole netip.Prefix) []netip.Prefix {
+	if base.Bits() >= hole.Bits() {
+		return nil
+	}
+	var out []netip.Prefix
+	for bits := base.Bits() + 1; bits <= hole.Bits(); bits++ {
+		inside := netip.PrefixFrom(hole.Addr(), bits).Masked()
+		out = append(out, siblingOf(inside))
+	}
+	return out
+}
+
+// siblingOf is the other half of the prefix's parent.
+func siblingOf(p netip.Prefix) netip.Prefix {
+	b := p.Addr().AsSlice()
+	bit := p.Bits() - 1
+	b[bit/8] ^= 0x80 >> (bit % 8)
+	addr, _ := netip.AddrFromSlice(b)
+	return netip.PrefixFrom(addr, p.Bits()).Masked()
+}
+
+// ApplySniffing (call after ApplyProxyInbound) sets what each inbound sniffs:
+// the full set, or just "fakedns" when contentSniffing=false, and none of the
+// local networks when excludeLocal is set.
+func ApplySniffing(cfg *xrayConf.Config, contentSniffing, excludeLocal bool) {
+	dest := sniffedProtocols(contentSniffing)
 	for i := range cfg.InboundConfigs {
 		if cfg.InboundConfigs[i].SniffingConfig == nil {
 			continue
 		}
-		cfg.InboundConfigs[i].SniffingConfig = &xrayConf.SniffingConfig{
+		sc := &xrayConf.SniffingConfig{
 			Enabled:      true,
 			DestOverride: dest,
 			RouteOnly:    true,
 		}
+		if excludeLocal {
+			sc.IPsExcluded = localSniffExclusions()
+		}
+		cfg.InboundConfigs[i].SniffingConfig = sc
 	}
 }
 
 // AppSniffing is the sniffing an in-process dial of app traffic carries: the
 // set ApplySniffing leaves on an inbound.
-func AppSniffing(contentSniffing bool) session.SniffingRequest {
-	return session.SniffingRequest{
+func AppSniffing(contentSniffing, excludeLocal bool) (session.SniffingRequest, error) {
+	request := session.SniffingRequest{
 		Enabled:                        true,
 		OverrideDestinationForProtocol: sniffedProtocols(contentSniffing),
 		RouteOnly:                      true,
 	}
+	if excludeLocal {
+		rules, err := geodata.ParseIPRules(localSniffExclusions())
+		if err != nil {
+			return session.SniffingRequest{}, err
+		}
+		if request.ExcludeForIP, err = geodata.IPReg.BuildIPMatcher(rules); err != nil {
+			return session.SniffingRequest{}, err
+		}
+	}
+	return request, nil
 }
 
 func findInboundIdx(inbounds []xrayConf.InboundDetourConfig, tag string) int {

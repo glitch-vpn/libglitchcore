@@ -140,6 +140,12 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 			"QUIC": {Ports: []string{"443"}},
 		},
 	}
+	if prof.LocalNetworks {
+		// A local destination keeps its address-based routing instead of being
+		// re-routed by a name read from its traffic. Fake-ip restoration is not
+		// the sniffer's, so it is unaffected.
+		raw.Sniffer.SkipDstAddress = routing.LocalNetworkCIDRs
+	}
 
 	if in.MixedPort > 0 {
 		if in.ProxyUser != "" && in.ProxyPass != "" {

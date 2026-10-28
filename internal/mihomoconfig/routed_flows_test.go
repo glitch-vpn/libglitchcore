@@ -231,3 +231,18 @@ func TestBuildConfig_NamedFlowNeverGoesDirectOnLocalNetworks(t *testing.T) {
 		{"normal local address goes direct", "", C.TCP, "", "10.255.255.1", "", "DIRECT"},
 	})
 }
+
+// The sniffer leaves local destinations alone when local networks go direct.
+func TestBuildConfig_SnifferSkipsLocalNetworks(t *testing.T) {
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
+	for _, on := range []bool{true, false} {
+		prof := routing.Profile{LocalNetworks: on}
+		cfg, err := BuildConfig([]string{forceFlowLink}, Inbound{Bridge: true, ForceProxy: true, DNS: dns}, Options{}, prof)
+		if err != nil {
+			t.Fatalf("BuildConfig: %v", err)
+		}
+		if got := len(cfg.Sniffer.SkipDstAddress) > 0; got != on {
+			t.Fatalf("local networks %v: sniffer skip-dst-address = %v", on, cfg.Sniffer.SkipDstAddress)
+		}
+	}
+}

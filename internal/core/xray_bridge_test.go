@@ -41,7 +41,11 @@ func startXrayForBridge(t *testing.T, prof routing.Profile, dns dnsconfig.Config
 
 func xrayAppProxy(t *testing.T, x *CoreController, inst *xrayCore.Instance) *xrayBridgeProxy {
 	t.Helper()
-	p, err := x.newXrayBridgeProxy(inst, xrayconfig.AppTrafficTag, xrayconfig.AppSniffing(true), x.sessionGen.Load())
+	sniffing, err := xrayconfig.AppSniffing(true, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := x.newXrayBridgeProxy(inst, xrayconfig.AppTrafficTag, sniffing, x.sessionGen.Load())
 	if err != nil {
 		t.Fatal(err)
 	}
