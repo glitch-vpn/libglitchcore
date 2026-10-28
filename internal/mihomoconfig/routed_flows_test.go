@@ -23,10 +23,6 @@ import (
 //go:linkname resolveMetadata github.com/metacubex/mihomo/tunnel.resolveMetadata
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error)
 
-// mihomo caches the "cn" list it verifies a geo database by, for the process:
-// a test that loads valid files makes the unusable-file check in
-// TestBuildConfig_GeoAssetsAreCallerSupplied pass vacuously, so this file sorts
-// after mihomoconfig_test.go and runs behind it.
 // useGeoFiles points mihomo's home at made-up geo databases: glitch-test is
 // 198.51.100.0/24 and glitch.test, cn is 203.0.113.0/24.
 func useGeoFiles(t *testing.T) {
@@ -53,7 +49,14 @@ func useGeoFiles(t *testing.T) {
 	}
 	prev := C.Path.HomeDir()
 	C.SetHomeDir(home)
-	t.Cleanup(func() { C.SetHomeDir(prev) })
+	// mihomo caches a geo matcher by list name, whichever file it came from.
+	geodata.ClearGeoSiteCache()
+	geodata.ClearGeoIPCache()
+	t.Cleanup(func() {
+		C.SetHomeDir(prev)
+		geodata.ClearGeoSiteCache()
+		geodata.ClearGeoIPCache()
+	})
 }
 
 type routedFlow struct {
@@ -184,10 +187,9 @@ func TestBuildRules_ForceProxyUDPDoesNotReachTheTiers(t *testing.T) {
 		{Block: []string{"domain:ads.example"}, Proxy: []string{"process:app.exe"}},
 	}
 	for _, withBlock := range []bool{true, false} {
-		prof := routing.Profile{Mode: routing.ModeDirectAll, Tiers: tiers}
+		prof := routing.Profile{Mode: routing.ModeDirectAll, Tiers: append([]routing.Tier(nil), tiers...)}
 		if !withBlock {
-			prof.Tiers = tiers[:1]
-			prof.Tiers[0].Proxy = []string{"process:app.exe"}
+			prof.Tiers = []routing.Tier{{Direct: tiers[0].Direct, Proxy: []string{"process:app.exe"}}}
 		}
 		raw := config.DefaultRawConfig()
 		raw.GeodataMode = true
@@ -206,4 +208,26 @@ func TestBuildRules_ForceProxyUDPDoesNotReachTheTiers(t *testing.T) {
 			{"normal udp to a direct-tier domain", "", C.UDP, "www.example.com", "", "", "DIRECT"},
 		})
 	}
+}
+
+// A flow carrying a name and a local address must not go direct: DIRECT dials
+// the name, which can resolve to another address.
+func TestBuildConfig_NamedFlowNeverGoesDirectOnLocalNetworks(t *testing.T) {
+	prof := routing.Profile{
+		Mode:          routing.ModeProxyAll,
+		Tiers:         []routing.Tier{{Proxy: []string{"process:app.exe"}}},
+		LocalNetworks: true,
+	}
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeNormal, Servers: []string{"1.1.1.1"}}
+	cfg, err := BuildConfig([]string{forceFlowLink}, Inbound{Bridge: true, ForceProxy: true, DNS: dns}, Options{}, prof)
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	f := ForceProxyInName
+	routeFlows(t, cfg, Target([]string{forceFlowLink}), []routedFlow{
+		{"force named flow with a local address", f, C.TCP, "mixed.test", "10.255.255.1", "", "target"},
+		{"normal named flow with a local address", "", C.TCP, "mixed.test", "10.255.255.1", "", "target"},
+		{"force local address goes direct", f, C.TCP, "", "10.255.255.1", "", "DIRECT"},
+		{"normal local address goes direct", "", C.TCP, "", "10.255.255.1", "", "DIRECT"},
+	})
 }

@@ -87,7 +87,7 @@ func routeFlows(t *testing.T, prof routing.Profile, flows []routedFlow) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ApplyDNS(res.Config, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, prof)
+	ApplyDNS(res.Config, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}, Hosts: map[string][]string{"mixed.test": {"10.255.255.1", "203.0.113.7"}}}, prof)
 	built, err := res.Config.Build()
 	if err != nil {
 		t.Fatal(err)
@@ -154,4 +154,27 @@ func TestApply_ForceProxyLocalNetworksOff(t *testing.T) {
 		{"force local network goes to proxy", f, xnet.Network_TCP, "192.168.1.1", 80, OutboundTag},
 		{"force blocked local network", f, xnet.Network_TCP, "192.168.5.9", 80, blockTag},
 	})
+}
+
+// A name answering a local and a public address never goes direct on the
+// local-networks rule, whatever the router's domain strategy: the direct
+// outbound would dial whichever address it resolves.
+func TestApply_NamedFlowNeverGoesDirectOnLocalNetworks(t *testing.T) {
+	for _, strategy := range []string{"AsIs", "IPIfNonMatch", "IPOnDemand"} {
+		t.Run(strategy, func(t *testing.T) {
+			prof := routing.Profile{
+				Mode:           routing.ModeProxyAll,
+				Tiers:          []routing.Tier{{Proxy: []string{"process:app.exe"}}},
+				LocalNetworks:  true,
+				DomainStrategy: strategy,
+			}
+			tcp := xnet.Network_TCP
+			routeFlows(t, prof, []routedFlow{
+				{"force named flow", ForceProxyTag, tcp, "mixed.test", 443, OutboundTag},
+				{"normal named flow", AppTrafficTag, tcp, "mixed.test", 443, OutboundTag},
+				{"force local address", ForceProxyTag, tcp, "10.255.255.1", 443, directTag},
+				{"normal local address", AppTrafficTag, tcp, "10.255.255.1", 443, directTag},
+			})
+		})
+	}
 }

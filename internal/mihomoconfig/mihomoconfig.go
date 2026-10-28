@@ -290,16 +290,19 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 		rules = append(rules, matcherRules(tier.Direct, "DIRECT")...)
 		rules = append(rules, matcherRules(tier.Proxy, target)...)
 	}
+	catchAll := target
+	if p.ResolvedMode() == routing.ModeDirectAll {
+		catchAll = "DIRECT"
+	}
 	if p.LocalNetworks {
+		// DIRECT dials the flow's host when it has one, so only a flow without
+		// a name goes direct on a local address.
+		rules = append(rules, "DOMAIN-REGEX,.,"+catchAll)
 		for _, cidr := range routing.LocalNetworkCIDRs {
 			rules = append(rules, "IP-CIDR,"+cidr+",DIRECT,no-resolve")
 		}
 	}
-	if p.ResolvedMode() == routing.ModeDirectAll {
-		rules = append(rules, "MATCH,DIRECT")
-	} else {
-		rules = append(rules, "MATCH,"+target)
-	}
+	rules = append(rules, "MATCH,"+catchAll)
 	return rules
 }
 
@@ -318,6 +321,7 @@ func forceFlowRules(p routing.Profile, target string) []string {
 		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
 	}
 	if p.LocalNetworks {
+		rules = append(rules, "DOMAIN-REGEX,.,"+target)
 		for _, cidr := range routing.LocalNetworkCIDRs {
 			rules = append(rules, "IP-CIDR,"+cidr+",DIRECT,no-resolve")
 		}

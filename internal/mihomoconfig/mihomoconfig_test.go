@@ -9,6 +9,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
+	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/listener/inbound"
@@ -723,6 +724,8 @@ func TestBuildConfig_GeoAssetsAreCallerSupplied(t *testing.T) {
 	// file intact - mihomo's own bootstrap would delete it first.
 	junk := t.TempDir()
 	C.SetHomeDir(junk)
+	geodata.ClearGeoSiteCache()
+	geodata.ClearGeoIPCache()
 	site := filepath.Join(junk, "geosite.dat")
 	if err := os.WriteFile(site, []byte("not a geosite dat"), 0o644); err != nil {
 		t.Fatal(err)

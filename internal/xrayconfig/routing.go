@@ -105,6 +105,9 @@ func matcherRules(matchers []string, t target) []json.RawMessage {
 	return rules
 }
 
+// anyDomain matches every flow addressed by a name.
+const anyDomain = "regexp:."
+
 // applyRouting is a free function because RoutingProfile aliases a type from
 // another package; existing balancers on cfg.RouterConfig are preserved.
 func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targetIsBalancer bool) {
@@ -157,6 +160,12 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 			}
 		}
 		if p.LocalNetworks {
+			// A name-addressed flow stays off the LAN rule: the router may
+			// resolve it to a local address while the direct outbound dials
+			// another one.
+			named := fieldRule{InboundTag: []string{ForceProxyTag}, Domain: []string{anyDomain}}
+			proxy.apply(&named)
+			rules = append(rules, named.raw())
 			lan := fieldRule{InboundTag: []string{ForceProxyTag}, IP: routing.LocalNetworkCIDRs}
 			direct.apply(&lan)
 			rules = append(rules, lan.raw())
@@ -171,17 +180,21 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		rules = append(rules, matcherRules(tier.Proxy, proxy)...)
 	}
 
-	if p.LocalNetworks {
-		r := fieldRule{IP: routing.LocalNetworkCIDRs}
-		direct.apply(&r)
-		rules = append(rules, r.raw())
-	}
-
 	catchAll := fieldRule{InboundTag: []string{AppTrafficTag}}
 	if p.ResolvedMode() == ModeDirectAll {
 		direct.apply(&catchAll)
 	} else {
 		proxy.apply(&catchAll)
+	}
+
+	if p.LocalNetworks {
+		// Only a flow addressed by IP goes direct on the LAN rule; a name takes
+		// the catch-all outcome it would reach anyway.
+		named := fieldRule{InboundTag: []string{AppTrafficTag}, Domain: []string{anyDomain}, OutboundTag: catchAll.OutboundTag, BalancerTag: catchAll.BalancerTag}
+		rules = append(rules, named.raw())
+		r := fieldRule{IP: routing.LocalNetworkCIDRs}
+		direct.apply(&r)
+		rules = append(rules, r.raw())
 	}
 	rules = append(rules, catchAll.raw())
 
