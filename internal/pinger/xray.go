@@ -18,6 +18,7 @@ import (
 	xrayCore "github.com/xtls/xray-core/core"
 
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/xraydialer"
 )
 
 func init() {
@@ -60,7 +61,7 @@ func measureXray(ctx context.Context, link, probeURL string) (time.Duration, err
 	// lines with it.
 	logApp := string((&xrayAppLog.Config{}).ProtoReflect().Descriptor().FullName())
 	built.App = slices.DeleteFunc(built.App, func(app *serial.TypedMessage) bool { return app.Type == logApp })
-	inst, err := xrayCore.New(built)
+	inst, err := xraydialer.NewProbe(built)
 	if err != nil {
 		return 0, fmt.Errorf("new instance: %w", err)
 	}

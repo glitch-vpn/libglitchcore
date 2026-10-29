@@ -16,6 +16,7 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/xraydialer"
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xtls/xray-core/common/geodata"
 	xrayNet "github.com/xtls/xray-core/common/net"
@@ -23,7 +24,6 @@ import (
 	xrayCore "github.com/xtls/xray-core/core"
 	xrayStats "github.com/xtls/xray-core/features/stats"
 	xrayConf "github.com/xtls/xray-core/infra/conf"
-	"github.com/xtls/xray-core/transport/internet"
 )
 
 type xrayEngine struct{}
@@ -121,7 +121,7 @@ func dropXrayGeoMatchersOnFolderChange() error {
 	if folder == xrayGeoFolder {
 		return nil
 	}
-	internet.InitSystemDialer(nil, nil)
+	xraydialer.Release()
 	runtime.GC()
 	runtime.GC()
 	if err := geodata.IPReg.Reload(); err != nil {
@@ -351,7 +351,7 @@ func waitSocksReady(endpoint string) bool {
 
 func (x *CoreController) newXrayInstance(cfg *xrayCore.Config) (*xrayCore.Instance, error) {
 	life, cancel := context.WithCancel(context.Background())
-	inst, err := xrayCore.NewWithContext(life, cfg)
+	inst, err := xraydialer.NewSession(life, cfg)
 	if err != nil {
 		cancel()
 		return nil, err
@@ -373,6 +373,7 @@ func (x *CoreController) xrayRollback() {
 	x.xrayTraffic.Store(nil)
 	x.endXrayLife()
 	if x.xrayCoreInstance != nil {
+		xraydialer.EndSession(x.xrayCoreInstance)
 		_ = x.xrayCoreInstance.Close()
 		x.xrayCoreInstance = nil
 	}
@@ -390,6 +391,7 @@ func (x *CoreController) xrayStopLocked() {
 	x.endXrayLife()
 
 	if x.xraySession.running.Load() {
+		xraydialer.EndSession(x.xrayCoreInstance)
 		done := make(chan struct{})
 		go func() {
 			if cerr := x.xrayCoreInstance.Close(); cerr != nil {
