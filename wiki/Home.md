@@ -8,9 +8,9 @@ Three engines are compiled in and one runs at a time:
 
 | Engine | Protocols |
 |---|---|
-| Xray | VLESS, VMess, Trojan, Shadowsocks (Reality, XTLS, uTLS) |
+| Xray | VLESS, VMess, Trojan, Shadowsocks (Reality, XTLS, uTLS), SOCKS5, HTTP(S) proxies |
 | AmneziaWG | WireGuard with obfuscation, AWG 1.0, 2.0 and 3.x |
-| mihomo | Hysteria2, TUIC, AnyTLS, WireGuard/AWG outbound |
+| mihomo | Hysteria2, TUIC, AnyTLS, WireGuard/AWG outbound, SOCKS5 proxies |
 
 Targets: Android (arm64, x86_64), Windows (amd64), Linux (amd64). The API is a
 plain C ABI, so it binds from Dart, Kotlin/Java, Swift, C#, Python or anything

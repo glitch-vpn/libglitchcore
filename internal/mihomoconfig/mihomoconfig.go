@@ -14,6 +14,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
+	"github.com/glitch-vpn/libglitchcore/internal/proxylink"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/vlessencryption"
 	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
@@ -613,6 +614,10 @@ func proxyFromLink(link, name string) (map[string]any, error) {
 		return anytlsProxy(link, name)
 	case vmesslink.IsLink(link):
 		return vmessProxy(link, name)
+	case proxylink.Protocol(link) == proxylink.Socks:
+		return socksProxy(link, name)
+	case proxylink.Protocol(link) == proxylink.HTTP:
+		return nil, errHTTPProxyOnMihomo
 	case awgconfig.IsLink(link):
 		return wireguardProxy(link, name)
 	default:

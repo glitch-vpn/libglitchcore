@@ -40,6 +40,17 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 	check("vmess://eyJhZGQiOiJob3N0In0", vless)
 	check("ss://YWVzOnB3QGhvc3Q6ODM4OA", vless)
 	check("trojan://pass@host:443", vless)
+	check("socks://YWxpY2U6czNjcmV0@host:1080", vless)
+	check("socks5://alice:s3cret@host:1080", vless)
+	check("socks5h://host:1080", vless)
+
+	// mihomo would send an http proxy's UDP direct, so only xray carries it.
+	xrayOnly := ""
+	if hasXray {
+		xrayOnly = "xray"
+	}
+	check("http://YWxpY2U6czNjcmV0@host:8080", xrayOnly)
+	check("https://alice:s3cret@host:443?sni=x", xrayOnly)
 
 	awg := ""
 	if hasAwg {
@@ -59,4 +70,5 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 	check("anytls://pass@host:443", mihomoOnly)
 
 	check("nonsense://whatever", "")
+	check("socks4://host:1080", "")
 }

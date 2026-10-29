@@ -39,6 +39,8 @@ func TestMeasurePinnedEngineRefusesALinkItDoesNotCarry(t *testing.T) {
 		{"xray", "hysteria2://auth@127.0.0.1:1#h"},
 		{"xray", "awg://abc"},
 		{"mihomo", "awg://abc"},
+		{"mihomo", "http://127.0.0.1:1"},
+		{"mihomo", "https://127.0.0.1:1?sni=x"},
 		{"awg", "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@127.0.0.1:1?type=tcp&security=tls"},
 		{"nonesuch", "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@127.0.0.1:1?type=tcp&security=tls"},
 	}

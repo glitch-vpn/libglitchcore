@@ -190,13 +190,19 @@ func TestFromLink_SSLegacyBase64SplitsHostAndPortLikeNetSplitHostPort(t *testing
 	}
 }
 
-// Made-up keys.
-func TestFromLink_WireGuardLinks(t *testing.T) {
+// Made-up keys and credentials.
+func TestFromLink_ProxiesAndWireGuardLinks(t *testing.T) {
 	const (
 		privateKey = "gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y="
 		publicKey  = "kVNWJ0pOFM11/p62BQNCmJQIffiVca8AipT6DTXxeVA="
 	)
 	cases := map[string]Server{
+		"socks://YWxpY2U6czNjcmV0@203.0.113.7:1080#Home+Socks":                                     {Protocol: "socks", Host: "203.0.113.7", Port: 1080, Name: "Home Socks"},
+		"socks5://alice:s3cret@socks.example.com:1081#S5":                                          {Protocol: "socks", Host: "socks.example.com", Port: 1081, Name: "S5"},
+		"socks5h://Ym9iOj8/Pz8=@[2001:db8::7]:1082":                                                {Protocol: "socks", Host: "2001:db8::7", Port: 1082},
+		"http://YWxpY2U6czNjcmV0@203.0.113.7:8080#Web":                                             {Protocol: "http", Host: "203.0.113.7", Port: 8080, Name: "Web"},
+		"https://alice:s3cret@proxy.example.com:443?sni=x.example.com#TLS":                         {Protocol: "http", Host: "proxy.example.com", Port: 443, Name: "TLS"},
+		"https://alice:s3cret@proxy.example.com:443?insecure=1#Refused":                            {Protocol: "http", Host: "proxy.example.com", Port: 443, Name: "Refused"},
 		"wireguard://" + privateKey + "@wg.example.com:51820?publickey=" + publicKey + "#WARP+One": {Protocol: "awg", Host: "wg.example.com", Port: 51820, Name: "WARP One"},
 		"wg://[2001:db8::1]:2408?pk=" + privateKey + "&pub=" + publicKey:                           {Protocol: "awg", Host: "2001:db8::1", Port: 2408},
 	}

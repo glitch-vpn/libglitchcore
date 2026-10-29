@@ -15,6 +15,7 @@ import (
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/proxylink"
 )
 
 func measureMihomo(ctx context.Context, link, probeURL string) (time.Duration, error) {
@@ -56,6 +57,7 @@ func init() {
 				strings.HasPrefix(lower, "hy2://") ||
 				strings.HasPrefix(lower, "tuic://") ||
 				strings.HasPrefix(lower, "anytls://") ||
+				proxylink.Protocol(trimmed) == proxylink.Socks ||
 				awgconfig.IsLink(trimmed)
 		},
 		measure: measureMihomo,

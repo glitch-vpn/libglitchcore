@@ -4,7 +4,7 @@ in: [Xray] Failed to start: [Xray] Link parse error: parse link: parse "vless://
 out: [Xray] Failed to start: [Xray] Link parse error: parse link: parse "vless://[redacted]": invalid port ":notaport" after host
 
 in: [STACK] tun://GlitchVPN <-> socks5://k3fZ0qLmX9aB2cD4:Wq9rT2yU4iO6pA8sD0fG2hJ4kL6zX8cV0bN2mQ4wE6r@127.0.0.1:61234
-out: [STACK] tun://GlitchVPN <-> socks5://[redacted]@127.0.0.1:61234
+out: [STACK] tun://GlitchVPN <-> socks5://[redacted]
 
 in: probe https://sub.example.com/api/v1/client/subscribe?token=abc123 failed
 out: probe https://sub.example.com/[redacted] failed
@@ -51,11 +51,20 @@ out: infra/conf: invalid "password": [redacted]
 in: hy2 auth=Secret1 pbk=abc
 out: hy2 auth=[redacted] pbk=[redacted]
 
-in: dial http://Ym9i/OnBhc3M@203.0.113.7:8080#Office failed
-out: dial http://[redacted]@203.0.113.7:8080#[redacted] failed
+in: dial socks://YWxpY2U6czNjcmV0@203.0.113.7:1080#Home+Socks failed
+out: dial socks://[redacted] failed
+
+in: proxy socks5h://alice:s3cret@203.0.113.7:1080 refused
+out: proxy socks5h://[redacted] refused
+
+in: socks4://alice@203.0.113.7:1080 is not supported
+out: socks4://[redacted] is not supported
 
 in: dial http://Ym9i/OnBhc3M@203.0.113.7:8080#Office failed
 out: dial http://[redacted]@203.0.113.7:8080#[redacted] failed
+
+in: dial https://alice:s3cret@proxy.example.com:443?sni=front.example.com#Work failed
+out: dial https://[redacted]@proxy.example.com:443?[redacted] failed
 
 in: link wireguard://gTsOy%2FCY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y%3D@203.0.113.7:51820?publickey=kVNWJ0pOFM11/p62BQNCmJQIffiVca8AipT6DTXxeVA=&reserved=1,2,3#WARP refused
 out: link wireguard://[redacted] refused

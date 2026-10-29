@@ -101,7 +101,8 @@ func startExpectingError(t *testing.T, ev *eventLog, engine, link string) {
 	res := core.EngineStart(engine, core.EngineStartRequest{
 		Config: link,
 		DNS:    "1.1.1.1",
-		Opts:   map[string]string{"proxyPort": strconv.Itoa(freePort(t))},
+		// The geo folder lets mihomo reach the link: without one it fails earlier.
+		Opts: map[string]string{"proxyPort": strconv.Itoa(freePort(t)), "geoAssetsDir": smokeAssetDir},
 	})
 	if res != core.ResultSuccess {
 		return

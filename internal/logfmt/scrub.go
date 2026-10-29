@@ -40,6 +40,7 @@ var shareLinkSchemes = map[string]bool{
 	"hysteria": true, "hysteria2": true, "hy2": true, "tuic": true,
 	"anytls": true, "awg": true, "wireguard": true, "wg": true,
 	"juicity": true, "mieru": true, "snell": true, "naive": true, "ssh": true,
+	"socks": true, "socks4": true, "socks5": true, "socks5h": true,
 }
 
 // Scrub removes credentials from a line: whole share links, the userinfo,

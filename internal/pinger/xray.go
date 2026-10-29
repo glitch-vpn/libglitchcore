@@ -17,6 +17,7 @@ import (
 	"github.com/xtls/xray-core/common/serial"
 	xrayCore "github.com/xtls/xray-core/core"
 
+	"github.com/glitch-vpn/libglitchcore/internal/proxylink"
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/xraydialer"
 )
@@ -24,11 +25,12 @@ import (
 func init() {
 	registerMeasurer(engineMeasurer{
 		engine: "xray",
-		match: func(_, lower string) bool {
+		match: func(trimmed, lower string) bool {
 			return strings.HasPrefix(lower, "vless://") ||
 				strings.HasPrefix(lower, "vmess://") ||
 				strings.HasPrefix(lower, "ss://") ||
-				strings.HasPrefix(lower, "trojan://")
+				strings.HasPrefix(lower, "trojan://") ||
+				proxylink.IsLink(trimmed)
 		},
 		measure: measureXray,
 	})
