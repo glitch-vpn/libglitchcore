@@ -103,14 +103,21 @@ func startAwg3Server(t *testing.T, body string) string {
 		clientPrivate.base64(), headerKey.base64(), serverPublic.base64(), port)
 }
 
-// An AWG 3.x config with header protection reaches its server through
-// mihomo's 3.x device, and the ping reaches it the same way.
+// An AWG 3.x config with header protection pings its server through mihomo's
+// 3.x device, and a session reaches it the same way.
 func TestSmoke_Mihomo_AmneziaWG3(t *testing.T) {
 	core.Initialize()
 	ini := startAwg3Server(t, "198.51.100.66")
 	echoURL := "http://" + awgServerAddr + "/"
-	ev := captureEvents(t)
 
+	// Before the session: the ping's device and the session's share one key,
+	// and the peer answers only the endpoint it heard from last.
+	results := pinger.Measure(pinger.Request{Links: []string{ini}, ProbeURL: echoURL, TimeoutMs: 5000})
+	if len(results) != 1 || !results[0].Alive {
+		t.Fatalf("ping = %+v", results)
+	}
+
+	ev := captureEvents(t)
 	startEngineInProxyMode(t, "mihomo", ini, map[string]string{
 		"probeUrl":    echoURL,
 		"ipv4EchoUrl": echoURL,
@@ -127,10 +134,5 @@ func TestSmoke_Mihomo_AmneziaWG3(t *testing.T) {
 	}
 	if ip.IPv4 != "198.51.100.66" {
 		t.Fatalf("ipv4 = %q (err %q)", ip.IPv4, ip.IPv4Error)
-	}
-
-	results := pinger.Measure(pinger.Request{Links: []string{ini}, ProbeURL: echoURL, TimeoutMs: 5000})
-	if len(results) != 1 || !results[0].Alive {
-		t.Fatalf("ping = %+v", results)
 	}
 }
