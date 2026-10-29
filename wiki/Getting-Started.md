@@ -109,6 +109,18 @@ when an engine gains an option:
   is `user:pass` or its base64; `socks4://` is refused, and so is an `https://`
   proxy that asks to skip certificate checks (pin it with `pcs`).
 
+  These links and the WireGuard ones are cut by hand, not by a URL parser:
+  the fragment starts at the first `#`, the query at the first `?` before
+  it, and the userinfo runs to the last `@` before the query. A userinfo that
+  holds a `/` or an `@` as written must be bare base64 (letters, digits, `+`,
+  `/`, `-`, `_`, then up to two `=`) that decodes, in the standard or the URL
+  alphabet, padded or not, to a valid UTF-8 login with a `:` and no control
+  character for `socks`, `socks5`, `socks5h`, `http` and `https`, and to
+  exactly 32 bytes for `wireguard` and `wg`. Any other link holding one is
+  refused, since `user:pass@good:80/@evil:80` or `goodexample/@evil:80` would
+  otherwise name another server than a URL parser shows. Host and port run to the first `/` after the userinfo, and
+  the path is dropped. A control character, as written or percent-decoded in
+  the userinfo, the name or a query value, fails the link.
 * `tunFd` — a TUN file descriptor (Android `VpnService`). Leave it out on
   desktop, where the library opens its own adapter, or set `opts.proxyPort`
   instead for a loopback SOCKS proxy with no TUN and no elevation (xray and

@@ -65,9 +65,6 @@ func linkQuery(raw string) (map[string]string, error) {
 		if len(key) == 2 && key[0] == 'i' && key[1] >= '1' && key[1] <= '5' {
 			val = strings.ReplaceAll(val, "+", " ")
 		}
-		if hasControl(val) {
-			return nil, errors.New("wireguard: a value holds a control character")
-		}
 		if _, seen := q[key]; key != "" && !seen {
 			q[key] = strings.TrimSpace(val)
 		}
@@ -147,9 +144,6 @@ func linkToINI(link string) (string, error) {
 	q, err := linkQuery(p.RawQuery)
 	if err != nil {
 		return "", err
-	}
-	if hasControl(p.UserInfo) {
-		return "", errors.New("wireguard: a value holds a control character")
 	}
 
 	privateKey := p.UserInfo

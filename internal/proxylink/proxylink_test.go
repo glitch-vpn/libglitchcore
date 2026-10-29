@@ -32,8 +32,8 @@ func TestParse_ReadsEachClientsSpelling(t *testing.T) {
 			want: Link{Protocol: Socks, Host: "2001:db8::7", Port: 1080, Username: "alice", Password: "s3cret", Name: "Office"},
 		},
 		{
-			name: "socks5h, a password holding '@' and ':'",
-			link: "socks5h://alice:p@ss:w%2Ford@proxy.example.com:1080",
+			name: "socks5h, a password holding an escaped '@' and '/' and a ':'",
+			link: "socks5h://alice:p%40ss:w%2Ford@proxy.example.com:1080",
 			want: Link{Protocol: Socks, Host: "proxy.example.com", Port: 1080, Username: "alice", Password: "p@ss:w/ord"},
 		},
 		{

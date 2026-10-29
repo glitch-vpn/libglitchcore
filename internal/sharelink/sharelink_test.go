@@ -47,13 +47,21 @@ func TestSplit(t *testing.T) {
 		link string
 		want Parts
 	}{
-		"base64 userinfo holding a slash": {
-			"socks://Ym9i/OnBhc3M=@203.0.113.7:1080#Home+Socks",
-			Parts{Scheme: "socks", UserInfo: "Ym9i/OnBhc3M=", Host: "203.0.113.7", Port: 1080, Fragment: "Home+Socks"},
+		"base64 login holding a slash": {
+			"socks://Ym9iOj8/Pz8=@203.0.113.7:1080#Home+Socks",
+			Parts{Scheme: "socks", UserInfo: "Ym9iOj8/Pz8=", Host: "203.0.113.7", Port: 1080, Fragment: "Home+Socks"},
 		},
-		"unescaped @ in the password": {
-			"SOCKS5://alice:p@ss@proxy.example.com:1080/?x=1",
-			Parts{Scheme: "socks5", UserInfo: "alice:p@ss", Host: "proxy.example.com", Port: 1080, RawQuery: "x=1"},
+		"base64 key holding a slash": {
+			"wg://gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y=@203.0.113.7:51820",
+			Parts{Scheme: "wg", UserInfo: "gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y=", Host: "203.0.113.7", Port: 51820},
+		},
+		"plain userinfo": {
+			"SOCKS5://alice:s3cret@proxy.example.com:1080/?x=1",
+			Parts{Scheme: "socks5", UserInfo: "alice:s3cret", Host: "proxy.example.com", Port: 1080, RawQuery: "x=1"},
+		},
+		"escaped @ and / in the password": {
+			"socks5://alice:p%40ss%2Fw@proxy.example.com:1080",
+			Parts{Scheme: "socks5", UserInfo: "alice:p@ss/w", Host: "proxy.example.com", Port: 1080},
 		},
 		"percent-encoded userinfo keeps its plus": {
 			"wireguard://gTsOy%2FCY9+Q%3D@[2001:db8::1]:51820?publickey=a+b#WARP%20One",
@@ -93,5 +101,27 @@ func TestSplit_ErrorKeepsTheLinkOut(t *testing.T) {
 		if strings.Contains(err.Error(), "Pa55") {
 			t.Fatalf("%q: error carries the link: %v", link, err)
 		}
+	}
+}
+
+func TestSplit_Refusals(t *testing.T) {
+	for name, link := range map[string]string{
+		"a path that names another server":  "http://alice:x@good.example:8080/@evil.example:8080",
+		"an unescaped @ in the password":    "socks5://alice:p@ss@proxy.example.com:1080",
+		"a slash in a plain login":          "socks5://alice:p/ss@proxy.example.com:1080",
+		"a dotless host before /@":          "http://goodexample/@evil:8080",
+		"base64 of a login with no colon":   "socks://Ym9iPz8/Pw==@203.0.113.7:1080",
+		"base64 of a short key":             "wireguard://Ym9iOj8/Pz8=@203.0.113.7:51820",
+		"base64 on a scheme taking none":    "vless://Ym9iOj8/Pz8=@203.0.113.7:443",
+		"a decoded line break in the login": "socks5://a%0Ab:c@h.example:1080",
+		"a decoded line break in the name":  "socks5://alice:s3cret@h.example:1080#a%0A[Xray]",
+		"a decoded line break in the query": "https://h.example:443?sni=a%0Ab",
+		"a decoded line break as a plus":    "https://h.example:443?sni=a%0D+b",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got, err := Split(link, "test"); err == nil {
+				t.Fatalf("Split = %+v, want an error", got)
+			}
+		})
 	}
 }
