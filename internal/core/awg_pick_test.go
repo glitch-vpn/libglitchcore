@@ -4,6 +4,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -12,10 +13,22 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/pinger"
 )
 
+// Made-up keys, valid in form, so the awg engine accepts the config.
+const (
+	awgTestPrivateKey = "gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y="
+	awgTestPublicKey  = "kVNWJ0pOFM11/p62BQNCmJQIffiVca8AipT6DTXxeVA="
+)
+
 func awgTestLink(t *testing.T, address, allowedIPs, name string) string {
 	t.Helper()
-	ini := "[Interface]\nPrivateKey = AAAA\nAddress = " + address + "\n\n" +
-		"[Peer]\nPublicKey = BBBB\nEndpoint = 192.0.2.1:51820\nAllowedIPs = " + allowedIPs + "\n"
+	return awgTestLinkWith(t, address, allowedIPs, name, "")
+}
+
+// awgTestLinkWith adds peerLines to the link's [Peer].
+func awgTestLinkWith(t *testing.T, address, allowedIPs, name, peerLines string) string {
+	t.Helper()
+	ini := "[Interface]\nPrivateKey = " + awgTestPrivateKey + "\nAddress = " + address + "\n\n" +
+		"[Peer]\nPublicKey = " + awgTestPublicKey + "\nEndpoint = 192.0.2.1:51820\nAllowedIPs = " + allowedIPs + "\n" + peerLines
 	return awgconfig.EncodeLink(ini, name)
 }
 
@@ -214,5 +227,66 @@ func TestHandleAwgStart_InvalidAwgPickedIsAnErrorEvent(t *testing.T) {
 				t.Fatal("awg marked running after an invalid awgPicked")
 			}
 		})
+	}
+}
+
+// The pool is probed on the awg engine alone: a link only mihomo carries, one
+// with reserved bytes say, is unreachable there and is not picked.
+func TestPickAwg_ProbesOnTheAwgEngine(t *testing.T) {
+	links := []string{
+		awgTestLink(t, "10.1.0.2/32", "0.0.0.0/0", "a"),
+		awgTestLink(t, "10.2.0.2/32", "0.0.0.0/0", "b"),
+	}
+	prev := measureAwgLinks
+	measureAwgLinks = func(req pinger.Request) []pinger.Result {
+		if req.Engine != "awg" {
+			t.Errorf("probe pinned to %q, want awg", req.Engine)
+		}
+		return []pinger.Result{
+			{Index: 0, Engine: "awg", Alive: true, DelayMs: 90},
+			{Index: 1, Engine: "awg", Error: "peer.reserved: reserved bytes are not supported"},
+		}
+	}
+	t.Cleanup(func() { measureAwgLinks = prev })
+
+	got, err := PickAwg(EngineStartRequest{Config: strings.Join(links, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Index != 0 {
+		t.Fatalf("picked #%d, want #0, the link the awg engine carries", got.Index)
+	}
+}
+
+// With every probe failing, a first link the awg engine refuses, one with
+// reserved bytes, is passed over for the first it accepts.
+func TestPickAwg_EveryProbeFailingSkipsALinkTheEngineRefuses(t *testing.T) {
+	links := []string{
+		awgTestLinkWith(t, "10.1.0.2/32", "0.0.0.0/0", "reserved", "Reserved = 1, 2, 3\n"),
+		awgTestLink(t, "10.2.0.2/32", "0.0.0.0/0", "plain"),
+	}
+	stubAwgProbe(t, func(int) bool { return false })
+
+	got, err := PickAwg(EngineStartRequest{Config: strings.Join(links, "\n")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Index != 1 || got.Addresses[0] != "10.2.0.2/32" {
+		t.Fatalf("got %+v, want #1, the link the awg engine accepts", got)
+	}
+}
+
+// With every probe failing and no link the engine accepts, the pick fails with
+// the refusal the start would give for the first link.
+func TestPickAwg_NoLinkTheEngineAcceptsFailsWithItsRefusal(t *testing.T) {
+	links := []string{
+		awgTestLinkWith(t, "10.1.0.2/32", "0.0.0.0/0", "a", "Reserved = 1, 2, 3\n"),
+		awgTestLinkWith(t, "10.2.0.2/32", "0.0.0.0/0", "b", "Reserved = 4, 5, 6\n"),
+	}
+	stubAwgProbe(t, func(int) bool { return false })
+
+	_, err := PickAwg(EngineStartRequest{Config: strings.Join(links, "\n")})
+	if !errors.Is(err, awgconfig.ErrReservedBytes) || !strings.HasPrefix(err.Error(), "parse config: peer.reserved") {
+		t.Fatalf("err = %v, want the engine's reserved-bytes refusal", err)
 	}
 }

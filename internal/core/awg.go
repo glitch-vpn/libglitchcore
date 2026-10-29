@@ -172,34 +172,66 @@ func (x *CoreController) HandleAwgStart(req EngineStartRequest) int32 {
 
 var measureAwgLinks = pinger.Measure
 
-// Multilink: probe each awg:// link, pick by strategy; fall back to first if none alive.
-func pickAwgConfig(links []string, o engineOpts) (string, int) {
+// awgDeviceConfig reads a link into the INI and the UAPI the device is set
+// with, refusing what the awg engine refuses.
+func awgDeviceConfig(link string) (ini, uapi string, err error) {
+	if ini, err = awgconfig.NormalizeToINI(link); err != nil {
+		return "", "", err
+	}
+	if uapi, err = awgconfig.ParseToUAPI(ini); err != nil {
+		return "", "", fmt.Errorf("parse config: %w", err)
+	}
+	return ini, uapi, nil
+}
+
+// Multilink: probe each link, pick by strategy. With none alive the first link
+// the engine accepts is taken, and with none accepted the first one's refusal
+// fails the start.
+func pickAwgConfig(links []string, o engineOpts) (string, int, error) {
 	if len(links) == 0 {
-		return "", 0
+		return "", 0, nil
 	}
 	if len(links) == 1 {
-		return links[0], 0
+		return links[0], 0, nil
 	}
 
-	res := measureAwgLinks(pinger.Request{Links: links, ProbeURL: o.probeURL})
+	// Pinned, so a link the awg engine refuses, such as one with reserved bytes,
+	// is not measured on mihomo and picked.
+	res := measureAwgLinks(pinger.Request{Engine: "awg", Links: links, ProbeURL: o.probeURL})
 	idx := pickAwgWinner(res, o.strategy)
-	if idx < 0 || idx >= len(links) {
-		idx = 0
+	if idx < 0 || idx >= len(links) || !res[idx].Alive {
+		var err error
+		if idx, err = firstAcceptedAwgLink(links); err != nil {
+			return "", 0, err
+		}
 	}
 	delay := "unreachable"
 	if res[idx].Alive {
 		delay = fmt.Sprintf("%dms", res[idx].DelayMs)
 	}
 	log.Printf("[AWG] multilink: %d links, strategy=%q -> picked #%d (%s)", len(links), o.strategy, idx, delay)
-	return links[idx], idx
+	return links[idx], idx, nil
+}
+
+func firstAcceptedAwgLink(links []string) (int, error) {
+	var first error
+	for i, link := range links {
+		_, _, err := awgDeviceConfig(link)
+		if err == nil {
+			return i, nil
+		}
+		if first == nil {
+			first = err
+		}
+	}
+	return 0, first
 }
 
 // chooseAwgLink takes the link a caller already picked through PickAwg when
 // the start names one, so the pool is probed once per connect.
 func chooseAwgLink(links []string, o engineOpts) (string, int, error) {
 	if o.awgPicked == "" {
-		chosen, idx := pickAwgConfig(links, o)
-		return chosen, idx, nil
+		return pickAwgConfig(links, o)
 	}
 	idx, err := strconv.Atoi(o.awgPicked)
 	if err != nil || idx < 0 || idx >= len(links) {
@@ -318,13 +350,9 @@ func (x *CoreController) awgStart(ifName string, tun *tunCopy, rawConfig string,
 		return fmt.Errorf("[AWG] another engine is already running")
 	}
 
-	rawConfig, err := awgconfig.NormalizeToINI(rawConfig)
+	rawConfig, uapiCfg, err := awgDeviceConfig(rawConfig)
 	if err != nil {
 		return fmt.Errorf("[AWG] %w", err)
-	}
-	uapiCfg, err := awgconfig.ParseToUAPI(rawConfig)
-	if err != nil {
-		return fmt.Errorf("[AWG] parse config: %w", err)
 	}
 	// awg (L3) takes only a plain resolver; empty -> INI DNS field.
 	handle, err := awgDeviceUp(x, ifName, tun, rawConfig, uapiCfg, o.dns.FirstPlainServer())

@@ -19,9 +19,9 @@ type AwgPick struct {
 }
 
 // PickAwg runs the pool pick that HandleAwgStart would run and reads the
-// chosen link's own tunnel addresses. A pool whose probes all fail still
-// yields its first link, as a start does; a link with no Interface address is
-// an error rather than a guess.
+// chosen link's own tunnel addresses. A pool whose probes all fail yields its
+// first link the engine accepts, as a start does; a link with no Interface
+// address is an error rather than a guess.
 func PickAwg(req EngineStartRequest) (AwgPick, error) {
 	o, err := optsFromRequest(req, "awg")
 	if err != nil {
@@ -34,7 +34,10 @@ func PickAwg(req EngineStartRequest) (AwgPick, error) {
 	if len(links) == 0 {
 		return AwgPick{}, errors.New("no awg link")
 	}
-	link, idx := pickAwgConfig(links, o)
+	link, idx, err := pickAwgConfig(links, o)
+	if err != nil {
+		return AwgPick{}, err
+	}
 	ini, err := awgconfig.NormalizeToINI(link)
 	if err != nil {
 		return AwgPick{}, err
