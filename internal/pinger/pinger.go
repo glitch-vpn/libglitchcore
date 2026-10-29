@@ -101,10 +101,7 @@ func classifyOn(pinned, link string) (engine string, m measurer, ok bool) {
 			return pinned, nil, false
 		}
 	}
-	// The awg engine carries awg links only, so the fallback engine's measurer
-	// is not offered one.
-	if fallback != nil && fallback.engine == pinned && !matchAwgLink(trimmed, lower) &&
-		fallback.match(trimmed, lower) {
+	if fallback != nil && fallback.engine == pinned && fallback.match(trimmed, lower) {
 		return fallback.engine, fallback.measure, true
 	}
 	return pinned, nil, false
