@@ -369,6 +369,19 @@ func (x *CoreController) awgStart(ifName string, tun *tunCopy, rawConfig string,
 	return nil
 }
 
+// awgTunDNS walks awg's resolver ladder: the first plain server of the
+// request, the config's DNS=, then 1.1.1.1. A rung counts only with an IPv4
+// server the TUN takes, so an IPv6-only or a hostname DNS= falls through
+// rather than leave the tunnel without DNS.
+func awgTunDNS(plainServer, configDNS string) string {
+	for _, rung := range []string{plainServer, configDNS} {
+		if len(parseDNSListToAddrs(rung)) > 0 {
+			return rung
+		}
+	}
+	return xrayDefaultDnsServer
+}
+
 func (x *CoreController) awgDeviceUpPlatform(ifName string, tun *tunCopy, rawConfig, uapiCfg, dnsOverride string) (int, error) {
 	handle, err := x.platformAwgStart(ifName, tun, uapiCfg)
 	if err != nil {
@@ -376,14 +389,7 @@ func (x *CoreController) awgDeviceUpPlatform(ifName string, tun *tunCopy, rawCon
 	}
 	if runtime.GOOS == "windows" {
 		server := awgconfig.EndpointHost(rawConfig)
-		// dnsConfig plain server overrides the INI DNS field.
-		dns := dnsOverride
-		if dns == "" {
-			dns = awgconfig.DNS(rawConfig)
-		}
-		if dns == "" {
-			dns = xrayDefaultDnsServer
-		}
+		dns := awgTunDNS(dnsOverride, awgconfig.DNS(rawConfig))
 		addr := awgconfig.Address(rawConfig)
 		if err := configureTunV3(ifName, addr, []string{server}, dns); err != nil {
 			_ = x.awgStopHandleLocked(handle)

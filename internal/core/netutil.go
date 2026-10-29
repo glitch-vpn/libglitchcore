@@ -2,6 +2,8 @@ package core
 
 import (
 	"errors"
+	"net"
+	"net/netip"
 	"regexp"
 	"strings"
 
@@ -78,4 +80,28 @@ func splitEngineLinks(raw string) ([]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// parseDNSListToAddrs reads the IPv4 servers of a DNS list, the only ones the
+// TUN takes; a hostname or an IPv6 address is left out.
+func parseDNSListToAddrs(s string) []netip.Addr {
+	s = strings.TrimSpace(strings.NewReplacer(",", " ", ";", " ", "\t", " ").Replace(s))
+	var out []netip.Addr
+	seen := map[string]struct{}{}
+	for _, tok := range strings.Fields(s) {
+		h := tok
+		if hh, _, err := net.SplitHostPort(tok); err == nil && hh != "" {
+			h = hh
+		}
+		ip, err := netip.ParseAddr(h)
+		if err != nil || !ip.Is4() {
+			continue
+		}
+		if _, ok := seen[ip.String()]; ok {
+			continue
+		}
+		seen[ip.String()] = struct{}{}
+		out = append(out, ip)
+	}
+	return out
 }

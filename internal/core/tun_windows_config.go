@@ -170,28 +170,6 @@ func findInterfaceByIPv4Addr(ipv4 string) (winipcfg.LUID, uint32, bool) {
 	return 0, 0, false
 }
 
-func parseDNSListToAddrs(s string) []netip.Addr {
-	s = strings.TrimSpace(strings.NewReplacer(",", " ", ";", " ", "\t", " ").Replace(s))
-	var out []netip.Addr
-	seen := map[string]struct{}{}
-	for _, tok := range strings.Fields(s) {
-		h := tok
-		if hh, _, err := net.SplitHostPort(tok); err == nil && hh != "" {
-			h = hh
-		}
-		ip, err := netip.ParseAddr(h)
-		if err != nil || !ip.Is4() {
-			continue
-		}
-		if _, ok := seen[ip.String()]; ok {
-			continue
-		}
-		seen[ip.String()] = struct{}{}
-		out = append(out, ip)
-	}
-	return out
-}
-
 // providerLookupIPv4 resolves host via the system resolver -- it runs BEFORE TUN
 // routes exist, so it must not depend on them.
 func providerLookupIPv4(ctx context.Context, host string) (string, error) {
