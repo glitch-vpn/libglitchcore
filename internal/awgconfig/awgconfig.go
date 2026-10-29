@@ -1,9 +1,11 @@
-// Package awgconfig parses AmneziaWG/WireGuard INI into UAPI (WireGuard, AWG 1.0, 2.0 and 3.x fields).
+// Package awgconfig parses AmneziaWG/WireGuard INI, and the awg:// and
+// wireguard:// links that carry it, into UAPI (WireGuard, AWG 1.0, 2.0 and 3.x fields).
 package awgconfig
 
 import (
 	"encoding/base64"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -28,9 +30,13 @@ func EncodeLink(ini, name string) string {
 	return link
 }
 
+// LinkName is a link's #name, "" for a raw INI. A wireguard:// remark is
+// URL-encoded, where '+' is a space.
 func LinkName(link string) string {
 	s := strings.TrimSpace(link)
-	if !strings.HasPrefix(s, LinkScheme) {
+	lower := strings.ToLower(s)
+	uri := isURILink(lower)
+	if !uri && !strings.HasPrefix(lower, LinkScheme) {
 		return ""
 	}
 	i := strings.IndexByte(s, '#')
@@ -39,19 +45,26 @@ func LinkName(link string) string {
 	}
 	name, err := url.PathUnescape(s[i+1:])
 	if err != nil {
-		return s[i+1:]
+		name = s[i+1:]
+	}
+	if uri {
+		name = strings.TrimSpace(strings.ReplaceAll(name, "+", " "))
 	}
 	return name
 }
 
-// NormalizeToINI returns the INI for either an awg:// link or a raw INI config
-// (passed through unchanged), so callers accept both.
+// NormalizeToINI returns the INI for an awg://, wireguard:// or wg:// link,
+// and passes a raw INI config through unchanged, so callers accept all of them.
 func NormalizeToINI(input string) (string, error) {
 	s := strings.TrimSpace(input)
-	if !strings.HasPrefix(s, LinkScheme) {
+	lower := strings.ToLower(s)
+	if isURILink(lower) {
+		return linkToINI(s)
+	}
+	if !strings.HasPrefix(lower, LinkScheme) {
 		return input, nil
 	}
-	payload := strings.TrimPrefix(s, LinkScheme)
+	payload := s[len(LinkScheme):]
 	if i := strings.IndexByte(payload, '#'); i >= 0 {
 		payload = payload[:i]
 	}
@@ -204,6 +217,10 @@ func deviceValue(key, val string) (string, error) {
 	return val, nil
 }
 
+// ErrReservedBytes refuses a config that sets WireGuard's reserved header
+// bytes, which mihomo's WireGuard outbound sends and amneziawg-go cannot.
+var ErrReservedBytes = errors.New("reserved bytes are not supported")
+
 // hasControl reports a control character other than tab. UAPI is line-based,
 // and the device quotes a line it cannot read in its error.
 func hasControl(s string) bool {
@@ -314,6 +331,14 @@ func ParseToUAPI(cfg string) (string, error) {
 					if ip != "" {
 						curPeer.allowed = append(curPeer.allowed, ip)
 					}
+				}
+			case "reserved":
+				b, err := ReservedBytes(val)
+				if err != nil {
+					return "", fmt.Errorf("peer.reserved: %w", err)
+				}
+				if b != [3]byte{} {
+					return "", fmt.Errorf("peer.reserved: %w", ErrReservedBytes)
 				}
 			}
 		}

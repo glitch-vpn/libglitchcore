@@ -613,7 +613,7 @@ func proxyFromLink(link, name string) (map[string]any, error) {
 		return anytlsProxy(link, name)
 	case vmesslink.IsLink(link):
 		return vmessProxy(link, name)
-	case strings.HasPrefix(lower, awgconfig.LinkScheme), strings.Contains(link, "[Interface]"):
+	case awgconfig.IsLink(link):
 		return wireguardProxy(link, name)
 	default:
 		return nil, fmt.Errorf("unsupported link scheme")
@@ -661,7 +661,7 @@ func ProxyNames(links []string) []string {
 
 func linkName(link string, idx int) string {
 	var frag string
-	if strings.HasPrefix(strings.ToLower(link), awgconfig.LinkScheme) {
+	if awgconfig.IsLink(link) {
 		frag = awgconfig.LinkName(link)
 	} else if vmesslink.IsLink(link) {
 		// ps is written as is; only the comma rule applies to it.
@@ -1140,6 +1140,15 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 	}
 	if psk := peer["presharedkey"]; psk != "" {
 		p["pre-shared-key"] = psk
+	}
+	if v := peer["reserved"]; v != "" {
+		b, err := awgconfig.ReservedBytes(v)
+		if err != nil {
+			return nil, fmt.Errorf("awg: %w", err)
+		}
+		if b != [3]byte{} {
+			p["reserved"] = []int{int(b[0]), int(b[1]), int(b[2])}
+		}
 	}
 	if allowed := splitCSV(peer["allowedips"]); len(allowed) > 0 {
 		p["allowed-ips"] = allowed

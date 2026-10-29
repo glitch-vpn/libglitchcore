@@ -54,3 +54,18 @@ out: hy2 auth=[redacted] pbk=[redacted]
 in: dial http://Ym9i/OnBhc3M@203.0.113.7:8080#Office failed
 out: dial http://[redacted]@203.0.113.7:8080#[redacted] failed
 
+in: dial http://Ym9i/OnBhc3M@203.0.113.7:8080#Office failed
+out: dial http://[redacted]@203.0.113.7:8080#[redacted] failed
+
+in: link wireguard://gTsOy%2FCY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y%3D@203.0.113.7:51820?publickey=kVNWJ0pOFM11/p62BQNCmJQIffiVca8AipT6DTXxeVA=&reserved=1,2,3#WARP refused
+out: link wireguard://[redacted] refused
+
+in: link wg://203.0.113.7:51820?pk=gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y=&pub=kVNWJ0pOFM11/p62BQNCmJQIffiVca8AipT6DTXxeVA= refused
+out: link wg://[redacted] refused
+
+in: PrivateKey = gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y=
+out: PrivateKey = [redacted]
+
+in: peerpublickey=kVNWJ0pOFM11/p62BQNCmJQIffiVca8AipT6DTXxeVA= psk=Vl19HfL05ZncotJbmutyz3Pq3OnDgD8NFaoeTP4L4NQ=
+out: peerpublickey=[redacted] psk=[redacted]
+

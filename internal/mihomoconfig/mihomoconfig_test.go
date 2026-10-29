@@ -281,7 +281,7 @@ func TestBuildConfig_ValidatesViaMihomoParser(t *testing.T) {
 }
 
 func TestBuildConfig_Rejects(t *testing.T) {
-	if _, err := BuildConfig([]string{"wireguard://nope"}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{}); err == nil {
+	if _, err := BuildConfig([]string{"socks4://203.0.113.7:1080"}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{}); err == nil {
 		t.Fatal("expected error for unsupported scheme")
 	}
 	if _, err := BuildConfig(nil, Inbound{MixedPort: 17890}, Options{}, routing.Profile{}); err == nil {

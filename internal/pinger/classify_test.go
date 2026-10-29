@@ -47,6 +47,8 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 	}
 	check("awg://YWJj#tokyo", awg)
 	check("[Interface]\nPrivateKey = k\n[Peer]\nEndpoint = h:51820", awg)
+	check("wireguard://k@host:51820?publickey=p", awg)
+	check("wg://host:51820?pk=k&pub=p", awg)
 
 	mihomoOnly := ""
 	if hasMihomo {

@@ -101,7 +101,9 @@ when an engine gains an option:
 * `config` — one share link, or several separated by newlines, which turns the
   session into a balancer pool. A raw WireGuard/AmneziaWG INI config only
   goes alone; in a pool, send it as `awg://` followed by the base64url of the
-  INI, with an optional `#name`.
+  INI, with an optional `#name`, or as a `wireguard://` / `wg://` link in the
+  form v2rayNG, v2rayN and Hiddify write. A link with `reserved` bytes runs on
+  mihomo only.
 * `tunFd` — a TUN file descriptor (Android `VpnService`). Leave it out on
   desktop, where the library opens its own adapter, or set `opts.proxyPort`
   instead for a loopback SOCKS proxy with no TUN and no elevation (xray and

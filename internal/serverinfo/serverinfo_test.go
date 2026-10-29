@@ -189,3 +189,20 @@ func TestFromLink_SSLegacyBase64SplitsHostAndPortLikeNetSplitHostPort(t *testing
 		})
 	}
 }
+
+// Made-up keys.
+func TestFromLink_WireGuardLinks(t *testing.T) {
+	const (
+		privateKey = "gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y="
+		publicKey  = "kVNWJ0pOFM11/p62BQNCmJQIffiVca8AipT6DTXxeVA="
+	)
+	cases := map[string]Server{
+		"wireguard://" + privateKey + "@wg.example.com:51820?publickey=" + publicKey + "#WARP+One": {Protocol: "awg", Host: "wg.example.com", Port: 51820, Name: "WARP One"},
+		"wg://[2001:db8::1]:2408?pk=" + privateKey + "&pub=" + publicKey:                           {Protocol: "awg", Host: "2001:db8::1", Port: 2408},
+	}
+	for link, want := range cases {
+		if got := FromLink(link, 0); got != want {
+			t.Errorf("FromLink(%q) = %+v, want %+v", link, got, want)
+		}
+	}
+}

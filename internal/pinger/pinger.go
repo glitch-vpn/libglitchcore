@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
@@ -69,8 +70,8 @@ type fallsBack struct{ error }
 
 func (e fallsBack) Unwrap() error { return e.error }
 
-func matchAwgLink(trimmed, lower string) bool {
-	return strings.HasPrefix(lower, "awg://") || strings.Contains(trimmed, "[Interface]")
+func matchAwgLink(trimmed, _ string) bool {
+	return awgconfig.IsLink(trimmed)
 }
 
 func classify(link string) (engine string, m measurer) {

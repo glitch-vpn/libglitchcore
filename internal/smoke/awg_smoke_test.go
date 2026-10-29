@@ -53,19 +53,15 @@ func newAwgKey(t *testing.T) (private, public awgKey) {
 func (k awgKey) hex() string    { return hex.EncodeToString(k[:]) }
 func (k awgKey) base64() string { return base64.StdEncoding.EncodeToString(k[:]) }
 
-// startAwg3Server runs an amneziawg-go 3.x peer on loopback UDP whose own
+// startWireGuardPeer runs an amneziawg-go peer on loopback UDP whose own
 // netstack answers HTTP at awgServerAddr with body: a reply proves the request
-// crossed the tunnel, since nothing else can reach that address. It returns
-// the client config.
-func startAwg3Server(t *testing.T, body string) string {
+// crossed the tunnel, since nothing else can reach that address. deviceUAPI
+// holds the settings both ends share. It returns what the client config needs.
+func startWireGuardPeer(t *testing.T, body, deviceUAPI string) (serverPublic, clientPrivate awgKey, port int) {
 	t.Helper()
 	serverPrivate, serverPublic := newAwgKey(t)
 	clientPrivate, clientPublic := newAwgKey(t)
-	var headerKey awgKey
-	if _, err := rand.Read(headerKey[:]); err != nil {
-		t.Fatal(err)
-	}
-	port := freePort(t)
+	port = freePort(t)
 
 	tunDev, tnet, err := netstack.CreateNetTUN([]netip.Addr{netip.MustParseAddr(awgServerAddr)}, nil, 1420)
 	if err != nil {
@@ -73,9 +69,8 @@ func startAwg3Server(t *testing.T, body string) string {
 	}
 	dev := device.NewDevice(tunDev, conn.NewDefaultBind(), device.NewLogger(device.LogLevelSilent, ""))
 	t.Cleanup(dev.Close)
-	uapi := fmt.Sprintf("private_key=%s\nlisten_port=%d\n"+awg3SharedUAPI+
-		"header_protection_key=%s\npublic_key=%s\nallowed_ip=10.66.0.2/32\n",
-		serverPrivate.hex(), port, headerKey.hex(), clientPublic.hex())
+	uapi := fmt.Sprintf("private_key=%s\nlisten_port=%d\n"+deviceUAPI+"public_key=%s\nallowed_ip=10.66.0.2/32\n",
+		serverPrivate.hex(), port, clientPublic.hex())
 	if err := dev.IpcSet(uapi); err != nil {
 		t.Fatalf("server IpcSet: %v", err)
 	}
@@ -91,7 +86,18 @@ func startAwg3Server(t *testing.T, body string) string {
 	})}
 	go func() { _ = srv.Serve(ln) }()
 	t.Cleanup(func() { _ = srv.Close() })
+	return serverPublic, clientPrivate, port
+}
 
+// startAwg3Server runs an AWG 3.x peer with header protection and returns the
+// client config.
+func startAwg3Server(t *testing.T, body string) string {
+	t.Helper()
+	var headerKey awgKey
+	if _, err := rand.Read(headerKey[:]); err != nil {
+		t.Fatal(err)
+	}
+	serverPublic, clientPrivate, port := startWireGuardPeer(t, body, awg3SharedUAPI+"header_protection_key="+headerKey.hex()+"\n")
 	return fmt.Sprintf("[Interface]\nPrivateKey = %s\nAddress = 10.66.0.2/32\nJc = 3\nJmin = 40\nJmax = 70\n"+awg3SharedINI+
 		"HeaderProtectionKey = %s\n\n[Peer]\nPublicKey = %s\nAllowedIPs = 0.0.0.0/0\nEndpoint = 127.0.0.1:%d\nPersistentKeepalive = 20-25\n",
 		clientPrivate.base64(), headerKey.base64(), serverPublic.base64(), port)

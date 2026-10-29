@@ -81,7 +81,7 @@ func scrubURL(u string) string {
 		return scheme + "://" + redacted
 	}
 	// The userinfo runs to the last '@' before the query: a base64 one may
-	// hold a '/'.
+	// hold a '/'. sharelink.Split reads a link the same way.
 	userinfo := ""
 	head, _, _ := strings.Cut(rest, "?")
 	head, _, _ = strings.Cut(head, "#")

@@ -59,3 +59,23 @@ func TestMeasurePinnedMihomoMeasuresOnMihomo(t *testing.T) {
 		t.Fatalf("result = %+v, want a dial failure on mihomo", got)
 	}
 }
+
+// The awg engine cannot send WireGuard's reserved bytes: pinned to it, such a
+// link is refused; unpinned, it pings on mihomo, which sends them.
+func TestMeasureTakesReservedBytesToMihomo(t *testing.T) {
+	if fallback == nil || fallback.engine != "mihomo" || !hasMeasurer("awg") {
+		t.Skip("needs the awg measurer and the mihomo fallback")
+	}
+	// Made-up keys.
+	link := "wireguard://gTsOy%2FCY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y%3D@127.0.0.1:1" +
+		"?publickey=kVNWJ0pOFM11%2Fp62BQNCmJQIffiVca8AipT6DTXxeVA%3D&address=10.0.0.2%2F32&reserved=1,2,3"
+
+	pinned := Measure(Request{Engine: "awg", Links: []string{link}, TimeoutMs: 1500})[0]
+	if pinned.Engine != "awg" || pinned.Alive || !strings.Contains(pinned.Error, "reserved") {
+		t.Errorf("pinned awg result = %+v, want the reserved-bytes refusal", pinned)
+	}
+	unpinned := Measure(Request{Links: []string{link}, TimeoutMs: 1500})[0]
+	if unpinned.Engine != "mihomo" || unpinned.Alive || strings.Contains(unpinned.Error, "reserved") {
+		t.Errorf("unpinned result = %+v, want a dial failure on mihomo", unpinned)
+	}
+}

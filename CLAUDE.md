@@ -75,7 +75,7 @@ internal/
                            # session state, Windows service + IPC, platform TUN
   xrayconfig/              # share links -> xray config (+ balancer/observatory)
   mihomoconfig/            # share links -> mihomo config (+ proxy group)
-  awgconfig/               # awg:// / INI parsing -> UAPI
+  awgconfig/               # awg:// / wireguard:// / INI parsing -> UAPI
   serverinfo/              # link -> display identity for ServerEvent
   sharelink/               # URL-shaped links parsed with credentials kept out of errors
   vmesslink/               # vmess:// (base64 JSON and URI) -> one shape

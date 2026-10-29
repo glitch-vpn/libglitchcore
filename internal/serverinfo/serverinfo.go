@@ -59,7 +59,7 @@ func FromLink(link string, idx int) Server {
 	link = strings.TrimSpace(link)
 	s := Server{Index: idx}
 
-	if strings.HasPrefix(strings.ToLower(link), awgconfig.LinkScheme) || strings.Contains(link, "[Interface]") {
+	if awgconfig.IsLink(link) {
 		s.Protocol = "awg"
 		s.Name = awgconfig.LinkName(link)
 		if ini, err := awgconfig.NormalizeToINI(link); err == nil {
