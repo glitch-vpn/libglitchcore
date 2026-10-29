@@ -51,3 +51,6 @@ out: infra/conf: invalid "password": [redacted]
 in: hy2 auth=Secret1 pbk=abc
 out: hy2 auth=[redacted] pbk=[redacted]
 
+in: dial http://Ym9i/OnBhc3M@203.0.113.7:8080#Office failed
+out: dial http://[redacted]@203.0.113.7:8080#[redacted] failed
+

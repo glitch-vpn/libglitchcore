@@ -80,13 +80,19 @@ func scrubURL(u string) string {
 	if shareLinkSchemes[strings.ToLower(scheme)] {
 		return scheme + "://" + redacted
 	}
+	// The userinfo runs to the last '@' before the query: a base64 one may
+	// hold a '/'.
+	userinfo := ""
+	head, _, _ := strings.Cut(rest, "?")
+	head, _, _ = strings.Cut(head, "#")
+	if at := strings.LastIndex(head, "@"); at >= 0 {
+		userinfo, rest = redacted+"@", rest[at+1:]
+	}
 	authority, tail := rest, ""
 	if end := strings.IndexAny(rest, "/?#"); end >= 0 {
 		authority, tail = rest[:end], rest[end:]
 	}
-	if at := strings.LastIndex(authority, "@"); at >= 0 {
-		authority = redacted + "@" + authority[at+1:]
-	}
+	authority = userinfo + authority
 	if tail != "" && tail != "/" {
 		tail = tail[:1] + redacted
 	}
