@@ -111,7 +111,18 @@ when an engine gains an option:
   carries TCP only: SOCKS5 UDP cannot be tied to the login. Without them
   every local app can use it, UDP included.
 * `opts` — flat string map. Routing tiers are evaluated in order, first match
-  wins; within a tier block beats direct beats proxy. Matchers are `geoip:nl`,
+  wins. Within a tier the more specific entry wins whatever its outcome, so
+  `domain:vk.com` sent through the proxy is an exception to `geoip:ru` sent
+  direct: `full:`, then `domain:` (more labels first), then an IP or CIDR (the
+  narrower first), then `keyword:` and `regexp:`, then `geosite:` and `geoip:`
+  as one rank. At equal rank block beats direct beats proxy. A block yields
+  only to a more specific entry of its own kind, names or addresses: a flow
+  whose name the tier sends direct is still blocked when its address is
+  blocked in the same tier, and the other way round. A `process:`
+  block leads its tier and the tier's other `process:` entries close it. A
+  flow a `process:` proxy entry sends through the VPN meets every tier's block
+  entries and goes to the proxy, so an exception to a block does not reach
+  it: that path fails closed. Matchers are `geoip:nl`,
   `geosite:category-ads-all`, `domain:example.com`, `full:host`, `keyword:str`,
   `regexp:expr`, `process:app.exe` or a bare IP/CIDR. A start fails on a
   domain, `full:` or `keyword:` matcher holding a comma, and on a regexp with

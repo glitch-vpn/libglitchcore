@@ -19,10 +19,10 @@ belongs to `style-reviewer`.
 
 Rank findings by what they actually cost the user:
 
-1. **Traffic takes the wrong path.** Routing rule priority (block → direct →
-   proxy → local → catch-all), Windows direct egress binding
-   (`IP_UNICAST_IF` via sendThrough — a source-IP bind loops back through the
-   TUN), `disableIPv6`/`disableUDP` enforcement, fake-ip mapping staying on
+1. **Traffic takes the wrong path.** Routing rule priority (kill-switches →
+   tiers in order, each as its `routing.Tier.Steps` → local → catch-all),
+   Windows direct egress binding (`IP_UNICAST_IF` via sendThrough — a
+   source-IP bind loops back through the TUN), `disableIPv6`/`disableUDP` enforcement, fake-ip mapping staying on
    when sniffing is off. A rule that silently does not apply is a leak.
 2. **The user's live session is harmed by code that was not supposed to touch
    it.** `useServiceIPC` defaults true on Windows: any engine/stats call in a

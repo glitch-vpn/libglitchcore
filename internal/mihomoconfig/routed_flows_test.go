@@ -24,13 +24,14 @@ import (
 func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err error)
 
 // useGeoFiles points mihomo's home at made-up geo databases: glitch-test is
-// 198.51.100.0/24 and glitch.test, cn is 203.0.113.0/24.
+// 198.51.100.0/24 and glitch.test, cn is 203.0.113.0/24, ads-test is ads.test.
 func useGeoFiles(t *testing.T) {
 	t.Helper()
 	home := t.TempDir()
 	site, err := proto.Marshal(&xgeodata.GeoSiteList{Entry: []*xgeodata.GeoSite{
 		{Code: "GLITCH-TEST", Domain: []*xgeodata.Domain{{Type: xgeodata.Domain_Domain, Value: "glitch.test"}}},
 		{Code: "CN", Domain: []*xgeodata.Domain{{Type: xgeodata.Domain_Domain, Value: "cn.glitch.test"}}},
+		{Code: "ADS-TEST", Domain: []*xgeodata.Domain{{Type: xgeodata.Domain_Domain, Value: "ads.test"}}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -247,4 +248,193 @@ func TestBuildConfig_SnifferSkipDstAddressFollowsLocalNetworks(t *testing.T) {
 			t.Fatalf("local networks %v: sniffer skip-dst-address = %v", on, cfg.Sniffer.SkipDstAddress)
 		}
 	}
+}
+
+// routeTierFlows routes each flow through mihomo's matcher over a profile
+// holding only tier, in both modes. A flow with a host and an IP is one the
+// sniffer named; "catch-all" is where the mode sends an unlisted flow.
+func routeTierFlows(t *testing.T, tier routing.Tier, flows []routedFlow) {
+	t.Helper()
+	for _, mode := range []string{routing.ModeProxyAll, routing.ModeDirectAll} {
+		t.Run(mode, func(t *testing.T) {
+			useGeoFiles(t)
+			dns := dnsconfig.Config{Mode: dnsconfig.ModeNormal, Servers: []string{"1.1.1.1"}}
+			prof := routing.Profile{Mode: mode, Tiers: []routing.Tier{tier}}
+			cfg, err := BuildConfig([]string{forceFlowLink}, Inbound{Bridge: true, ForceProxy: true, DNS: dns}, Options{}, prof)
+			if err != nil {
+				t.Fatalf("BuildConfig: %v", err)
+			}
+			catchAll := "target"
+			if mode == routing.ModeDirectAll {
+				catchAll = "DIRECT"
+			}
+			resolved := make([]routedFlow, len(flows))
+			for i, f := range flows {
+				if f.want == "catch-all" {
+					f.want = catchAll
+				}
+				resolved[i] = f
+			}
+			routeFlows(t, cfg, Target([]string{forceFlowLink}), resolved)
+		})
+	}
+}
+
+// A site named in a tier is an exception to the tier's geoip entry with
+// another outcome, by name and by sniffed name.
+func TestBuildConfig_NamedSiteIsAnExceptionToItsGeoIP(t *testing.T) {
+	f, app, tcp := ForceProxyInName, "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Direct: []string{"geoip:glitch-test"},
+		Proxy:  []string{"domain:vk.test", "process:app.exe"},
+	}, []routedFlow{
+		{"named site", app, tcp, "vk.test", "", "", "target"},
+		{"named site sniffed on its address", app, tcp, "vk.test", "198.51.100.10", "", "target"},
+		{"another address in the geoip", app, tcp, "", "198.51.100.11", "", "DIRECT"},
+		{"another name sniffed in the geoip", app, tcp, "news.test", "198.51.100.11", "", "DIRECT"},
+		{"another name in the geoip", app, tcp, "news.test", "", "", "catch-all"},
+		{"per-app named site sniffed", f, tcp, "vk.test", "198.51.100.10", "", "target"},
+		{"per-app address in the geoip", f, tcp, "", "198.51.100.11", "", "target"},
+	})
+}
+
+// full: comes before domain:, and a longer domain: before a shorter one.
+func TestBuildConfig_FullNameIsAnExceptionToItsDomain(t *testing.T) {
+	app, tcp := "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Direct: []string{"domain:x.test"},
+		Proxy:  []string{"full:api.x.test", "domain:shop.x.test", "process:app.exe"},
+	}, []routedFlow{
+		{"full name", app, tcp, "api.x.test", "", "", "target"},
+		{"full name sniffed", app, tcp, "api.x.test", "192.0.2.50", "", "target"},
+		{"name under the full name", app, tcp, "v1.api.x.test", "", "", "DIRECT"},
+		{"longer domain", app, tcp, "cart.shop.x.test", "", "", "target"},
+		{"the domain", app, tcp, "www.x.test", "", "", "DIRECT"},
+	})
+}
+
+// A narrower address entry is an exception to a wider one and to a geoip
+// entry.
+func TestBuildConfig_CIDRIsAnExceptionToItsGeoIP(t *testing.T) {
+	f, app, tcp := ForceProxyInName, "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"198.51.100.200"},
+		Direct: []string{"geoip:glitch-test"},
+		Proxy:  []string{"198.51.100.128/25", "process:app.exe"},
+	}, []routedFlow{
+		{"address in the proxy CIDR", app, tcp, "", "198.51.100.150", "", "target"},
+		{"address in the blocked IP", app, tcp, "", "198.51.100.200", "", "REJECT"},
+		{"address only in the geoip", app, tcp, "", "198.51.100.7", "", "DIRECT"},
+		{"sniffed name in the proxy CIDR", app, tcp, "inner.test", "198.51.100.150", "", "target"},
+		{"per-app address in the blocked IP", f, tcp, "", "198.51.100.200", "", "REJECT"},
+		{"per-app address in the proxy CIDR", f, tcp, "", "198.51.100.150", "", "target"},
+	})
+}
+
+// A domain: block inside a geosite direct blocks, and a domain: direct inside
+// a geosite block goes direct. A per-app VPN flow meets every block, so the
+// direct exception does not reach it.
+func TestBuildConfig_NamedSiteIsAnExceptionToItsGeoSite(t *testing.T) {
+	f, app, tcp := ForceProxyInName, "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geosite:ads-test", "domain:ads.glitch.test"},
+		Direct: []string{"geosite:glitch-test", "domain:good.ads.test"},
+		Proxy:  []string{"process:app.exe"},
+	}, []routedFlow{
+		{"blocked site in a direct geosite", app, tcp, "ads.glitch.test", "", "", "REJECT"},
+		{"another site in the direct geosite", app, tcp, "www.glitch.test", "", "", "DIRECT"},
+		{"direct site in a blocked geosite", app, tcp, "good.ads.test", "", "", "DIRECT"},
+		{"direct site sniffed", app, tcp, "good.ads.test", "192.0.2.50", "", "DIRECT"},
+		{"another site in the blocked geosite", app, tcp, "x.ads.test", "", "", "REJECT"},
+		{"per-app blocked site", f, tcp, "ads.glitch.test", "", "", "REJECT"},
+		{"per-app direct site in a blocked geosite", f, tcp, "good.ads.test", "", "", "REJECT"},
+		{"per-app site in the direct geosite", f, tcp, "www.glitch.test", "", "", "target"},
+	})
+}
+
+// Entries of equal specificity keep block, then direct, then proxy, ahead of
+// a broader block.
+func TestBuildConfig_EqualSpecificityKeepsBlockDirectProxy(t *testing.T) {
+	app, tcp := "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geosite:ads-test", "domain:same.glitch.test"},
+		Direct: []string{"domain:ads.test", "domain:same.glitch.test", "198.51.100.0/25", "geoip:cn"},
+		Proxy:  []string{"domain:ads.test", "domain:same.glitch.test", "198.51.100.0/25", "geoip:cn", "process:app.exe"},
+	}, []routedFlow{
+		{"same domain blocked", app, tcp, "same.glitch.test", "", "", "REJECT"},
+		{"same domain direct ahead of a broader block", app, tcp, "www.ads.test", "", "", "DIRECT"},
+		{"same CIDR", app, tcp, "", "198.51.100.7", "", "DIRECT"},
+		{"same geoip", app, tcp, "", "203.0.113.7", "", "DIRECT"},
+	})
+}
+
+// A category does not outrank an address block: geosite: and geoip: share a
+// rank, where block wins, and a single address ranks above a keyword.
+func TestBuildConfig_CategoryOrKeywordDoesNotBeatAnAddressBlock(t *testing.T) {
+	f, app, tcp := ForceProxyInName, "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geoip:cn", "198.51.100.77"},
+		Direct: []string{"keyword:cdn"},
+		Proxy:  []string{"geosite:glitch-test", "process:app.exe"},
+	}, []routedFlow{
+		{"geosite name sniffed on a blocked geoip address", app, tcp, "www.glitch.test", "203.0.113.9", "", "REJECT"},
+		{"geosite name", app, tcp, "www.glitch.test", "", "", "target"},
+		{"keyword name sniffed on a blocked address", app, tcp, "cdn.example.test", "198.51.100.77", "", "REJECT"},
+		{"keyword name", app, tcp, "cdn.example.test", "", "", "DIRECT"},
+		{"keyword name sniffed elsewhere", app, tcp, "cdn.example.test", "192.0.2.50", "", "DIRECT"},
+		{"per-app geosite name sniffed on a blocked geoip address", f, tcp, "www.glitch.test", "203.0.113.9", "", "REJECT"},
+	})
+}
+
+// A block yields only to a more specific entry of its own plane: a name entry
+// does not take a flow from an address block, nor an address entry from a
+// name block. A regexp with commas and parentheses rides the logic rule
+// intact.
+func TestBuildConfig_NameDoesNotBeatAnAddressBlock(t *testing.T) {
+	f, app, tcp := ForceProxyInName, "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"192.0.2.0/24"},
+		Direct: []string{"domain:x.test", "regexp:^(good|fine)x{1,2}[.]test$"},
+		Proxy:  []string{"process:app.exe"},
+	}, []routedFlow{
+		{"named site sniffed on a blocked address", app, tcp, "x.test", "192.0.2.10", "", "REJECT"},
+		{"regexp site sniffed on a blocked address", app, tcp, "goodxx.test", "192.0.2.10", "", "REJECT"},
+		{"blocked address", app, tcp, "", "192.0.2.10", "", "REJECT"},
+		{"named site", app, tcp, "x.test", "", "", "DIRECT"},
+		{"regexp site elsewhere", app, tcp, "goodxx.test", "198.51.100.9", "", "DIRECT"},
+		{"per-app named site sniffed on a blocked address", f, tcp, "x.test", "192.0.2.10", "", "REJECT"},
+	})
+}
+
+func TestBuildConfig_AddressDoesNotBeatANameBlock(t *testing.T) {
+	f, app, tcp := ForceProxyInName, "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"keyword:ads", "geosite:ads-test"},
+		Direct: []string{"192.0.2.128/25"},
+		Proxy:  []string{"process:app.exe"},
+	}, []routedFlow{
+		{"keyword-blocked name sniffed in the direct range", app, tcp, "myads.example", "192.0.2.200", "", "REJECT"},
+		{"geosite-blocked name sniffed in the direct range", app, tcp, "www.ads.test", "192.0.2.200", "", "REJECT"},
+		{"address in the direct range", app, tcp, "", "192.0.2.200", "", "DIRECT"},
+		{"clean name sniffed in the direct range", app, tcp, "clean.test", "192.0.2.200", "", "DIRECT"},
+		{"per-app blocked name sniffed in the direct range", f, tcp, "www.ads.test", "192.0.2.200", "", "REJECT"},
+	})
+}
+
+// With an exception in each plane, a flow takes a direct exception only where
+// no block of the other plane holds it.
+func TestBuildConfig_ExceptionsInBothPlanes(t *testing.T) {
+	app, tcp := "", C.TCP
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geosite:ads-test", "geoip:cn"},
+		Direct: []string{"full:good.ads.test", "203.0.113.7"},
+		Proxy:  []string{"process:app.exe"},
+	}, []routedFlow{
+		{"name exception", app, tcp, "good.ads.test", "", "", "DIRECT"},
+		{"address exception", app, tcp, "", "203.0.113.7", "", "DIRECT"},
+		{"both exceptions", app, tcp, "good.ads.test", "203.0.113.7", "", "DIRECT"},
+		{"name exception sniffed on a blocked address", app, tcp, "good.ads.test", "203.0.113.9", "", "REJECT"},
+		{"blocked name sniffed on the address exception", app, tcp, "www.ads.test", "203.0.113.7", "", "REJECT"},
+		{"clean name sniffed on the address exception", app, tcp, "clean.test", "203.0.113.7", "", "DIRECT"},
+	})
 }

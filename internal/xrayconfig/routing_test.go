@@ -2,6 +2,7 @@ package xrayconfig
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	xrayConf "github.com/xtls/xray-core/infra/conf"
@@ -398,5 +399,42 @@ func TestApply_IPIfNonMatchResolvesOnlyForIPRules(t *testing.T) {
 		if (len(app) > 0) != c.wantApp || len(force) > 0 {
 			t.Errorf("%s: catch-all IPs app %v, per-app %v; want app %v, per-app none", c.name, app, force, c.wantApp)
 		}
+	}
+}
+
+// The tier's own direct outbound refuses an address an entry ahead of its
+// direct ones sends elsewhere, should the name resolve there when it dials.
+func TestApply_TierDirectOutboundRefusesNarrowerAddresses(t *testing.T) {
+	cfg, _ := applyTo(t, RoutingProfile{
+		Mode: ModeProxyAll,
+		Tiers: []routing.Tier{{
+			Block:  []string{"198.51.100.200", "geoip:cn"},
+			Direct: []string{"geoip:glitch-test", "198.51.100.7"},
+			Proxy:  []string{"198.51.100.128/25", "geoip:ru"},
+		}},
+	}, "proxy", false)
+	var settings struct {
+		FinalRules []freedomFinalRule `json:"finalRules"`
+	}
+	for _, ob := range cfg.OutboundConfigs {
+		if ob.Tag == tierDirectTag(0) {
+			if err := json.Unmarshal(*ob.Settings, &settings); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	var got []string
+	for _, r := range settings.FinalRules {
+		got = append(got, r.Action+" "+strings.Join(r.IP, ","))
+	}
+	want := []string{
+		"block 198.51.100.200",
+		"allow 198.51.100.7",
+		"block 198.51.100.128/25,geoip:cn",
+		"allow geoip:glitch-test",
+		"block ",
+	}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("final rules = %q, want %q", got, want)
 	}
 }

@@ -131,6 +131,81 @@ func TestProcessRules_AcrossTiers(t *testing.T) {
 	}
 }
 
+// A tier's entries come out most specific first, the categories as one rank,
+// an app's block first and its other entries last; equal rank falls back to
+// block, direct, proxy.
+func TestTierEntries_SpecificFirst(t *testing.T) {
+	tier := Tier{
+		Block:  []string{"geosite:ads", "process:Ads.exe", "domain:x.ru", "10.0.0.0/8"},
+		Direct: []string{"geoip:ru", "domain:ru", "process:Tool.exe", "keyword:shop", "10.1.0.0/16", "domain:x.ru"},
+		Proxy:  []string{"domain:vk.ru", "full:api.x.ru", "process:App.exe", "regexp:^a", "10.1.2.3", "geoip:ru", "domain:x.ru"},
+	}
+	var got []string
+	for _, e := range tier.Entries() {
+		got = append(got, e.Target+" "+e.Value)
+	}
+	want := []string{
+		"block Ads.exe",
+		"proxy api.x.ru",
+		"block x.ru",
+		"direct x.ru",
+		"proxy vk.ru",
+		"proxy x.ru",
+		"direct ru",
+		"proxy 10.1.2.3",
+		"direct 10.1.0.0/16",
+		"block 10.0.0.0/8",
+		"direct shop",
+		"proxy ^a",
+		"block ads",
+		"direct ru",
+		"proxy ru",
+		"direct Tool.exe",
+		"proxy App.exe",
+	}
+	if g, w := strings.Join(got, "\n"), strings.Join(want, "\n"); g != w {
+		t.Fatalf("Entries =\n%s\nwant\n%s", g, w)
+	}
+}
+
+// A direct run is paired with the other plane up to its last block, keeping
+// its own outcome where that plane's exception comes first.
+func TestTierSteps_BlockYieldsOnlyInItsPlane(t *testing.T) {
+	tier := Tier{
+		Block:  []string{"192.0.2.0/24", "geosite:ads"},
+		Direct: []string{"domain:x.test", "192.0.2.7"},
+		Proxy:  []string{"process:App.exe"},
+	}
+	var got []string
+	for _, step := range tier.Steps() {
+		line := step.Target
+		for _, e := range step.Entries {
+			line += " " + e.Value
+		}
+		if len(step.Also) > 0 {
+			line += " &"
+			for _, e := range step.Also {
+				line += " " + e.Value
+			}
+		}
+		got = append(got, line)
+	}
+	want := []string{
+		"direct x.test & 192.0.2.7",
+		"block x.test & 192.0.2.0/24",
+		"direct x.test",
+		"direct 192.0.2.7 & x.test",
+		"block 192.0.2.7 & ads",
+		"direct 192.0.2.7",
+		"block 192.0.2.0/24",
+		"block ads",
+		"proxy App.exe",
+	}
+	if g, w := strings.Join(got, "\n"), strings.Join(want, "\n"); g != w {
+		t.Fatalf("Steps =\n%s\nwant\n%s", g, w)
+	}
+}
+
 func TestValidateRefusesWhatEnginesWouldDrop(t *testing.T) {
 	cases := []struct {
 		matcher, want string
@@ -146,6 +221,10 @@ func TestValidateRefusesWhatEnginesWouldDrop(t *testing.T) {
 		{"keyword:geosite:cn", `cannot start with "geosite:"`},
 		{"keyword:ext:file.dat:tag", `cannot start with "ext:"`},
 		{"keyword:keyword:ads", `cannot start with "keyword:"`},
+		{`regexp:^a\(b$`, "parentheses must pair up"},
+		{"regexp:^a)(b$", "parentheses must pair up"},
+		{"keyword:a(b", "parentheses must pair up"},
+		{"domain:a)b.example", "parentheses must pair up"},
 	}
 	for _, c := range cases {
 		for _, tier := range []Tier{{Block: []string{c.matcher}}, {Direct: []string{c.matcher}}, {Proxy: []string{c.matcher}}} {
@@ -160,7 +239,7 @@ func TestValidateRefusesWhatEnginesWouldDrop(t *testing.T) {
 func TestValidateKeepsWhatEnginesCarry(t *testing.T) {
 	p := Profile{Tiers: []Tier{{
 		Block:  []string{"geoip:!ru", "geosite:geolocation-!cn", "geosite:cn@ads", "keyword:ads", "keyword:.ru", "keyword:domainer"},
-		Direct: []string{"geoip:private", "domain:рф", "keyword:a:b"},
+		Direct: []string{"geoip:private", "domain:рф", "keyword:a:b", `regexp:^\(a\)(b|c)$`},
 	}}}
 	if err := p.Validate(); err != nil {
 		t.Fatalf("Validate = %v, want nil", err)

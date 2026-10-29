@@ -274,8 +274,8 @@ func requireGeoFile(path, listName, label string) error {
 
 // buildRules translates the routing profile into mihomo rule lines. target is
 // where unlisted traffic goes; an empty profile yields just MATCH,target.
-// Priority (first match wins): kill-switches -> tiers in order (block ->
-// direct -> proxy within each) -> local -> mode catch-all. forceProxy adds the
+// Priority (first match wins): kill-switches -> tiers in order, each as its
+// routing.Tier.Steps -> local -> mode catch-all. forceProxy adds the
 // bridge's always-tunnel flows right after the kill-switches: they meet every
 // tier's block and the local networks, then reach the proxy even in direct-all
 // mode.
@@ -298,10 +298,11 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 		// next one; this keeps such a flow from falling through to the tiers.
 		rules = append(rules, "IN-NAME,"+ForceProxyInName+",REJECT")
 	}
+	outcomes := map[string]string{routing.TargetBlock: "REJECT", routing.TargetDirect: "DIRECT", routing.TargetProxy: target}
 	for _, tier := range p.Tiers {
-		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
-		rules = append(rules, matcherRules(tier.Direct, "DIRECT")...)
-		rules = append(rules, matcherRules(tier.Proxy, target)...)
+		for _, step := range tier.Steps() {
+			rules = append(rules, stepLines(step, outcomes[step.Target])...)
+		}
 	}
 	catchAll := target
 	if p.ResolvedMode() == routing.ModeDirectAll {
@@ -344,12 +345,16 @@ func forceFlowsNeedSubRule(p routing.Profile) bool {
 }
 
 // forceFlowRules is the sub-rule the force-proxy flows enter: every tier's
-// block matchers in tier order, the local networks when the profile sends them
+// block entries in tier order, the local networks when the profile sends them
 // direct, then the proxy. Only those flows see it.
 func forceFlowRules(p routing.Profile, target string) []string {
 	var rules []string
 	for _, tier := range p.Tiers {
-		rules = append(rules, matcherRules(tier.Block, "REJECT")...)
+		for _, step := range tier.Steps() {
+			if step.Target == routing.TargetBlock && len(step.Also) == 0 {
+				rules = append(rules, stepLines(step, "REJECT")...)
+			}
+		}
 	}
 	if p.LocalNetworks {
 		rules = append(rules, "DOMAIN-REGEX,.,"+target)
@@ -360,49 +365,90 @@ func forceFlowRules(p routing.Profile, target string) []string {
 	return append(rules, "MATCH,"+target)
 }
 
-// matcherRules classifies a flat matcher list (routing.Classify) into mihomo rule
-// lines routing each entry to target. The core runs routing.Profile.Validate
-// first, so no domain value here holds a comma that would split its line and no
-// geo code is one mihomo cannot look up.
-func matcherRules(matchers []string, target string) []string {
-	var out []string
-	for _, m := range matchers {
-		kind, val, ok := routing.Classify(m)
-		if !ok {
-			continue
+// stepLines is the step as mihomo rule lines routing to target: one line per
+// entry, or, for a step pairing two planes, one AND line.
+func stepLines(step routing.Step, target string) []string {
+	if len(step.Also) == 0 {
+		var lines []string
+		for _, e := range step.Entries {
+			if condition := ruleCondition(e, target); condition != "" {
+				lines = append(lines, condition)
+			}
 		}
-		switch kind {
-		case routing.KindGeoSite:
-			out = append(out, "GEOSITE,"+val+","+target)
-		case routing.KindGeoIP:
-			out = append(out, "GEOIP,"+val+","+target+",no-resolve")
-		case routing.KindDomainSuffix:
-			out = append(out, "DOMAIN-SUFFIX,"+val+","+target)
-		case routing.KindDomainFull:
-			out = append(out, "DOMAIN,"+val+","+target)
-		case routing.KindDomainKeyword:
-			out = append(out, "DOMAIN-KEYWORD,"+val+","+target)
-		case routing.KindDomainRegex:
-			out = append(out, "DOMAIN-REGEX,"+val+","+target)
-		case routing.KindIPCIDR:
-			out = append(out, "IP-CIDR,"+routing.NormalizeCIDR(val)+","+target+",no-resolve")
-		case routing.KindProcess:
-			out = append(out, processRule(val, target))
-		}
+		return lines
 	}
-	return out
+	entries, also := anyOf(step.Entries), anyOf(step.Also)
+	if entries == "" || also == "" {
+		return nil
+	}
+	return []string{"AND,(" + entries + "," + also + ")," + target}
 }
 
-// processRule: PROCESS-NAME reads its value from one comma-separated field,
-// so a name holding a comma (legal on Windows) rides PROCESS-NAME-REGEX, which
-// rejoins its fields. Spaces are spelled \x20 because mihomo trims each field.
-// Both forms match the whole name, case-insensitively.
-func processRule(name, target string) string {
+// anyOf is a logic rule operand matching any of the entries.
+func anyOf(entries []routing.Entry) string {
+	var operands []string
+	for _, e := range entries {
+		if condition := ruleCondition(e, ""); condition != "" {
+			operands = append(operands, "("+condition+")")
+		}
+	}
+	switch len(operands) {
+	case 0:
+		return ""
+	case 1:
+		return operands[0]
+	}
+	return "(OR,(" + strings.Join(operands, ",") + "))"
+}
+
+// ruleCondition is the entry as a mihomo rule routing to target, or, with no
+// target, as an operand of a logic rule. The core runs routing.Profile.Validate
+// first, so no domain value here holds a comma that would split its line or a
+// parenthesis that would split a logic rule, and no geo code is one mihomo
+// cannot look up.
+func ruleCondition(e routing.Entry, target string) string {
+	withTarget := func(head, param string) string {
+		parts := []string{head}
+		if target != "" {
+			parts = append(parts, target)
+		}
+		if param != "" {
+			parts = append(parts, param)
+		}
+		return strings.Join(parts, ",")
+	}
+	switch e.Kind {
+	case routing.KindGeoSite:
+		return withTarget("GEOSITE,"+e.Value, "")
+	case routing.KindGeoIP:
+		return withTarget("GEOIP,"+e.Value, "no-resolve")
+	case routing.KindDomainSuffix:
+		return withTarget("DOMAIN-SUFFIX,"+e.Value, "")
+	case routing.KindDomainFull:
+		return withTarget("DOMAIN,"+e.Value, "")
+	case routing.KindDomainKeyword:
+		return withTarget("DOMAIN-KEYWORD,"+e.Value, "")
+	case routing.KindDomainRegex:
+		return withTarget("DOMAIN-REGEX,"+e.Value, "")
+	case routing.KindIPCIDR:
+		return withTarget("IP-CIDR,"+routing.NormalizeCIDR(e.Value), "no-resolve")
+	case routing.KindProcess:
+		return withTarget(processCondition(e.Value), "")
+	}
+	return ""
+}
+
+// processCondition: PROCESS-NAME reads its value from one comma-separated
+// field, so a name holding a comma (legal on Windows) rides
+// PROCESS-NAME-REGEX, which rejoins its fields. Spaces are spelled \x20
+// because mihomo trims each field. Both forms match the whole name,
+// case-insensitively.
+func processCondition(name string) string {
 	if !strings.Contains(name, ",") {
-		return "PROCESS-NAME," + name + "," + target
+		return "PROCESS-NAME," + name
 	}
 	pattern := "^" + strings.ReplaceAll(regexp.QuoteMeta(name), " ", `\x20`) + "$"
-	return "PROCESS-NAME-REGEX," + pattern + "," + target
+	return "PROCESS-NAME-REGEX," + pattern
 }
 
 // Strategies mihomo accepts (besides "" = url-test default); the plugin gates on

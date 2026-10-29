@@ -28,12 +28,13 @@ import (
 
 // useGeoFiles points xray at made-up geo databases: glitch-test is
 // 198.51.100.0/24 and glitch.test, cn is 203.0.113.0/24, loopback-test is
-// 127.0.0.2/32.
+// 127.0.0.2/32, ads-test is ads.test.
 func useGeoFiles(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	site, err := proto.Marshal(&geodata.GeoSiteList{Entry: []*geodata.GeoSite{
 		{Code: "GLITCH-TEST", Domain: []*geodata.Domain{{Type: geodata.Domain_Domain, Value: "glitch.test"}}},
+		{Code: "ADS-TEST", Domain: []*geodata.Domain{{Type: geodata.Domain_Domain, Value: "ads.test"}}},
 	}})
 	if err != nil {
 		t.Fatal(err)
@@ -129,20 +130,33 @@ func routeFlows(t *testing.T, prof routing.Profile, flows []routedFlow) {
 
 func pickRoutes(t *testing.T, inst *xrayCore.Instance, flows []routedFlow) {
 	t.Helper()
-	router := inst.GetFeature(xrouting.RouterType()).(xrouting.Router)
 	for _, f := range flows {
 		dest := xnet.Destination{Network: f.network, Address: xnet.ParseAddress(f.address), Port: xnet.Port(f.port)}
-		ctx := session.ContextWithOutbounds(context.Background(), []*session.Outbound{{Target: dest}})
-		ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: f.inbound})
-		route, err := router.PickRoute(rsession.AsRoutingContext(ctx))
+		got, err := pickRoute(inst, f.inbound, dest, "")
 		if err != nil {
 			t.Errorf("%s: %v", f.name, err)
 			continue
 		}
-		if got := route.GetOutboundTag(); got != f.want {
+		if got != f.want {
 			t.Errorf("%s -> %s, want %s", f.name, got, f.want)
 		}
 	}
+}
+
+// pickRoute asks xray's router for a flow's outbound. A sniffed name rides the
+// route target, where a routeOnly sniff leaves it.
+func pickRoute(inst *xrayCore.Instance, inbound string, dest xnet.Destination, sniffedName string) (string, error) {
+	outbound := &session.Outbound{Target: dest}
+	if sniffedName != "" {
+		outbound.RouteTarget = xnet.Destination{Network: dest.Network, Address: xnet.DomainAddress(sniffedName), Port: dest.Port}
+	}
+	ctx := session.ContextWithOutbounds(context.Background(), []*session.Outbound{outbound})
+	ctx = session.ContextWithInbound(ctx, &session.Inbound{Tag: inbound})
+	route, err := inst.GetFeature(xrouting.RouterType()).(xrouting.Router).PickRoute(rsession.AsRoutingContext(ctx))
+	if err != nil {
+		return "", err
+	}
+	return route.GetOutboundTag(), nil
 }
 
 // A per-app VPN flow meets the kill-switches, every tier's block, then the
@@ -192,7 +206,7 @@ func TestApply_ForceProxyLocalNetworksOff(t *testing.T) {
 // local-networks rule, whatever the router's domain strategy: the direct
 // outbound would dial whichever address it resolves.
 func TestApply_NamedFlowNeverGoesDirectOnLocalNetworks(t *testing.T) {
-	for _, strategy := range []string{"AsIs", "IPIfNonMatch", "IPOnDemand"} {
+	for _, strategy := range domainStrategies {
 		t.Run(strategy, func(t *testing.T) {
 			prof := routing.Profile{
 				Mode:           routing.ModeProxyAll,
@@ -368,19 +382,16 @@ func TestApply_TierDirectByIPDialsOnlyItsAddresses(t *testing.T) {
 		// "proxy", or "none" when it is refused.
 		normal, perApp map[string]string
 	}
-	everywhere := func(where string) map[string]string {
-		return map[string]string{"AsIs": where, "IPIfNonMatch": where, "IPOnDemand": where}
-	}
 	flows := []flow{
 		{"fully covered name", "covered.test", "",
-			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "covered", "IPOnDemand": "covered"}, everywhere("proxy")},
+			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "covered", "IPOnDemand": "covered"}, everyStrategy("proxy")},
 		{"partly covered name", "part.test", "",
-			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "none", "IPOnDemand": "none"}, everywhere("proxy")},
-		{"address in the rule", covered, "", everywhere("covered"), everywhere("proxy")},
+			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "none", "IPOnDemand": "none"}, everyStrategy("proxy")},
+		{"address in the rule", covered, "", everyStrategy("covered"), everyStrategy("proxy")},
 		{"sniffed name in the rule, address outside", outside, "covered.test",
-			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "proxy", "IPOnDemand": "none"}, everywhere("proxy")},
+			map[string]string{"AsIs": "proxy", "IPIfNonMatch": "proxy", "IPOnDemand": "none"}, everyStrategy("proxy")},
 	}
-	for _, strategy := range []string{"AsIs", "IPIfNonMatch", "IPOnDemand"} {
+	for _, strategy := range domainStrategies {
 		t.Run(strategy, func(t *testing.T) {
 			useGeoFiles(t)
 			proxyDials := countDials(t, outside, 0)
@@ -467,4 +478,233 @@ func TestApply_PartlyCoveredNameByMode(t *testing.T) {
 			}
 		})
 	}
+}
+
+// Where a flow through one tier lands, before the mode and the tier's own
+// direct outbound are known.
+const (
+	toProxy           = OutboundTag
+	toDirect          = directTag
+	toBlock           = blockTag
+	toDirectByAddress = "direct by address" // the tier's own direct outbound in proxy-all
+	toCatchAll        = "catch-all"
+)
+
+type tierFlow struct {
+	name, inbound, address, sniffedName string
+	want                                map[string]string // by domain strategy
+}
+
+var domainStrategies = []string{"AsIs", "IPIfNonMatch", "IPOnDemand"}
+
+func everyStrategy(where string) map[string]string {
+	return map[string]string{"AsIs": where, "IPIfNonMatch": where, "IPOnDemand": where}
+}
+
+// routeTierFlows routes each flow through xray's router over a profile holding
+// only tier, in both modes and under every domain strategy.
+func routeTierFlows(t *testing.T, tier routing.Tier, hosts map[string][]string, flows []tierFlow) {
+	t.Helper()
+	for _, mode := range []string{routing.ModeProxyAll, routing.ModeDirectAll} {
+		for _, strategy := range domainStrategies {
+			t.Run(mode+"/"+strategy, func(t *testing.T) {
+				useGeoFiles(t)
+				prof := routing.Profile{Mode: mode, Tiers: []routing.Tier{tier}, DomainStrategy: strategy}
+				inst := startRoutedInstance(t, prof, "192.0.2.1:443", fakeIPHosts(hosts))
+				for _, f := range flows {
+					want := f.want[strategy]
+					switch {
+					case want == toDirectByAddress && mode == routing.ModeProxyAll:
+						want = tierDirectTag(0)
+					case want == toDirectByAddress, want == toCatchAll && mode == routing.ModeDirectAll:
+						want = directTag
+					case want == toCatchAll:
+						want = OutboundTag
+					}
+					got, err := pickRoute(inst, f.inbound, xnet.TCPDestination(xnet.ParseAddress(f.address), 443), f.sniffedName)
+					if err != nil {
+						t.Errorf("%s: %v", f.name, err)
+						continue
+					}
+					if got != want {
+						t.Errorf("%s -> %s, want %s", f.name, got, want)
+					}
+				}
+			})
+		}
+	}
+}
+
+// A site named in a tier is an exception to the tier's geoip entry with
+// another outcome, by name, by sniffed name and once resolved.
+func TestApply_NamedSiteIsAnExceptionToItsGeoIP(t *testing.T) {
+	app, force := AppTrafficTag, ForceProxyTag
+	routeTierFlows(t, routing.Tier{
+		Direct: []string{"geoip:glitch-test"},
+		Proxy:  []string{"domain:vk.test", "process:app.exe"},
+	}, map[string][]string{"vk.test": {"198.51.100.10"}, "news.test": {"198.51.100.11"}}, []tierFlow{
+		{"named site", app, "vk.test", "", everyStrategy(toProxy)},
+		{"named site sniffed on its address", app, "198.51.100.10", "vk.test", everyStrategy(toProxy)},
+		{"another address in the geoip", app, "198.51.100.11", "", everyStrategy(toDirectByAddress)},
+		{"another name in the geoip", app, "news.test", "",
+			map[string]string{"AsIs": toCatchAll, "IPIfNonMatch": toDirectByAddress, "IPOnDemand": toDirectByAddress}},
+		{"per-app named site", force, "vk.test", "", everyStrategy(toProxy)},
+		{"per-app address in the geoip", force, "198.51.100.11", "", everyStrategy(toProxy)},
+	})
+}
+
+// full: comes before domain:, and a longer domain: before a shorter one.
+func TestApply_FullNameIsAnExceptionToItsDomain(t *testing.T) {
+	app := AppTrafficTag
+	routeTierFlows(t, routing.Tier{
+		Direct: []string{"domain:x.test"},
+		Proxy:  []string{"full:api.x.test", "domain:shop.x.test", "process:app.exe"},
+	}, nil, []tierFlow{
+		{"full name", app, "api.x.test", "", everyStrategy(toProxy)},
+		{"full name sniffed", app, "192.0.2.50", "api.x.test", everyStrategy(toProxy)},
+		{"name under the full name", app, "v1.api.x.test", "", everyStrategy(toDirect)},
+		{"longer domain", app, "cart.shop.x.test", "", everyStrategy(toProxy)},
+		{"the domain", app, "www.x.test", "", everyStrategy(toDirect)},
+	})
+}
+
+// A narrower address entry is an exception to a wider one and to a geoip
+// entry.
+func TestApply_CIDRIsAnExceptionToItsGeoIP(t *testing.T) {
+	app, force := AppTrafficTag, ForceProxyTag
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"198.51.100.200"},
+		Direct: []string{"geoip:glitch-test"},
+		Proxy:  []string{"198.51.100.128/25", "process:app.exe"},
+	}, map[string][]string{"inner.test": {"198.51.100.150"}, "outer.test": {"198.51.100.7"}}, []tierFlow{
+		{"address in the proxy CIDR", app, "198.51.100.150", "", everyStrategy(toProxy)},
+		{"address in the blocked IP", app, "198.51.100.200", "", everyStrategy(toBlock)},
+		{"address only in the geoip", app, "198.51.100.7", "", everyStrategy(toDirectByAddress)},
+		{"name in the proxy CIDR", app, "inner.test", "",
+			map[string]string{"AsIs": toCatchAll, "IPIfNonMatch": toProxy, "IPOnDemand": toProxy}},
+		{"name only in the geoip", app, "outer.test", "",
+			map[string]string{"AsIs": toCatchAll, "IPIfNonMatch": toDirectByAddress, "IPOnDemand": toDirectByAddress}},
+		{"per-app address in the blocked IP", force, "198.51.100.200", "", everyStrategy(toBlock)},
+		{"per-app address in the proxy CIDR", force, "198.51.100.150", "", everyStrategy(toProxy)},
+	})
+}
+
+// A domain: block inside a geosite direct blocks, and a domain: direct inside
+// a geosite block goes direct. A per-app VPN flow meets every block, so the
+// direct exception does not reach it.
+func TestApply_NamedSiteIsAnExceptionToItsGeoSite(t *testing.T) {
+	app, force := AppTrafficTag, ForceProxyTag
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geosite:ads-test", "domain:ads.glitch.test"},
+		Direct: []string{"geosite:glitch-test", "domain:good.ads.test"},
+		Proxy:  []string{"process:app.exe"},
+	}, nil, []tierFlow{
+		{"blocked site in a direct geosite", app, "ads.glitch.test", "", everyStrategy(toBlock)},
+		{"another site in the direct geosite", app, "www.glitch.test", "", everyStrategy(toDirect)},
+		{"direct site in a blocked geosite", app, "good.ads.test", "", everyStrategy(toDirect)},
+		{"direct site sniffed", app, "192.0.2.50", "good.ads.test", everyStrategy(toDirect)},
+		{"another site in the blocked geosite", app, "x.ads.test", "", everyStrategy(toBlock)},
+		{"per-app blocked site", force, "ads.glitch.test", "", everyStrategy(toBlock)},
+		{"per-app direct site in a blocked geosite", force, "good.ads.test", "", everyStrategy(toBlock)},
+		{"per-app site in the direct geosite", force, "www.glitch.test", "", everyStrategy(toProxy)},
+	})
+}
+
+// Entries of equal specificity keep block, then direct, then proxy, ahead of
+// a broader block.
+func TestApply_EqualSpecificityKeepsBlockDirectProxy(t *testing.T) {
+	app := AppTrafficTag
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geosite:ads-test", "domain:same.glitch.test"},
+		Direct: []string{"domain:ads.test", "domain:same.glitch.test", "198.51.100.0/25", "geoip:cn"},
+		Proxy:  []string{"domain:ads.test", "domain:same.glitch.test", "198.51.100.0/25", "geoip:cn", "process:app.exe"},
+	}, map[string][]string{"cn.test": {"203.0.113.7"}}, []tierFlow{
+		{"same domain blocked", app, "same.glitch.test", "", everyStrategy(toBlock)},
+		{"same domain direct ahead of a broader block", app, "www.ads.test", "", everyStrategy(toDirect)},
+		{"same CIDR", app, "198.51.100.7", "", everyStrategy(toDirectByAddress)},
+		{"same geoip", app, "203.0.113.7", "", everyStrategy(toDirectByAddress)},
+		{"name in the same geoip", app, "cn.test", "",
+			map[string]string{"AsIs": toCatchAll, "IPIfNonMatch": toDirectByAddress, "IPOnDemand": toDirectByAddress}},
+	})
+}
+
+// A category does not outrank an address block: geosite: and geoip: share a
+// rank, where block wins, and a single address ranks above a keyword. Under
+// IPIfNonMatch a name meets every name entry before it is resolved; under
+// IPOnDemand xray matches a sniffed flow's IP rules against the addresses its
+// name resolves to, not the one the flow carries.
+func TestApply_CategoryOrKeywordDoesNotBeatAnAddressBlock(t *testing.T) {
+	app, force := AppTrafficTag, ForceProxyTag
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geoip:cn", "198.51.100.77"},
+		Direct: []string{"keyword:cdn"},
+		Proxy:  []string{"geosite:glitch-test", "process:app.exe"},
+	}, map[string][]string{"www.glitch.test": {"198.51.100.200"}, "cdn.example.test": {"198.51.100.77"}}, []tierFlow{
+		{"geosite name sniffed on a blocked geoip address", app, "203.0.113.9", "www.glitch.test",
+			map[string]string{"AsIs": toBlock, "IPIfNonMatch": toBlock, "IPOnDemand": toProxy}},
+		{"geosite name", app, "www.glitch.test", "", everyStrategy(toProxy)},
+		{"keyword name sniffed on a blocked address", app, "198.51.100.77", "cdn.example.test", everyStrategy(toBlock)},
+		{"keyword name resolving to a blocked address", app, "cdn.example.test", "",
+			map[string]string{"AsIs": toDirect, "IPIfNonMatch": toDirect, "IPOnDemand": toBlock}},
+		{"keyword name sniffed elsewhere", app, "192.0.2.50", "cdn.example.test",
+			map[string]string{"AsIs": toDirect, "IPIfNonMatch": toDirect, "IPOnDemand": toBlock}},
+		{"per-app geosite name sniffed on a blocked geoip address", force, "203.0.113.9", "www.glitch.test",
+			map[string]string{"AsIs": toBlock, "IPIfNonMatch": toBlock, "IPOnDemand": toProxy}},
+	})
+}
+
+// A block yields only to a more specific entry of its own plane: a name entry
+// does not take a flow from an address block, nor an address entry from a
+// name block. Under IPOnDemand a sniffed name is judged by the address it
+// resolves to; under IPIfNonMatch a name meets the name entries before it is
+// resolved, as it did before tiers were ordered.
+func TestApply_NameDoesNotBeatAnAddressBlock(t *testing.T) {
+	app, force := AppTrafficTag, ForceProxyTag
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"192.0.2.0/24"},
+		Direct: []string{"domain:x.test"},
+		Proxy:  []string{"process:app.exe"},
+	}, map[string][]string{"x.test": {"192.0.2.10"}, "www.x.test": {"198.51.100.9"}}, []tierFlow{
+		{"named site sniffed on a blocked address", app, "192.0.2.10", "x.test", everyStrategy(toBlock)},
+		{"blocked address", app, "192.0.2.10", "", everyStrategy(toBlock)},
+		{"named site resolving to a blocked address", app, "x.test", "",
+			map[string]string{"AsIs": toDirect, "IPIfNonMatch": toDirect, "IPOnDemand": toBlock}},
+		{"named site elsewhere", app, "www.x.test", "", everyStrategy(toDirect)},
+		{"per-app named site sniffed on a blocked address", force, "192.0.2.10", "x.test", everyStrategy(toBlock)},
+	})
+}
+
+func TestApply_AddressDoesNotBeatANameBlock(t *testing.T) {
+	app, force := AppTrafficTag, ForceProxyTag
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"keyword:ads", "geosite:ads-test"},
+		Direct: []string{"192.0.2.128/25"},
+		Proxy:  []string{"process:app.exe"},
+	}, map[string][]string{"myads.example": {"192.0.2.200"}, "www.ads.test": {"192.0.2.200"}, "clean.test": {"192.0.2.200"}}, []tierFlow{
+		{"keyword-blocked name sniffed in the direct range", app, "192.0.2.200", "myads.example", everyStrategy(toBlock)},
+		{"geosite-blocked name sniffed in the direct range", app, "192.0.2.200", "www.ads.test", everyStrategy(toBlock)},
+		{"address in the direct range", app, "192.0.2.200", "", everyStrategy(toDirectByAddress)},
+		{"clean name sniffed in the direct range", app, "192.0.2.200", "clean.test", everyStrategy(toDirectByAddress)},
+		{"per-app blocked name sniffed in the direct range", force, "192.0.2.200", "www.ads.test", everyStrategy(toBlock)},
+	})
+}
+
+// With an exception in each plane, a flow takes a direct exception only where
+// no block of the other plane holds it.
+func TestApply_ExceptionsInBothPlanes(t *testing.T) {
+	app := AppTrafficTag
+	routeTierFlows(t, routing.Tier{
+		Block:  []string{"geosite:ads-test", "geoip:cn"},
+		Direct: []string{"full:good.ads.test", "203.0.113.7"},
+		Proxy:  []string{"process:app.exe"},
+	}, map[string][]string{"good.ads.test": {"203.0.113.7"}, "www.ads.test": {"203.0.113.7"}, "clean.test": {"198.51.100.9"}}, []tierFlow{
+		{"name exception", app, "good.ads.test", "", everyStrategy(toDirect)},
+		{"address exception", app, "203.0.113.7", "", everyStrategy(toDirectByAddress)},
+		{"both exceptions", app, "203.0.113.7", "good.ads.test", everyStrategy(toDirect)},
+		{"name exception sniffed on a blocked address", app, "203.0.113.9", "good.ads.test",
+			map[string]string{"AsIs": toBlock, "IPIfNonMatch": toBlock, "IPOnDemand": toDirect}},
+		{"blocked name sniffed on the address exception", app, "203.0.113.7", "www.ads.test", everyStrategy(toBlock)},
+		{"clean name sniffed on the address exception", app, "203.0.113.7", "clean.test",
+			map[string]string{"AsIs": toDirectByAddress, "IPIfNonMatch": toDirectByAddress, "IPOnDemand": toCatchAll}},
+	})
 }

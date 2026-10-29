@@ -218,6 +218,9 @@ if v, ok := o["resolveExternalIp"]; ok && strings.TrimSpace(v) != "" {
   `routing.Profile.Validate` (run by `routingFromOpts`), never inside one
   engine's config builder: the same rule list must mean the same on every
   engine. The CSV rule keys are refused outright, as keys no engine reads.
+- A builder reads a tier through `routing.Tier.Steps`, the tier as
+  first-match rules, never through the raw `Block`/`Direct`/`Proxy` lists:
+  the order inside a tier lives in one place.
 
 ## 6. Comments
 
