@@ -3,6 +3,7 @@ package xrayconfig
 import (
 	"encoding/json"
 	"net"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -83,6 +84,7 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfi
 		return
 	}
 	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: nsList, Hosts: hosts, QueryStrategy: queryStrategy(dns)}
+	followBalancer(cfg)
 }
 
 func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
@@ -157,6 +159,24 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 		cfg.RouterConfig = &xrayConf.RouterConfig{}
 	}
 	cfg.RouterConfig.RuleList = append(rules, cfg.RouterConfig.RuleList...)
+	if !hasOutbound(cfg, directTag) {
+		followBalancer(cfg)
+	}
+}
+
+// followBalancer sends the lookups xray makes for its own routing, and the
+// module's upstream queries, through the balancer. Untagged they take the
+// default outbound, the first server, so one dead server stalls every name no
+// domain rule matches. The rule sits last: tiers, kill-switches and local
+// networks keep their places. A single server has no balancer and is left alone.
+func followBalancer(cfg *xrayConf.Config) {
+	if cfg.RouterConfig == nil || cfg.DNSConfig == nil ||
+		!slices.ContainsFunc(cfg.RouterConfig.Balancers, func(b *xrayConf.BalancingRule) bool { return b.Tag == balancerTag }) {
+		return
+	}
+	cfg.DNSConfig.Tag = dnsInternalTag
+	rule := fieldRule{InboundTag: []string{dnsInternalTag}, BalancerTag: balancerTag}
+	cfg.RouterConfig.RuleList = append(cfg.RouterConfig.RuleList, rule.raw())
 }
 
 // scopedCopies restricts copies of the servers to domains; SkipFallback keeps
