@@ -89,7 +89,7 @@ func TestMeasurePinnedMihomoCarriesWireGuardLinks(t *testing.T) {
 		t.Skip("needs the mihomo fallback")
 	}
 	for _, link := range []string{"awg://abc", reservedWireGuardLink} {
-		got := Measure(Request{Engine: "mihomo", Links: []string{reservedWireGuardLink}, TimeoutMs: 1500})[0]
+		got := Measure(Request{Engine: "mihomo", Links: []string{link}, TimeoutMs: 1500})[0]
 		if got.Engine != "mihomo" || got.Alive || got.Error == "" ||
 			strings.Contains(got.Error, "pinned engine") || strings.Contains(got.Error, "reserved") {
 			t.Errorf("%.20s: result = %+v, want a failure measured on mihomo", link, got)

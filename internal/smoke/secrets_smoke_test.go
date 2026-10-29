@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"encoding/base64"
 	"fmt"
 	"net/url"
 	"strconv"
@@ -22,6 +23,8 @@ const (
 	smokeTrojanPass = "Tr0janSmokePass"
 	smokeHy2Pass    = "Hy2SmokePass"
 	smokeObfsPass   = "ObfsSmokePass"
+	smokeProxyPass  = "Pr0xySmokePass"
+	smokeWGKey      = "gTsOy/CY9QScEmonjo7Wt6yF7WxLJXOBgpd24MmUH0Y="
 )
 
 // Every engine runs at full verbosity through the paths that put a link's
@@ -76,7 +79,28 @@ func TestSmoke_NoSecretLeavesInEvents(t *testing.T) {
 	hy2 := fmt.Sprintf("hysteria2://%s@127.0.0.1:notaport?obfs=salamander&obfs-password=%s#BadHy2", smokeHy2Pass, smokeObfsPass)
 	startExpectingError(t, ev, "mihomo", hy2)
 
-	secrets := []string{testUUID, smokeRealityKey, smokeShortID, smokeTrojanPass, smokeHy2Pass, smokeObfsPass}
+	// A proxy that is not there, on both engines, then the links each refuses.
+	proxyLogin := base64.StdEncoding.EncodeToString([]byte("alice:" + smokeProxyPass))
+	deadProxies := map[string]string{
+		"xray":   fmt.Sprintf("http://%s@127.0.0.1:%d#DeadHTTP", proxyLogin, freePort(t)),
+		"mihomo": fmt.Sprintf("socks5://alice:%s@127.0.0.1:%d#DeadSocks", smokeProxyPass, freePort(t)),
+	}
+	for engine, link := range deadProxies {
+		seenConnected := len(ev.all(core.EngineConnected))
+		port := startEngineInProxyMode(t, engine, link, map[string]string{"resolveExternalIp": "0"}, nil)
+		if !ev.waitForNew(t, core.EngineConnected, seenConnected, 30*time.Second) {
+			t.Fatalf("%s did not reach EngineConnected", engine)
+		}
+		_, _ = socksConnect(port, "127.0.0.1", uint16(echoPort))
+		stopEngine(t, engine)
+	}
+	startExpectingError(t, ev, "xray", fmt.Sprintf("https://alice:%s@127.0.0.1:443?insecure=1#Insecure", smokeProxyPass))
+	startExpectingError(t, ev, "xray", fmt.Sprintf("socks5://alice:%s@127.0.0.1#NoPort", smokeProxyPass))
+	startExpectingError(t, ev, "mihomo", fmt.Sprintf("http://%s@127.0.0.1:8080#OnMihomo", proxyLogin))
+	startExpectingError(t, ev, "mihomo", fmt.Sprintf("wireguard://%s@127.0.0.1:51820?publickey=short#BadWG", url.QueryEscape(smokeWGKey)))
+
+	secrets := []string{testUUID, smokeRealityKey, smokeShortID, smokeTrojanPass, smokeHy2Pass, smokeObfsPass,
+		smokeProxyPass, proxyLogin, smokeWGKey, url.QueryEscape(smokeWGKey)}
 	events := ev.everything()
 	lines := 0
 	for code, msgs := range events {

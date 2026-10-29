@@ -12,6 +12,7 @@ import (
 	"github.com/metacubex/mihomo/listener/inbound"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
+	"github.com/glitch-vpn/libglitchcore/internal/pinger"
 )
 
 const testProxyUser = "alice"
@@ -86,6 +87,29 @@ func TestSmoke_HTTPProxy(t *testing.T) {
 			wrongCredentialLink: link("wrong"), pingEngine: "xray", server: server,
 		})
 	})
+}
+
+// An https proxy whose certificate is self-signed answers no ping without its
+// pin, nor with another one.
+func TestSmoke_HTTPSProxyChecksTheCertificate(t *testing.T) {
+	_, port, pin := startHTTPProxyServer(t, true)
+	echo := echoBody(t, "198.51.100.48")
+	base := "https://" + testProxyUser + ":" + testProtocolPassword + "@127.0.0.1:" + strconv.Itoa(port) + "?sni=localhost"
+	wrongPin := strings.Repeat("0", len(pin))
+	results := pinger.Measure(pinger.Request{
+		Engine:    "xray",
+		Links:     []string{base + "&pcs=" + pin, base, base + "&pcs=" + wrongPin},
+		ProbeURL:  echo.URL,
+		TimeoutMs: 5000,
+	})
+	if !results[0].Alive {
+		t.Fatalf("the pinned link answered no ping: %+v", results[0])
+	}
+	for _, r := range results[1:] {
+		if r.Alive {
+			t.Fatalf("link %d reached the proxy without its certificate's pin: %+v", r.Index, r)
+		}
+	}
 }
 
 // An http proxy has no UDP. xray drops a datagram meant for it; mihomo would
