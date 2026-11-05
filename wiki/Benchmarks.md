@@ -10,11 +10,15 @@ Windows `amd64` c-shared DLL, `-ldflags="-s -w"`, `with_gvisor`:
 
 | Composition | Size |
 |---|---|
-| xray | 32.6 MB |
-| mihomo | 40.8 MB |
+| xray | 37.5 MB |
+| mihomo | 60.6 MB |
+| xray + mihomo | 92.3 MB |
+| xray + mihomo, release tags | 69.9 MB |
 
-Same source, other targets, full composition: Android arm64 `.so` 63.1 MB,
-Linux amd64 `.so` 69.4 MB, `glitch_vpn_core_service.exe` 59.7 MB.
+"Release tags" are the Makefile's `no_tailscale no_easytier no_zerotier`, which
+drop mihomo outbounds no share link reaches. Sizes were taken from a local
+mingw build of each row, not the Docker release build, and other targets were
+not measured for this composition.
 
 Android ships one `.so` per ABI, so an APK carrying arm64 + x86_64 pays twice
 unless you split by ABI. The numbers are unstripped of Go's runtime metadata

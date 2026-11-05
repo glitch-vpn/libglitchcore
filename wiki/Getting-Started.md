@@ -72,8 +72,8 @@ when an engine gains an option:
   INI, with an optional `#name`, or as a `wireguard://` / `wg://` link in the
   form v2rayNG, v2rayN and Hiddify write. A link with `reserved` bytes runs on
   mihomo, whose WireGuard outbound sends them. SOCKS5 proxies
-  (`socks://`, `socks5://`, `socks5h://`) run on xray and mihomo, HTTP proxies (`http://`, `https://`) on xray alone: they
-  carry no UDP, which xray drops and mihomo would send direct. The userinfo
+  (`socks://`, `socks5://`, `socks5h://`) run on xray and mihomo, HTTP proxies
+  (`http://`, `https://`) on xray alone: they carry no UDP, which xray drops and mihomo would send direct. The userinfo
   is `user:pass` or its base64; `socks4://` is refused, and so is an `https://`
   proxy that asks to skip certificate checks (pin it with `pcs`).
 

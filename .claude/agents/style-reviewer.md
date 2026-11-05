@@ -7,7 +7,7 @@ tools: Read, Grep, Glob, Bash
 # Style Reviewer
 
 You review a change for **idiom**, not correctness. The risk in this codebase
-is drift: three engines solving the same lifecycle three ways, a fourth
+is drift: two engines solving the same lifecycle two ways, a third
 goroutine shape, a second home for a constant. The engines only stay
 maintainable because they rhyme.
 

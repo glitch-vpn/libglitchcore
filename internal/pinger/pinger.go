@@ -24,8 +24,9 @@ const (
 	probeSamples = 3
 )
 
-// Engine, when set, is the engine the caller pinned ("xray" or "mihomo"): every link is measured on it alone, and a link it cannot carry is
-// reported unreachable, never on another engine. Empty keeps the per-link choice.
+// Engine, when set, is the engine the caller pinned ("xray" or "mihomo"): every
+// link is measured on it alone, and a link it cannot carry is reported
+// unreachable, never on another engine. Empty keeps the per-link choice.
 type Request struct {
 	Engine      string   `json:"engine,omitempty"`
 	Links       []string `json:"links"`

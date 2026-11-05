@@ -4,7 +4,7 @@ A VPN client data plane you can embed. It parses share links, brings up a
 tunnel, routes traffic and reports what is happening — you keep the UI, the
 accounts and the product decisions.
 
-Three engines are compiled in and one runs at a time:
+Two engines are compiled in and one runs at a time:
 
 | Engine | Protocols |
 |---|---|

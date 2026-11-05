@@ -27,8 +27,8 @@ make test                     # unit + smoke in the container
 
 1. `gofmt` — the tree is CRLF on Windows; check formatting on an LF copy so
    line endings do not mask a diff.
-2. The tag matrix, all three rows: default, `no_mihomo`, `no_xray`. An engine excluded from a build must not appear in
-   `go list -deps` — that guard is a licence boundary.
+2. The tag matrix, all three rows: default, `no_mihomo`, `no_xray`. An engine
+   excluded from a build must not appear in `go list -deps` — that guard is a licence boundary.
 3. `go vet` on the root shell with and without `-tags service`.
 4. Smoke: `go test -tags="integration with_gvisor" ./internal/smoke/`. It runs
    an xray VLESS server in-process and drives the controller against

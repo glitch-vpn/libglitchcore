@@ -21,11 +21,11 @@ out: {"password": [redacted], "server": "203.0.113.4"}
 in: hysteria auth_str=s3cret obfs-password='x y' psk=abc
 out: hysteria auth_str=[redacted] obfs-password=[redacted] psk=[redacted]
 
-in: [AWG] Failed to start: config AWG: interface.private_key: key is neither hex nor base64
-out: [AWG] Failed to start: config AWG: interface.private_key: key is neither hex nor base64
+in: [mihomo] Failed to start: awg: interface.private_key: key is neither hex nor base64
+out: [mihomo] Failed to start: awg: interface.private_key: key is neither hex nor base64
 
-in: peer(Ab3x…9zQk) - bypassing; passive sample failed
-out: peer(Ab3x…9zQk) - bypassing; passive sample failed
+in: peer(Ab3x…9zQk) - bypassing; handshake failed
+out: peer(Ab3x…9zQk) - bypassing; handshake failed
 
 in: geosite.dat not found (looked for "/data/user/0/app.glitch.vpn/files/geo/geosite.dat")
 out: geosite.dat not found (looked for "/data/user/0/app.glitch.vpn/files/geo/geosite.dat")

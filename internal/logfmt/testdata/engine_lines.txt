@@ -67,8 +67,8 @@ start failed: [mihomo] config build: link 0: parse "hysteria2://Hy2SmokePass@127
 # tun2socks engine.general at Info, with the loopback credentials the core puts on its SOCKS inbound:
 [STACK] tun://GlitchVPN <-> socks5://k3fZ0qLmX9aB2cD4:Wq9rT2yU4iO6pA8sD0fG2hJ4kL6zX8cV0bN2mQ4wE6r@127.0.0.1:61234
 # awgconfig's key errors, wrapped by the start path:
-[AWG] Failed to start: config AWG: interface.private_key: key is neither hex nor base64: illegal base64 data at input byte 3
-[AWG] Failed to start: awg link: parse "awg://cHJpdmF0ZV9rZXk9WUJrM2pSbUt2Wlo5aEo2c1dEcU9McnpQb1RqN0ZnMXg=@203.0.113.9:51820": invalid port
-# AmneziaWG's UAPI dump, as the stats path reads it:
+[mihomo] Failed to start: awg: interface.private_key: key is neither hex nor base64: illegal base64 data at input byte 3
+[mihomo] Failed to start: awg link: parse "awg://cHJpdmF0ZV9rZXk9WUJrM2pSbUt2Wlo5aEo2c1dEcU9McnpQb1RqN0ZnMXg=@203.0.113.9:51820": invalid port
+# A WireGuard device's UAPI dump:
 private_key=58e6a6a7f6d4c3b2a1908f7e6d5c4b3a29180f7e6d5c4b3a29180f7e6d5c4b3a
 preshared_key=0d1c2b3a49586776859a4b3c2d1e0f1a2b3c4d5e6f708192a3b4c5d6e7f80910

@@ -15,12 +15,14 @@ the tagless build still links everything and editor tooling keeps working.
 
 ## What it costs
 
-Windows `amd64` c-shared DLL, `-s -w`, `with_gvisor`:
+Windows `amd64` c-shared DLL from a local mingw build, `-s -w`, `with_gvisor`:
 
 | Composition | Size |
 |---|---|
-| xray | 32.6 MB |
-| mihomo | 40.8 MB |
+| xray | 37.5 MB |
+| mihomo | 60.6 MB |
+| xray + mihomo | 92.3 MB |
+| xray + mihomo, release tags | 69.9 MB |
 
 More numbers, and how they were taken: [Benchmarks](Benchmarks).
 
