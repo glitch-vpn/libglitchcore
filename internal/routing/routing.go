@@ -18,6 +18,9 @@ const (
 	TargetProxy  = "proxy"
 	TargetDirect = "direct"
 	TargetBlock  = "block"
+	// TargetRoute is a named server, group or chain; Entry.To and Step.To
+	// say which.
+	TargetRoute = "route"
 )
 
 // ProcessRules: process:NAME -> target. Mihomo uses PROCESS-NAME, or
@@ -60,6 +63,9 @@ type Tier struct {
 	Block  []string `json:"block,omitempty"`
 	Direct []string `json:"direct,omitempty"`
 	Proxy  []string `json:"proxy,omitempty"`
+	// Routes send what they match to a named target. Inside a tier the
+	// outcomes rank block, direct, routes in the order given, proxy.
+	Routes []Route `json:"routes,omitempty"`
 }
 
 // Profile priority: kill-switches -> per-app VPN flows (the bridge's
@@ -91,6 +97,9 @@ type Profile struct {
 	// DisableUDP blocks UDP except :53 - DNS must survive so name resolution
 	// (and fake-ip interception) keeps working.
 	DisableUDP bool
+	// Targets are the names a tier's routes can take; nil when the session
+	// sends none.
+	Targets *Targets
 }
 
 func (p Profile) ResolvedMode() string {
@@ -123,6 +132,12 @@ func (p Profile) HasBlock() bool {
 // geo code neither engine can look up, and a keyword that xray would read as
 // another matcher.
 func (p Profile) Validate() error {
+	if err := p.Targets.Validate(); err != nil {
+		return err
+	}
+	if err := p.validateRoutes(); err != nil {
+		return err
+	}
 	for i, t := range p.Tiers {
 		for _, list := range [][]string{t.Block, t.Direct, t.Proxy} {
 			for _, m := range list {
@@ -210,7 +225,8 @@ func ValidKeyword(val string) error {
 type Entry struct {
 	Kind   MatchKind
 	Value  string // as Classify returns it
-	Target string // TargetBlock | TargetDirect | TargetProxy
+	Target string // TargetBlock | TargetDirect | TargetRoute | TargetProxy
+	To     string // the named target, when Target is TargetRoute
 }
 
 // ByAddress: the entry matches a flow's address, not its name or its app.
@@ -243,6 +259,7 @@ type Step struct {
 	Entries []Entry
 	Also    []Entry
 	Target  string
+	To      string
 }
 
 // Steps is the tier as first-match rules, in Entries order. A block yields
@@ -262,20 +279,20 @@ func (t Tier) Steps() []Step {
 	var steps []Step
 	for i := 0; i < len(entries); {
 		j := i + 1
-		for j < len(entries) && entries[j].plane() == entries[i].plane() && entries[j].Target == entries[i].Target {
+		for j < len(entries) && entries[j].plane() == entries[i].plane() && entries[j].Target == entries[i].Target && entries[j].To == entries[i].To {
 			j++
 		}
-		run, target := entries[i:j:j], entries[i].Target
+		run, target, to := entries[i:j:j], entries[i].Target, entries[i].To
 		if otherPlane, paired := other[run[0].plane()]; paired && target != TargetBlock {
-			steps = append(steps, guardSteps(run, target, byPlane[otherPlane])...)
+			steps = append(steps, guardSteps(run, target, to, byPlane[otherPlane])...)
 		}
-		steps = append(steps, Step{Entries: run, Target: target})
+		steps = append(steps, Step{Entries: run, Target: target, To: to})
 		i = j
 	}
 	return steps
 }
 
-func guardSteps(run []Entry, target string, otherPlane []Entry) []Step {
+func guardSteps(run []Entry, target, to string, otherPlane []Entry) []Step {
 	last := -1
 	for k, e := range otherPlane {
 		if e.Target == TargetBlock {
@@ -287,15 +304,15 @@ func guardSteps(run []Entry, target string, otherPlane []Entry) []Step {
 	}
 	var steps []Step
 	for _, e := range otherPlane[:last+1] {
-		outcome := target
+		outcome, outcomeTo := target, to
 		if e.Target == TargetBlock {
-			outcome = TargetBlock
+			outcome, outcomeTo = TargetBlock, ""
 		}
-		if n := len(steps); n > 0 && steps[n-1].Target == outcome {
+		if n := len(steps); n > 0 && steps[n-1].Target == outcome && steps[n-1].To == outcomeTo {
 			steps[n-1].Also = append(steps[n-1].Also, e)
 			continue
 		}
-		steps = append(steps, Step{Entries: run, Also: []Entry{e}, Target: outcome})
+		steps = append(steps, Step{Entries: run, Also: []Entry{e}, Target: outcome, To: outcomeTo})
 	}
 	return steps
 }
@@ -313,11 +330,23 @@ func (t Tier) Entries() []Entry {
 	for _, list := range []struct {
 		matchers []string
 		target   string
-	}{{t.Block, TargetBlock}, {t.Direct, TargetDirect}, {t.Proxy, TargetProxy}} {
+	}{{t.Block, TargetBlock}, {t.Direct, TargetDirect}} {
 		for _, m := range list.matchers {
 			if kind, val, ok := Classify(m); ok {
 				entries = append(entries, Entry{Kind: kind, Value: val, Target: list.target})
 			}
+		}
+	}
+	for _, r := range t.Routes {
+		for _, m := range r.Match {
+			if kind, val, ok := Classify(m); ok && kind != KindProcess {
+				entries = append(entries, Entry{Kind: kind, Value: val, Target: TargetRoute, To: r.To})
+			}
+		}
+	}
+	for _, m := range t.Proxy {
+		if kind, val, ok := Classify(m); ok {
+			entries = append(entries, Entry{Kind: kind, Value: val, Target: TargetProxy})
 		}
 	}
 	slices.SortStableFunc(entries, func(a, b Entry) int {
@@ -330,12 +359,14 @@ func (t Tier) Entries() []Entry {
 // evaluationKey orders by section (app block, sites and categories, other app
 // entries), then rank, then breadth inside the rank, then outcome.
 func (e Entry) evaluationKey() [4]int {
-	outcome := 2
+	outcome := 3
 	switch e.Target {
 	case TargetBlock:
 		outcome = 0
 	case TargetDirect:
 		outcome = 1
+	case TargetRoute:
+		outcome = 2
 	}
 	switch e.Kind {
 	case KindProcess:
