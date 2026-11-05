@@ -12,7 +12,13 @@ import (
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
-func init() { engine.SetICMPHandler(echoRequestDropper{}) }
+// prepareBridgeEngine loads a session's key and its ICMP handler together:
+// tun2socks clears the handler on every stop and on a failed start, so one
+// set earlier does not reach the next session.
+func prepareBridgeEngine(key *engine.Key) {
+	engine.SetICMPHandler(echoRequestDropper{})
+	engine.Insert(key)
+}
 
 // echoRequestDropper takes every ICMP echo request for itself and never
 // answers it. Left to the stack, the bridge replies to a ping from the device
