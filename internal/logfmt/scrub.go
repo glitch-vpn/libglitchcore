@@ -10,7 +10,7 @@ import (
 
 const (
 	redacted   = "[redacted]"
-	secretKeys = `password|passwd|pwd|pass|psk|pre[_-]?shared[_-]?key|private[_-]?key|public[_-]?key|pbk|secret|token|auth[_-]?str|auth|obfs[_-]?password|encryption|decryption|uuid|short[_-]?id|sid`
+	secretKeys = `password|passwd|pwd|pass|psk|pre[_-]?shared[_-]?key|private[_-]?key|public[_-]?key|header[_-]?protection[_-]?key|pbk|secret|token|auth[_-]?str|auth|obfs[_-]?password|encryption|decryption|uuid|short[_-]?id|sid`
 )
 
 var (

@@ -117,3 +117,19 @@ func TestScrub_VLESSEncryptionValue(t *testing.T) {
 		}
 	}
 }
+
+// An AWG 3.x header protection key is a secret in an INI line, a UAPI line
+// and an error naming it.
+func TestScrub_HeaderProtectionKey(t *testing.T) {
+	const key = "13BhOBYH"
+	for _, line := range []string{
+		"HeaderProtectionKey = " + key,
+		"header_protection_key=" + key,
+		"header-protection-key=" + key,
+		`awg: "headerprotectionkey": "` + key + `"`,
+	} {
+		if got := Scrub(line); strings.Contains(got, key) {
+			t.Errorf("Scrub(%q) = %q, still holds the key", line, got)
+		}
+	}
+}
