@@ -196,7 +196,7 @@ func TestBuildConfig_ForceDirectRoutesByBlockThenDirect(t *testing.T) {
 // Without a block the force-direct flows take one rule and no sub-rule.
 func TestBuildRules_ForceDirectWithoutBlocksGoesStraightDirect(t *testing.T) {
 	prof := routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Direct: []string{"process:app.exe"}}}}
-	got := buildRules(prof, "vpn", false, true)
+	got := buildRules(prof, "vpn", false, true, nil)
 	if got[0] != "IN-NAME,"+ForceDirectInName+",DIRECT" {
 		t.Fatalf("rules = %v, want the force-direct flows direct first", got)
 	}
@@ -234,7 +234,7 @@ func TestBuildRules_ForceProxyUDPDoesNotReachTheTiers(t *testing.T) {
 		raw := config.DefaultRawConfig()
 		raw.GeodataMode = true
 		raw.Proxy = []map[string]any{{"name": "p", "type": "socks5", "server": "1.2.3.4", "port": 1080, "udp": false}}
-		raw.Rule = buildRules(prof, "p", true, false)
+		raw.Rule = buildRules(prof, "p", true, false, nil)
 		if withBlock {
 			raw.SubRules = map[string][]string{forceFlowsSubRule: forceFlowRules(prof, "p")}
 		}

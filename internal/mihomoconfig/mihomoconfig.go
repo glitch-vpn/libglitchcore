@@ -118,8 +118,21 @@ func ValidFingerprint(fp string) bool {
 
 // BuildConfig: one link -> that proxy; multiple -> balancer group.
 func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile) (*config.Config, error) {
+	raw, geoRules, err := buildRaw(links, in, opts, prof)
+	if err != nil {
+		return nil, err
+	}
+	if err := checkGeoAssets(geoRules, raw.DNS.FakeIPFilter); err != nil {
+		return nil, err
+	}
+	return config.ParseRawConfig(raw)
+}
+
+// buildRaw is the config as mihomo reads it before parsing, with the rules
+// whose geo lists have to exist.
+func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*config.RawConfig, []string, error) {
 	if in.MixedPort <= 0 && in.Tun == nil && !in.Bridge {
-		return nil, fmt.Errorf("no inbound: set MixedPort, Tun or Bridge")
+		return nil, nil, fmt.Errorf("no inbound: set MixedPort, Tun or Bridge")
 	}
 
 	raw := config.DefaultRawConfig()
@@ -206,25 +219,29 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		proxy, err := proxyFromLink(trimmed, names[ni])
 		ni++
 		if err != nil {
-			return nil, fmt.Errorf("link %d: %w", i, err)
+			return nil, nil, fmt.Errorf("link %d: %w", i, err)
 		}
 		applyProxyFingerprint(proxy, opts.Fingerprint)
 		raw.Proxy = append(raw.Proxy, proxy)
 	}
 	if len(names) == 0 {
-		return nil, fmt.Errorf("no links provided")
+		return nil, nil, fmt.Errorf("no links provided")
 	}
 
 	target := Target(links)
 	if len(names) > 1 {
-		group, err := balancerGroup(names, opts.Strategy, opts.ProbeURL)
+		group, err := balancerGroup(GroupTag, names, opts.Strategy, opts.ProbeURL)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		raw.ProxyGroup = []map[string]any{group}
 	}
+	named, err := addNamedProxies(raw, names, prof, opts)
+	if err != nil {
+		return nil, nil, err
+	}
 
-	rules := append(fakePoolRejectRules(raw), buildRules(prof, target, in.ForceProxy, in.ForceDirect)...)
+	rules := append(fakePoolRejectRules(raw), buildRules(prof, target, in.ForceProxy, in.ForceDirect, named)...)
 	raw.Rule = rules
 	geoRules := rules
 	if in.ForceDirect && prof.HasBlock() {
@@ -243,10 +260,7 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		geoRules = append(append([]string{}, geoRules...), raw.SubRules[forceFlowsSubRule]...)
 	}
 
-	if err := checkGeoAssets(geoRules, raw.DNS.FakeIPFilter); err != nil {
-		return nil, err
-	}
-	return config.ParseRawConfig(raw)
+	return raw, geoRules, nil
 }
 
 // checkGeoAssets validates the caller's .dat files before mihomo reaches its
@@ -302,7 +316,7 @@ func requireGeoFile(path, listName, label string) error {
 // bridge's always-tunnel flows right after the kill-switches: they meet every
 // tier's block and the local networks, then reach the proxy even in direct-all
 // mode.
-func buildRules(p routing.Profile, target string, forceProxy, forceDirect bool) []string {
+func buildRules(p routing.Profile, target string, forceProxy, forceDirect bool, named map[string]string) []string {
 	var rules []string
 	if p.DisableIPv6 {
 		rules = append(rules, "IP-CIDR,::/0,REJECT,no-resolve")
@@ -332,7 +346,11 @@ func buildRules(p routing.Profile, target string, forceProxy, forceDirect bool) 
 	outcomes := map[string]string{routing.TargetBlock: "REJECT", routing.TargetDirect: "DIRECT", routing.TargetProxy: target}
 	for _, tier := range p.Tiers {
 		for _, step := range tier.Steps() {
-			rules = append(rules, stepLines(step, outcomes[step.Target])...)
+			outcome := outcomes[step.Target]
+			if step.Target == routing.TargetRoute {
+				outcome = named[step.To]
+			}
+			rules = append(rules, stepLines(step, outcome)...)
 		}
 	}
 	catchAll := target
@@ -523,13 +541,13 @@ func NormalizeStrategy(strategy string) (string, bool) {
 	}
 }
 
-func balancerGroup(names []string, strategy, probe string) (map[string]any, error) {
+func balancerGroup(name string, members []string, strategy, probe string) (map[string]any, error) {
 	if strings.TrimSpace(probe) == "" {
 		probe = probeURL
 	}
 	g := map[string]any{
-		"name":     GroupTag,
-		"proxies":  names,
+		"name":     name,
+		"proxies":  members,
 		"url":      probe,
 		"interval": 300,
 	}

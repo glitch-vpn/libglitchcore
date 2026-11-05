@@ -56,7 +56,7 @@ func TestBuildRules_ForceProxyMeetsBlockThenProxy(t *testing.T) {
 		DisableIPv6: true,
 		DisableUDP:  true,
 	}
-	got := strings.Join(buildRules(p, "vpn", true, false), "\n")
+	got := strings.Join(buildRules(p, "vpn", true, false, nil), "\n")
 	want := strings.Join([]string{
 		"IP-CIDR,::/0,REJECT,no-resolve",
 		"AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT",
@@ -73,7 +73,7 @@ func TestBuildRules_ForceProxyMeetsBlockThenProxy(t *testing.T) {
 	if sub := strings.Join(forceFlowRules(p, "vpn"), "\n"); sub != "DOMAIN-SUFFIX,ads.example,REJECT\nMATCH,vpn" {
 		t.Fatalf("force flow rules = %q", sub)
 	}
-	if plain := buildRules(routing.Profile{Mode: routing.ModeDirectAll}, "vpn", true, false); plain[0] != "IN-NAME,"+ForceProxyInName+",vpn" || plain[1] != "IN-NAME,"+ForceProxyInName+",REJECT" {
+	if plain := buildRules(routing.Profile{Mode: routing.ModeDirectAll}, "vpn", true, false, nil); plain[0] != "IN-NAME,"+ForceProxyInName+",vpn" || plain[1] != "IN-NAME,"+ForceProxyInName+",REJECT" {
 		t.Fatalf("without a block the flow goes straight to the proxy: %v", plain)
 	}
 }
@@ -197,14 +197,14 @@ func TestBuildConfig_Fingerprint(t *testing.T) {
 }
 
 func TestBalancerGroup_ProbeURL(t *testing.T) {
-	g, err := balancerGroup([]string{"a", "b"}, "", "https://probe.example/health")
+	g, err := balancerGroup(GroupTag, []string{"a", "b"}, "", "https://probe.example/health")
 	if err != nil {
 		t.Fatalf("balancerGroup: %v", err)
 	}
 	if g["url"] != "https://probe.example/health" {
 		t.Fatalf("group url = %v, want custom", g["url"])
 	}
-	g, err = balancerGroup([]string{"a", "b"}, "fallback", "")
+	g, err = balancerGroup(GroupTag, []string{"a", "b"}, "fallback", "")
 	if err != nil {
 		t.Fatalf("balancerGroup(default): %v", err)
 	}
@@ -510,7 +510,7 @@ func TestBuildRules(t *testing.T) {
 		}},
 		LocalNetworks: true,
 	}
-	joined := strings.Join(buildRules(p, "vpn", false, false), "\n")
+	joined := strings.Join(buildRules(p, "vpn", false, false, nil), "\n")
 	for _, want := range []string{
 		"DOMAIN-SUFFIX,ads.example,REJECT",
 		"PROCESS-NAME,Discord.exe,DIRECT",
@@ -534,7 +534,7 @@ func TestBuildRules(t *testing.T) {
 			"48.123.243.123", "full:exact.example", "keyword:ads", "regexp:.*\\.cn$",
 			"domain:.ru.", ".рф",
 		}}},
-	}, "vpn", false, false), "\n")
+	}, "vpn", false, false, nil), "\n")
 	for _, want := range []string{
 		"IP-CIDR,48.123.243.123/32,vpn,no-resolve",
 		"DOMAIN,exact.example,vpn",
@@ -552,20 +552,20 @@ func TestBuildRules(t *testing.T) {
 	da := strings.Join(buildRules(routing.Profile{
 		Mode:  routing.ModeDirectAll,
 		Tiers: []routing.Tier{{Proxy: []string{"domain:youtube.com"}}},
-	}, "vpn", false, false), "\n")
+	}, "vpn", false, false, nil), "\n")
 	if !strings.Contains(da, "DOMAIN-SUFFIX,youtube.com,vpn") || !strings.Contains(da, "MATCH,DIRECT") {
 		t.Fatalf("direct-all rules wrong:\n%s", da)
 	}
 
 	// Empty profile -> everything to the proxy.
-	if empty := buildRules(routing.Profile{}, "proxy-0", false, false); len(empty) != 1 || empty[0] != "MATCH,proxy-0" {
+	if empty := buildRules(routing.Profile{}, "proxy-0", false, false, nil); len(empty) != 1 || empty[0] != "MATCH,proxy-0" {
 		t.Fatalf("empty profile rules = %v", empty)
 	}
 
 	// A zone in the Cyrillic script and a geosite alongside it translate.
 	inv := strings.Join(buildRules(routing.Profile{
 		Tiers: []routing.Tier{{Block: []string{"geosite:category-ru", "domain:рф"}}},
-	}, "vpn", false, false), "\n")
+	}, "vpn", false, false, nil), "\n")
 	if !strings.Contains(inv, "GEOSITE,category-ru,REJECT") || !strings.Contains(inv, "DOMAIN-SUFFIX,рф,REJECT") {
 		t.Fatalf("valid matchers dropped:\n%s", inv)
 	}
@@ -574,7 +574,7 @@ func TestBuildRules(t *testing.T) {
 	// literal category names like geolocation-!cn) and must survive.
 	geo := strings.Join(buildRules(routing.Profile{
 		Tiers: []routing.Tier{{Proxy: []string{"geosite:geolocation-!cn", "geosite:cn@ads", "geoip:!ru"}}},
-	}, "vpn", false, false), "\n")
+	}, "vpn", false, false, nil), "\n")
 	for _, want := range []string{
 		"GEOSITE,geolocation-!cn,vpn",
 		"GEOSITE,cn@ads,vpn",
@@ -628,7 +628,7 @@ func TestBuildRules_TwoTierOrdering(t *testing.T) {
 			{Proxy: []string{"domain:vk.ru"}},
 			{Direct: []string{"domain:ru"}},
 		},
-	}, "vpn", false, false)
+	}, "vpn", false, false, nil)
 	want := []string{
 		"DOMAIN-SUFFIX,vk.ru,vpn",
 		"DOMAIN-SUFFIX,ru,DIRECT",
@@ -653,7 +653,7 @@ func TestBalancerStrategy(t *testing.T) {
 		"load-balance-hash": {"load-balance", "consistent-hashing"},
 	}
 	for strategy, want := range cases {
-		g, err := balancerGroup([]string{"a", "b"}, strategy, "")
+		g, err := balancerGroup(GroupTag, []string{"a", "b"}, strategy, "")
 		if err != nil {
 			t.Fatalf("strategy %q: %v", strategy, err)
 		}
@@ -665,7 +665,7 @@ func TestBalancerStrategy(t *testing.T) {
 		}
 	}
 
-	if _, err := balancerGroup([]string{"a", "b"}, "leastping", ""); err == nil {
+	if _, err := balancerGroup(GroupTag, []string{"a", "b"}, "leastping", ""); err == nil {
 		t.Fatal("expected error for xray-only strategy 'leastping' on mihomo")
 	}
 }
