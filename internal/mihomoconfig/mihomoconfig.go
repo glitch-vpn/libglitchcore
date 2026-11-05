@@ -592,7 +592,7 @@ func applyTun(raw *config.RawConfig, t *TunInbound) {
 	raw.Tun.ProcessorsPerChannel = 0
 	// mihomo forwards an echo request by opening its own ICMP socket, which the
 	// platform keeps outside the tunnel, so the echo would leave from the device's
-	// own address under no rule. The stack answers it instead, as the tun2socks
+	// own address under no rule. The stack drops it instead, as the tun2socks
 	// bridge does.
 	raw.Tun.DisableICMPForwarding = true
 
