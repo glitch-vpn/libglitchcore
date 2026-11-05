@@ -19,9 +19,14 @@ const maxJunkPacketCount = 128
 // recommends, not a limit amneziawg-go enforces.
 const maxJunkPacketSize = 1280
 
-// maxChainTagSize bounds a size argument of a tag chain; amneziawg-go's legacy
-// device refuses above it, its 3.x device does not.
-const maxChainTagSize = 1000
+// maxLegacyTagSize bounds a size argument of a tag in the legacy device, which
+// refuses above it.
+const maxLegacyTagSize = 1000
+
+// maxChainWireSize bounds what a chain's fixed-size tags add up to, and the
+// size argument of one tag on the 3.x device, which sets none: a UDP datagram
+// holds no more, and a larger size is allocated before it fails.
+const maxChainWireSize = 65535
 
 type chainTag struct{ name, param string }
 
@@ -57,10 +62,24 @@ func splitChain(value string) ([]chainTag, error) {
 	return tags, nil
 }
 
-func chainSize(tag chainTag) error {
+// chainSize reads a size argument no larger than limit.
+func chainSize(tag chainTag, limit int) (int, error) {
 	n, err := strconv.Atoi(tag.param)
-	if err != nil || n < 0 || n > maxChainTagSize {
-		return fmt.Errorf("<%s %s>: want a size from 0 to %d", tag.name, tag.param, maxChainTagSize)
+	if err != nil || n < 0 || n > limit {
+		return 0, fmt.Errorf("<%s %s>: want a size from 0 to %d", tag.name, tag.param, limit)
+	}
+	return n, nil
+}
+
+// chainBytes is how many bytes a <b> argument holds, once chainHex passed it.
+func chainBytes(tag chainTag) int {
+	digits := strings.TrimPrefix(strings.TrimPrefix(tag.param, "0x"), "0X")
+	return (len(digits) + 1) / 2
+}
+
+func checkChainWireSize(total int) error {
+	if total > maxChainWireSize {
+		return fmt.Errorf("fixed-size tags add up to %d bytes, more than a datagram holds (%d)", total, maxChainWireSize)
 	}
 	return nil
 }
@@ -104,11 +123,15 @@ func checkLegacyChain(value string) error {
 		return err
 	}
 	seen := map[string]bool{}
+	total := 0
 	for _, tag := range tags {
+		var n int
 		switch tag.name {
 		case "b":
 			err = chainHex(tag, true)
+			n = chainBytes(tag)
 		case "c", "t":
+			n = 8
 			if tag.param != "" {
 				err = fmt.Errorf("<%s> takes no argument", tag.name)
 			} else if seen[tag.name] {
@@ -116,7 +139,7 @@ func checkLegacyChain(value string) error {
 			}
 			seen[tag.name] = true
 		case "r", "rc", "rd":
-			err = chainSize(tag)
+			n, err = chainSize(tag, maxLegacyTagSize)
 		case "wt":
 			if n, convErr := strconv.Atoi(tag.param); convErr != nil || n < 0 || n > 5000 {
 				err = fmt.Errorf("<wt %s>: want milliseconds from 0 to 5000", tag.param)
@@ -127,6 +150,10 @@ func checkLegacyChain(value string) error {
 		if err != nil {
 			return err
 		}
+		total += n
+	}
+	if err := checkChainWireSize(total); err != nil {
+		return err
 	}
 	return parseLegacyChain(value)
 }
@@ -151,24 +178,31 @@ func checkV3Chain(value string) error {
 	if err != nil {
 		return err
 	}
+	total := 0
 	for _, tag := range tags {
+		var n int
 		switch tag.name {
 		case "b":
 			err = chainHex(tag, false)
+			n = chainBytes(tag)
 		case "t", "d", "ds":
 			if tag.param != "" {
 				err = fmt.Errorf("<%s> takes no argument", tag.name)
 			}
+			if tag.name == "t" {
+				n = 4
+			}
 		case "r", "rc", "rd", "dz":
-			err = chainSize(tag)
+			n, err = chainSize(tag, maxChainWireSize)
 		default:
 			err = fmt.Errorf("unknown tag <%s>", tag.name)
 		}
 		if err != nil {
 			return err
 		}
+		total += n
 	}
-	return nil
+	return checkChainWireSize(total)
 }
 
 // checkJunkSizes holds Jmin and Jmax to 0 <= Jmin <= Jmax <= maxJunkPacketSize.

@@ -116,3 +116,31 @@ func TestAmneziaChains_RefusedAtBuildWhatTheDeviceRefuses(t *testing.T) {
 		})
 	}
 }
+
+func TestAmneziaChains_SizesFollowEachDevice(t *testing.T) {
+	cases := []struct {
+		name, ini string
+		ok        bool
+	}{
+		{"3.x r past the legacy cap", awgINIWith("RekeyTimeout = 5\nI1 = <r 5000>\n"), true},
+		{"3.x r at a datagram", awgINIWith("RekeyTimeout = 5\nI1 = <r 65535>\n"), true},
+		{"3.x r past a datagram", awgINIWith("RekeyTimeout = 5\nI1 = <r 65536>\n"), false},
+		{"3.x rc huge", awgINIWith("RekeyTimeout = 5\nI1 = <rc 9999999999999>\n"), false},
+		{"3.x tags past a datagram together", awgINIWith("RekeyTimeout = 5\nI1 = <r 40000><rd 40000>\n"), false},
+		{"3.x dz past a datagram", awgINIWith("RekeyTimeout = 5\nI1 = <dz 70000>\n"), false},
+		{"legacy r at its cap", awgINIWith("I1 = <r 1000>\n"), true},
+		{"legacy r past its cap", awgINIWith("I1 = <r 1001>\n"), false},
+		{"legacy tags past a datagram together", awgINIWith("I1 = " + strings.Repeat("<r 1000>", 66) + "\n"), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			_, err := ProxyMapFromLink(c.ini)
+			if c.ok && err != nil {
+				t.Errorf("ProxyMapFromLink: %v", err)
+			}
+			if !c.ok && err == nil {
+				t.Error("want an error")
+			}
+		})
+	}
+}
