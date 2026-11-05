@@ -54,3 +54,37 @@ func TestEndpointHostPort_NamesThePeerThatCarriesTheDefaultRoute(t *testing.T) {
 		})
 	}
 }
+
+// IPv4 and IPv6 default routes are different prefixes: the peer that owns
+// 0.0.0.0/0 carries IPv4 whatever peer owns ::/0, and a tie breaks to the
+// last peer only for one identical prefix.
+func TestEndpointHostPort_PrefersTheIPv4DefaultRoute(t *testing.T) {
+	const head = "[Interface]\nPrivateKey = x\n\n"
+	cases := map[string]struct {
+		cfg  string
+		host string
+	}{
+		"v4 default first, v6 default second": {
+			head + "[Peer]\nEndpoint = a.example:1\nAllowedIPs = 0.0.0.0/0\n[Peer]\nEndpoint = b.example:2\nAllowedIPs = ::/0\n", "a.example",
+		},
+		"v6 default first, v4 default second": {
+			head + "[Peer]\nEndpoint = a.example:1\nAllowedIPs = ::/0\n[Peer]\nEndpoint = b.example:2\nAllowedIPs = 0.0.0.0/0\n", "b.example",
+		},
+		"the same default twice goes to the last": {
+			head + "[Peer]\nEndpoint = a.example:1\nAllowedIPs = 0.0.0.0/0\n[Peer]\nEndpoint = b.example:2\nAllowedIPs = 0.0.0.0/0, ::/0\n", "b.example",
+		},
+		"only a v6 default": {
+			head + "[Peer]\nEndpoint = a.example:1\nAllowedIPs = 10.0.0.0/8\n[Peer]\nEndpoint = b.example:2\nAllowedIPs = ::/0\n", "b.example",
+		},
+		"a wider v4 prefix beats a wider v6 one": {
+			head + "[Peer]\nEndpoint = a.example:1\nAllowedIPs = 10.0.0.0/16\n[Peer]\nEndpoint = b.example:2\nAllowedIPs = fd00::/8\n", "a.example",
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if host, _ := EndpointHostPort(c.cfg); host != c.host {
+				t.Errorf("got %q, want %q", host, c.host)
+			}
+		})
+	}
+}

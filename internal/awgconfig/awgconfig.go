@@ -226,30 +226,57 @@ func ParseINI(ini string) (iface map[string]string, peers []map[string]string) {
 }
 
 // PrimaryPeer is the index of the peer WireGuard sends a flow to when nothing
-// is more specific: the one whose AllowedIPs reach furthest (a default route
-// first, then the shortest prefix). Of equal peers it is the last, since
-// WireGuard keeps the later owner of a prefix. -1 when there is no peer.
+// is more specific: the peer that owns 0.0.0.0/0, else the one that owns ::/0,
+// else the one with the shortest IPv4 prefix, then the shortest IPv6 one. Of
+// peers equal in all of these it is the last, since WireGuard keeps the later
+// owner of a prefix. -1 when there is no peer.
 func PrimaryPeer(peers []map[string]string) int {
-	best, bestBits := -1, 1<<30
+	best := -1
+	var bestRank [4]int
 	for i, peer := range peers {
-		bits := widestPrefixBits(peer["allowedips"])
-		if bits <= bestBits {
-			best, bestBits = i, bits
+		v4, v6 := widestPrefixBits(peer["allowedips"])
+		rank := [4]int{boolRank(v4 == 0), boolRank(v6 == 0), v4, v6}
+		if best < 0 || !rankLess(bestRank, rank) {
+			best, bestRank = i, rank
 		}
 	}
 	return best
 }
 
-// widestPrefixBits is the shortest prefix length in a comma-separated
-// AllowedIPs, 0 for a default route; a list with no prefix is the narrowest.
-func widestPrefixBits(allowedIPs string) int {
-	bits := 1 << 29
-	for _, f := range strings.Split(allowedIPs, ",") {
-		if prefix, err := netip.ParsePrefix(strings.TrimSpace(f)); err == nil && prefix.Bits() < bits {
-			bits = prefix.Bits()
+func boolRank(wins bool) int {
+	if wins {
+		return 0
+	}
+	return 1
+}
+
+// rankLess reports whether a ranks strictly ahead of b.
+func rankLess(a, b [4]int) bool {
+	for i := range a {
+		if a[i] != b[i] {
+			return a[i] < b[i]
 		}
 	}
-	return bits
+	return false
+}
+
+// widestPrefixBits is the shortest IPv4 and the shortest IPv6 prefix length in
+// a comma-separated AllowedIPs, 0 for a default route; a family with no prefix
+// is the narrowest.
+func widestPrefixBits(allowedIPs string) (v4, v6 int) {
+	v4, v6 = 1<<29, 1<<29
+	for _, f := range strings.Split(allowedIPs, ",") {
+		prefix, err := netip.ParsePrefix(strings.TrimSpace(f))
+		if err != nil {
+			continue
+		}
+		if prefix.Addr().Is4() {
+			v4 = min(v4, prefix.Bits())
+		} else {
+			v6 = min(v6, prefix.Bits())
+		}
+	}
+	return v4, v6
 }
 
 // EndpointHostPort is the endpoint of the config's primary peer. Port 0 when
