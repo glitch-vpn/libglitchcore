@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -417,5 +418,82 @@ func TestNamedTargets_LiveChainAndNamedServer(t *testing.T) {
 	}
 	if callers := hop2Callers(); len(callers) != 1 {
 		t.Errorf("the chain's exit was reached again from %v with hop 1 down", callers)
+	}
+}
+
+func chainProfile(entry, later string) routing.Profile {
+	return routing.Profile{
+		Tiers: []routing.Tier{{Routes: []routing.Route{{To: "c1", Match: []string{"full:c.example"}}}}},
+		Targets: &routing.Targets{
+			Version: 1,
+			Servers: []routing.TargetServer{{ID: "a", Link: entry}, {ID: "b", Link: later}},
+			Chains:  []routing.TargetChain{{ID: "c1", Hops: []string{"a", "b"}}},
+		},
+	}
+}
+
+const downloadExtra = `{"downloadSettings":{"address":"dl.example.com","port":443,"network":"xhttp","security":"tls","tlsSettings":{"serverName":"dl.example.com"},"xhttpSettings":{"path":"/d"}}}`
+
+func xhttpLink(extra string) string {
+	return "vless://11111111-1111-1111-1111-111111111111@later.example:443?type=xhttp&security=tls&path=/u&mode=packet-up&extra=" + url.QueryEscape(extra) + "#x"
+}
+
+// An xhttp hop's download leg is a connection of its own with its own socket
+// options, so it has to dial through the hop before it too.
+func TestNamedTargets_XhttpDownloadLegDialsThroughTheHopBefore(t *testing.T) {
+	resolveAs(t, map[string]string{"one.example": "192.0.2.11"})
+	res, err := BuildConfig([]string{poolLink}, BalancerOptions{}, chainProfile(linkOne, xhttpLink(downloadExtra)), "none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := res.Config.Build(); err != nil {
+		t.Fatalf("xray refused the config: %v", err)
+	}
+	hop := outboundByTag(t, res.Config, "rc-c1-1")
+	if got := dialerProxyOf(hop); got != "rc-c1-0" {
+		t.Fatalf("upload leg dialerProxy = %q", got)
+	}
+	var extra struct {
+		DownloadSettings struct {
+			Sockopt struct {
+				DialerProxy string `json:"dialerProxy"`
+			} `json:"sockopt"`
+		} `json:"downloadSettings"`
+	}
+	if err := json.Unmarshal(hop.StreamSetting.XHTTPSettings.Extra, &extra); err != nil {
+		t.Fatal(err)
+	}
+	if extra.DownloadSettings.Sockopt.DialerProxy != "rc-c1-0" {
+		t.Errorf("download leg dialerProxy = %q, want rc-c1-0: %s", extra.DownloadSettings.Sockopt.DialerProxy, hop.StreamSetting.XHTTPSettings.Extra)
+	}
+
+	entry, err := BuildConfig([]string{poolLink}, BalancerOptions{}, chainProfile(xhttpLink(downloadExtra), linkOne), "none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(outboundByTag(t, entry.Config, "rc-c1-0").StreamSetting.XHTTPSettings.Extra), "dialerProxy") {
+		t.Error("the first hop is dialled by the client: its download leg is too")
+	}
+}
+
+// xray looks an ECH config up itself with a socket of its own, so a hop after
+// the first that needs the lookup would send it outside the hop before it.
+func TestNamedTargets_LaterHopEchLookupIsRefused(t *testing.T) {
+	resolveAs(t, map[string]string{"one.example": "192.0.2.11"})
+	const vmessECH = "vmess://" + testVMessUUID + "@192.0.2.61:443?type=tcp&security=tls&sni=h.example&ech="
+	lookup := vmessECH + "udp%3A%2F%2F192.0.2.62#v"
+	list := vmessECH + "AEX%2BDQBBAAAgACA%3D#v"
+	if _, err := BuildConfig([]string{poolLink}, BalancerOptions{}, chainProfile(linkOne, lookup), "none"); err == nil {
+		t.Error("a later hop that queries for its ECH config must be refused")
+	}
+	if _, err := BuildConfig([]string{poolLink}, BalancerOptions{}, chainProfile(lookup, linkOne), "none"); err != nil {
+		t.Errorf("the first hop is dialled by the client: %v", err)
+	}
+	if _, err := BuildConfig([]string{poolLink}, BalancerOptions{}, chainProfile(linkOne, list), "none"); err != nil {
+		t.Errorf("a config list needs no lookup: %v", err)
+	}
+	downloadECH := strings.Replace(downloadExtra, `"serverName":"dl.example.com"`, `"serverName":"dl.example.com","echConfigList":"udp://192.0.2.62"`, 1)
+	if _, err := BuildConfig([]string{poolLink}, BalancerOptions{}, chainProfile(linkOne, xhttpLink(downloadECH)), "none"); err == nil {
+		t.Error("a download leg that queries for its ECH config must be refused too")
 	}
 }

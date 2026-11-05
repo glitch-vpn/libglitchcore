@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
@@ -78,5 +79,23 @@ func TestCoreCapabilities_NamesRouteTargets(t *testing.T) {
 	}
 	if !slices.Contains(caps.Features, "routeTargets") {
 		t.Errorf("features %v lack routeTargets", caps.Features)
+	}
+}
+
+func TestHopResolver_TakesAPublicPlainServer(t *testing.T) {
+	cases := []struct {
+		servers []string
+		want    string
+	}{
+		{nil, ""},
+		{[]string{"192.168.1.1", "127.0.0.1"}, ""},
+		{[]string{"https://dns.example/dns-query"}, ""},
+		{[]string{"192.168.1.1", "9.9.9.9"}, "9.9.9.9:53"},
+		{[]string{"8.8.8.8:5353"}, "8.8.8.8:5353"},
+	}
+	for _, c := range cases {
+		if got := hopResolver(dnsconfig.Config{Servers: c.servers}); got != c.want {
+			t.Errorf("hopResolver(%v) = %q, want %q", c.servers, got, c.want)
+		}
 	}
 }

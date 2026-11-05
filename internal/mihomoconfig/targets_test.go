@@ -12,7 +12,7 @@ import (
 const (
 	namedPoolLink = "ss://chacha20-ietf-poly1305:pw@192.0.2.10:8388#pool"
 	namedLinkOne  = "ss://chacha20-ietf-poly1305:pw@one.example:8388#one"
-	namedLinkTwo  = "hysteria2://pw@two.example:443?insecure=1#two"
+	namedLinkTwo  = "hysteria2://pw@192.0.2.12:443?insecure=1#two"
 	namedLinkThr  = "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@192.0.2.13:443?type=tcp&security=none#three"
 )
 

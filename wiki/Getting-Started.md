@@ -131,8 +131,14 @@ when an engine gains an option:
   as an unknown field, and `CoreCapabilities()` lists `routeTargets` where they
   work. Only what a route names is built. On xray a chain takes vless, vmess,
   ss and trojan servers; a later hop keeps its host name for the hop before it
-  to resolve. mihomo resolves the host of a later hop that runs over UDP
-  (Hysteria2, TUIC, WireGuard) with its own resolver.
+  to resolve. On mihomo a later hop that runs over UDP (Hysteria2, TUIC,
+  WireGuard, every peer endpoint included) given by name is looked up at start
+  with a DNS query over TCP dialled through the hop before it, on the first
+  public plain server of `dnsConfig` or else 1.1.1.1, and built with the answer;
+  a lookup that fails fails the start. A later hop that would look up its ECH
+  config itself (`ech=1` on mihomo, `ech=` naming a DNS server on xray) is
+  refused: give the config list in the link. An xhttp hop's download leg dials
+  through the hop before it too. A refusal is the start's error text.
 * `dnsConfig` — resolvers (plain, DoT, DoH, DoQ), fake-ip mode, a hosts table
   and separate resolvers for direct-routed names.
 

@@ -99,6 +99,10 @@ type Options struct {
 	ProbeURL        string // balancer health-check URL ("" = generate_204)
 	// Per-proxy uTLS fingerprint (mihomo dropped global-client-fingerprint in v1.19).
 	Fingerprint string
+	// HopResolver is the DNS server, host:port over TCP, that a chain's UDP
+	// hop given by name is looked up on through the hop before it
+	// ("" = DefaultHopResolver).
+	HopResolver string
 }
 
 // uTLS fingerprints mihomo accepts (differs from xray's set).

@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"os"
+	"os/exec"
 	"slices"
 	"sync"
 	"testing"
@@ -17,21 +19,50 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
 )
 
+// exitServerEnv carries the config of a server the test binary runs as a
+// process of its own, so that one server can resolve names nobody else in the
+// test can: xray keeps its DNS client in a package variable, which a second
+// instance in the same process would replace.
+const exitServerEnv = "GLITCH_TEST_EXIT_SERVER_CONF"
+
+func TestExitServerProcess(t *testing.T) {
+	conf := os.Getenv(exitServerEnv)
+	if conf == "" {
+		t.Skip("runs only as a child of a test that starts an exit server")
+	}
+	server, err := xrayCore.StartInstance("json", []byte(conf))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer server.Close()
+	select {}
+}
+
 // startExitServer runs a shadowsocks server whose own connections to the world
-// leave from source, so an echo can tell which server a flow exited from.
-func startExitServer(t *testing.T, source string) (port int, stop func()) {
+// leave from source, so an echo can tell which server a flow exited from. Its
+// freedom outbound resolves the names in hosts, and the server runs in a
+// process of its own so that nothing else in the test can.
+func startExitServer(t *testing.T, source string, hosts map[string]string) (port int, stop func()) {
 	t.Helper()
 	port, err := loopbackport.Pick()
 	if err != nil {
 		t.Fatal(err)
 	}
-	conf := fmt.Sprintf(`{"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","settings":{"method":"chacha20-ietf-poly1305","password":"pw","network":"tcp"}}],"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow"}]},"sendThrough":%q}]}`, port, source)
-	server, err := xrayCore.StartInstance("json", []byte(conf))
-	if err != nil {
+	hostsJSON, _ := json.Marshal(hosts)
+	conf := fmt.Sprintf(`{"dns":{"hosts":%s,"servers":["udp://127.0.0.1:1"]},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","settings":{"method":"chacha20-ietf-poly1305","password":"pw","network":"tcp"}}],"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow"}]},"streamSettings":{"sockopt":{"domainStrategy":"UseIP"}},"sendThrough":%q}]}`, hostsJSON, port, source)
+	cmd := exec.Command(os.Args[0], "-test.run=^TestExitServerProcess$")
+	cmd.Env = append(os.Environ(), exitServerEnv+"="+conf)
+	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { _ = server.Close() })
-	return port, func() { _ = server.Close() }
+	stop = func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }
+	t.Cleanup(stop)
+	for deadline := time.Now().Add(20 * time.Second); !listens(fmt.Sprintf("127.0.0.1:%d", port)); time.Sleep(50 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("exit server did not start")
+		}
+	}
+	return port, stop
 }
 
 // startRecordingForwarder relays to target and records who connected.
@@ -138,11 +169,14 @@ func TestNamedTargets_LiveOnBothEngines(t *testing.T) {
 			}
 			t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
 			echoPort := startSourceEcho(t)
-			poolPort, _ := startExitServer(t, "127.0.0.2")
-			hop1Port, stopHop1 := startExitServer(t, "127.0.0.3")
-			hop2Port, _ := startExitServer(t, "127.0.0.4")
-			ownPort, _ := startExitServer(t, "127.0.0.5")
-			hop2Via, hop2Callers := startRecordingForwarder(t, fmt.Sprintf("127.0.0.1:%d", hop2Port))
+			poolPort, _ := startExitServer(t, "127.0.0.2", nil)
+			hop1Port, stopHop1 := startExitServer(t, "127.0.0.3", map[string]string{"hop2.test": "127.0.0.1"})
+			hop2Port, _ := startExitServer(t, "127.0.0.4", nil)
+			ownPort, _ := startExitServer(t, "127.0.0.5", nil)
+			hop2Forwarder, hop2Callers := startRecordingForwarder(t, fmt.Sprintf("127.0.0.1:%d", hop2Port))
+			// Only hop 1 can resolve this name: the client has no such host.
+			_, hop2ForwarderPort, _ := net.SplitHostPort(hop2Forwarder)
+			hop2Via := "hop2.test:" + hop2ForwarderPort
 			link := func(addr, name string) string {
 				return "ss://chacha20-ietf-poly1305:pw@" + addr + "#" + name
 			}

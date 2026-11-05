@@ -369,7 +369,7 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	startMihomoLogBridge()
 
 	cfg, err := mihomoconfig.BuildConfig(links, inbound,
-		mihomoconfig.Options{Strategy: o.strategy, DisableSniffing: !o.sniffing, ProbeURL: o.probeURL, Fingerprint: o.fingerprint}, prof)
+		mihomoconfig.Options{Strategy: o.strategy, DisableSniffing: !o.sniffing, ProbeURL: o.probeURL, Fingerprint: o.fingerprint, HopResolver: hopResolver(dns)}, prof)
 	if err != nil {
 		stopMihomoLogBridge()
 		return fmt.Errorf("[mihomo] config build: %w", err)

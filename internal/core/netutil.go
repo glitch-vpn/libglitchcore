@@ -44,6 +44,24 @@ func plainDNSServers(dns dnsconfig.Config) []string {
 	return out
 }
 
+// hopResolver is the first plain resolver a chain's hop is reachable to ask: a
+// public address, since a private one is the client's own network and not the
+// hop's. "" leaves mihomoconfig its default. A port-less server gets 53.
+func hopResolver(dns dnsconfig.Config) string {
+	for _, s := range plainDNSServers(dns) {
+		host, port, err := net.SplitHostPort(s)
+		if err != nil {
+			host, port = s, "53"
+		}
+		addr, err := netip.ParseAddr(host)
+		if err != nil || addr.IsPrivate() || addr.IsLoopback() || addr.IsLinkLocalUnicast() || addr.IsUnspecified() {
+			continue
+		}
+		return net.JoinHostPort(host, port)
+	}
+	return ""
+}
+
 func splitLinks(raw string) []string {
 	return strings.Split(raw, "\n")
 }

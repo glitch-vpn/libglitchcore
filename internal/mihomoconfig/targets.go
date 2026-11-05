@@ -91,6 +91,7 @@ func addNamedProxies(raw *config.RawConfig, poolNames []string, p routing.Profil
 		case routing.KindChainTarget:
 			chain := p.Targets.Chains[slices.IndexFunc(p.Targets.Chains, func(c routing.TargetChain) bool { return c.ID == id })]
 			previous := ""
+			var built []map[string]any
 			for i, hop := range chain.Hops {
 				name := freeName(fmt.Sprintf("%s%s-%d", hopNamePrefix, id, i), used)
 				proxy, err := addProxy(id, name, p.Targets.Link(hop))
@@ -98,8 +99,19 @@ func addNamedProxies(raw *config.RawConfig, poolNames []string, p routing.Profil
 					return nil, err
 				}
 				if previous != "" {
+					if err := refuseEchLookup(proxy); err != nil {
+						return nil, fmt.Errorf("target %q: %w", id, err)
+					}
+					resolver := opts.HopResolver
+					if resolver == "" {
+						resolver = DefaultHopResolver
+					}
+					if err := resolveLaterHop(proxy, built, resolver); err != nil {
+						return nil, fmt.Errorf("target %q: hop %d: %w", id, i+1, err)
+					}
 					proxy["dialer-proxy"] = previous
 				}
+				built = append(built, proxy)
 				previous = name
 			}
 			named[id] = previous
