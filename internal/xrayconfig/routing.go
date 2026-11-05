@@ -171,7 +171,7 @@ var anyIP = []string{"0.0.0.0/0", "::/0"}
 
 // applyRouting is a free function because RoutingProfile aliases a type from
 // another package; existing balancers on cfg.RouterConfig are preserved.
-func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targetIsBalancer bool) {
+func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targetIsBalancer bool, named map[string]target) {
 	proxy := target{tag: proxyTag, isBalancer: targetIsBalancer}
 	direct := target{tag: directTag}
 	block := target{tag: blockTag}
@@ -275,6 +275,8 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 			switch {
 			case step.Target == routing.TargetBlock:
 				return block
+			case step.Target == routing.TargetRoute:
+				return named[step.To]
 			case step.Target == routing.TargetProxy:
 				return proxy
 			case step.Entries[0].ByAddress():

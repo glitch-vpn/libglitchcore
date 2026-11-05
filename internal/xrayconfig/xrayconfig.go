@@ -80,6 +80,9 @@ type BuildResult struct {
 	RouteTarget     string   // tag the tun2socks rule routes to
 	RouteIsBalancer bool
 	VisionTags      map[string]bool // proxy tags whose link uses XTLS Vision flow (mux-incompatible)
+	// TrafficTags are the tags stats sum: the pool and every named outbound the
+	// client dials itself, so a chain counts once, at its entry hop.
+	TrafficTags []string
 }
 
 // Vision flow ↔ TCP mux are mutually exclusive.
@@ -114,7 +117,7 @@ func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 	res := &BuildResult{Config: cfg, VisionTags: map[string]bool{}}
 
 	if len(clean) == 1 {
-		ob, server, dialIP, err := outboundFromLink(clean[0], OutboundTag)
+		ob, server, dialIP, err := outboundFromLink(clean[0], OutboundTag, preResolveIPv4)
 		if err != nil {
 			return nil, err
 		}
@@ -128,7 +131,11 @@ func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 			res.VisionTags[OutboundTag] = true
 		}
 		res.RouteTarget = OutboundTag
-		applyRouting(routing, cfg, OutboundTag, false)
+		named, err := res.addNamed(cfg, routing, opts)
+		if err != nil {
+			return nil, err
+		}
+		applyRouting(routing, cfg, OutboundTag, false, named)
 		return res, nil
 	}
 
@@ -139,7 +146,7 @@ func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 
 	for i, link := range clean {
 		tag := fmt.Sprintf("%s%d", proxyTagPrefix, i)
-		ob, server, dialIP, berr := outboundFromLink(link, tag)
+		ob, server, dialIP, berr := outboundFromLink(link, tag, preResolveIPv4)
 		if berr != nil {
 			return nil, fmt.Errorf("link %d: %w", i, berr)
 		}
@@ -171,19 +178,23 @@ func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 	}
 	res.RouteTarget = balancerTag
 	res.RouteIsBalancer = true
-	applyRouting(routing, cfg, balancerTag, true)
+	named, err := res.addNamed(cfg, routing, opts)
+	if err != nil {
+		return nil, err
+	}
+	applyRouting(routing, cfg, balancerTag, true, named)
 	return res, nil
 }
 
 // outboundFromLink also returns the server host and its pre-resolved IPv4 dial address.
-func outboundFromLink(link, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
+func outboundFromLink(link, tag string, resolve dialResolver) (*xrayConf.OutboundDetourConfig, string, string, error) {
 	// Most vmess:// links are base64 JSON, which url.Parse would misread.
 	if vmesslink.IsLink(link) {
-		return outboundFromVMess(link, tag)
+		return outboundFromVMess(link, tag, resolve)
 	}
 	// A base64 credential may hold a '/', which url.Parse would take for the path.
 	if proxylink.IsLink(link) {
-		return outboundFromProxy(link, tag)
+		return outboundFromProxy(link, tag, resolve)
 	}
 	u, err := url.Parse(link)
 	if err != nil {
@@ -192,15 +203,15 @@ func outboundFromLink(link, tag string) (*xrayConf.OutboundDetourConfig, string,
 
 	switch strings.ToLower(u.Scheme) {
 	case "vless":
-		return outboundFromVLESS(u, tag)
+		return outboundFromVLESS(u, tag, resolve)
 	case "ss":
-		ob, server, dialIP, perr := outboundFromSS(u, tag)
+		ob, server, dialIP, perr := outboundFromSS(u, tag, resolve)
 		if perr != nil {
 			return nil, "", "", perr
 		}
 		return ob, server, dialIP, nil
 	case "trojan":
-		ob, server, dialIP, perr := outboundFromTrojan(u, tag)
+		ob, server, dialIP, perr := outboundFromTrojan(u, tag, resolve)
 		if perr != nil {
 			return nil, "", "", perr
 		}
@@ -210,7 +221,7 @@ func outboundFromLink(link, tag string) (*xrayConf.OutboundDetourConfig, string,
 	}
 }
 
-func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
+func outboundFromVLESS(u *url.URL, tag string, resolve dialResolver) (*xrayConf.OutboundDetourConfig, string, string, error) {
 	// vless://<uuid>@host:port?type=ws&security=tls&path=/xxx&host=example.com&sni=example.com&alpn=h2,http/1.1&fp=chrome
 	userID := ""
 	if u.User != nil {
@@ -244,7 +255,7 @@ func outboundFromVLESS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, 
 	}
 	userJSON, _ := json.Marshal(vlessUser)
 
-	addrForDial := preResolveIPv4(host)
+	addrForDial := resolve(host)
 	if err := requireTransportSecurity("vless", addrForDial, stream.Security != "" || encryption != vlessencryption.None); err != nil {
 		return nil, "", "", err
 	}
@@ -418,7 +429,7 @@ func preResolveIPv4(host string) string {
 }
 
 // outboundFromTrojan parses trojan://password@host:port?security=tls&sni=...
-func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
+func outboundFromTrojan(u *url.URL, tag string, resolve dialResolver) (*xrayConf.OutboundDetourConfig, string, string, error) {
 	password := ""
 	if u.User != nil {
 		password = u.User.Username()
@@ -446,7 +457,7 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 	if gap != nil {
 		return nil, "", "", fmt.Errorf("trojan: %w", gap)
 	}
-	addrForDial := preResolveIPv4(host)
+	addrForDial := resolve(host)
 
 	// Flow removed in xray-core for Trojan - leave unset.
 	trojanSettings := &xrayConf.TrojanClientConfig{
@@ -468,7 +479,7 @@ func outboundFromTrojan(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig,
 	return ob, host, addrForDial, nil
 }
 
-func outboundFromSS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
+func outboundFromSS(u *url.URL, tag string, resolve dialResolver) (*xrayConf.OutboundDetourConfig, string, string, error) {
 	// Takes ss://method:password@host:port, SIP002's
 	// ss://BASE64(method:password)@host:port and ss://BASE64(method:password@host:port).
 	method := ""
@@ -545,7 +556,7 @@ func outboundFromSS(u *url.URL, tag string) (*xrayConf.OutboundDetourConfig, str
 			},
 		},
 	}
-	return ob, host, preResolveIPv4(host), nil
+	return ob, host, resolve(host), nil
 }
 
 func tryDecodeBase64(s string) (string, error) {
@@ -567,3 +578,10 @@ func padBase64(s string) string {
 	}
 	return s
 }
+
+// dialResolver turns a server host into the address its outbound dials.
+type dialResolver func(host string) string
+
+// keepHost leaves the name for the hop before to resolve: a later hop of a
+// chain is dialled through that hop, so a lookup here would leave outside it.
+func keepHost(host string) string { return host }

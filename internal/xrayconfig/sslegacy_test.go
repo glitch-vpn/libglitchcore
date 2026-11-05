@@ -17,7 +17,7 @@ func TestOutboundFromSS_LegacyBase64HostPort(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			_, server, _, err := outboundFromSS(u, "proxy")
+			_, server, _, err := outboundFromSS(u, "proxy", preResolveIPv4)
 			if err != nil {
 				t.Fatal(err)
 			}

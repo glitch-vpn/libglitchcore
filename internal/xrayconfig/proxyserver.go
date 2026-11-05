@@ -9,7 +9,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/proxylink"
 )
 
-func outboundFromProxy(link, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
+func outboundFromProxy(link, tag string, resolve dialResolver) (*xrayConf.OutboundDetourConfig, string, string, error) {
 	l, err := proxylink.Parse(link)
 	if err != nil {
 		return nil, "", "", err
@@ -40,5 +40,5 @@ func outboundFromProxy(link, tag string) (*xrayConf.OutboundDetourConfig, string
 		Settings:      &settingsRaw,
 		StreamSetting: stream,
 	}
-	return ob, l.Host, preResolveIPv4(l.Host), nil
+	return ob, l.Host, resolve(l.Host), nil
 }

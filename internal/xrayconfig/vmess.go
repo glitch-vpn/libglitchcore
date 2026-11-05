@@ -22,7 +22,7 @@ var vmessCiphers = []string{"auto", "aes-128-gcm", "chacha20-poly1305"}
 // (alterId above 0), the HTTP/2 and QUIC transports and allowInsecure; such
 // links fail here, with the reason, rather than in xray's builder or as
 // something else.
-func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string, string, error) {
+func outboundFromVMess(link, tag string, resolve dialResolver) (*xrayConf.OutboundDetourConfig, string, string, error) {
 	l, err := vmesslink.Parse(link)
 	if err != nil {
 		return nil, "", "", err
@@ -51,7 +51,7 @@ func outboundFromVMess(link, tag string) (*xrayConf.OutboundDetourConfig, string
 	}
 
 	user, _ := json.Marshal(map[string]string{"id": l.ID, "security": cipher})
-	addrForDial := preResolveIPv4(l.Host)
+	addrForDial := resolve(l.Host)
 	settings, _ := json.Marshal(&xrayConf.VMessOutboundConfig{
 		Receivers: []*xrayConf.VMessOutboundTarget{{
 			Address: &xrayConf.Address{Address: xrayNet.ParseAddress(addrForDial)},

@@ -26,7 +26,7 @@ func applyTo(t *testing.T, p RoutingProfile, proxyTag string, isBalancer bool) (
 	cfg := &xrayConf.Config{
 		OutboundConfigs: []xrayConf.OutboundDetourConfig{{Protocol: "freedom", Tag: proxyTag}},
 	}
-	applyRouting(p, cfg, proxyTag, isBalancer)
+	applyRouting(p, cfg, proxyTag, isBalancer, nil)
 	var views []ruleView
 	for _, raw := range cfg.RouterConfig.RuleList {
 		var v ruleView

@@ -206,6 +206,11 @@ func tierDomains(prof RoutingProfile, t string) []string {
 			raw = append(raw, tier.Direct...)
 		case routing.TargetProxy:
 			raw = append(raw, tier.Proxy...)
+			// A route's names resolve like a proxied name: never pinned to
+			// the direct resolver by a broader direct rule after it.
+			for _, r := range tier.Routes {
+				raw = append(raw, r.Match...)
+			}
 		}
 	}
 	return domainMatchers(raw)

@@ -227,7 +227,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 			return fmt.Errorf("[Xray] Core init failed: %w", err)
 		}
 		stats := x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
-		x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.OutboundTags})
+		x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.TrafficTags})
 		x.xraySession.up(mark)
 		if err = x.xrayCoreInstance.Start(); err != nil {
 			x.xrayRollback()
@@ -264,7 +264,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		return fmt.Errorf("[Xray] Core init failed: %w", err)
 	}
 	stats := x.xrayCoreInstance.GetFeature(xrayStats.ManagerType()).(xrayStats.Manager)
-	x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.OutboundTags})
+	x.xrayTraffic.Store(&xrayTrafficSource{stats: stats, tags: res.TrafficTags})
 
 	log.Println("[Xray] Starting core")
 	x.xraySession.up(mark)
