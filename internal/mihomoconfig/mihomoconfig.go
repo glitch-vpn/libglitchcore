@@ -590,6 +590,11 @@ func applyTun(raw *config.RawConfig, t *TunInbound) {
 	// mihomo defaults to 1, one goroutine for all inbound packets; 0 lets gVisor
 	// run one per processor on Linux and Android, as the tunnel is tested with.
 	raw.Tun.ProcessorsPerChannel = 0
+	// mihomo forwards an echo request by opening its own ICMP socket, which the
+	// platform keeps outside the tunnel, so the echo would leave from the device's
+	// own address under no rule. The stack answers it instead, as the tun2socks
+	// bridge does.
+	raw.Tun.DisableICMPForwarding = true
 
 	if t.FileDescriptor > 0 {
 		// Android. AutoRoute/AutoDetectInterface MUST stay off: either one makes

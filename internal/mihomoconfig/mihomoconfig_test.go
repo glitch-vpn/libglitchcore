@@ -684,6 +684,9 @@ func TestBuildConfig_TunInbound(t *testing.T) {
 	if n := fd.General.Tun.ProcessorsPerChannel; n != 0 {
 		t.Fatalf("tun processors per channel = %d, want 0 (one per processor)", n)
 	}
+	if !fd.General.Tun.DisableICMPForwarding {
+		t.Fatal("fd tun forwards ICMP echo outside the tunnel")
+	}
 
 	desktop, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPN", DNS: dns}}, Options{}, routing.Profile{})
 	if err != nil {
@@ -691,6 +694,9 @@ func TestBuildConfig_TunInbound(t *testing.T) {
 	}
 	if !desktop.General.Tun.Enable || !desktop.General.Tun.AutoRoute {
 		t.Fatalf("desktop tun not auto-routed: %+v", desktop.General.Tun)
+	}
+	if !desktop.General.Tun.DisableICMPForwarding {
+		t.Fatal("desktop tun forwards ICMP echo outside the tunnel")
 	}
 }
 
