@@ -1409,6 +1409,9 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 				return nil, err
 			}
 			if ok {
+				if n < 0 || n > maxItimeSeconds {
+					return nil, fmt.Errorf("awg itime: %d is outside 0 to %d seconds", n, maxItimeSeconds)
+				}
 				opt[k] = n
 			}
 			continue

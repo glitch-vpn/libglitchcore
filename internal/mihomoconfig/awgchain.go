@@ -19,6 +19,11 @@ const maxJunkPacketCount = 128
 // recommends, not a limit amneziawg-go enforces.
 const maxJunkPacketSize = 1280
 
+// maxItimeSeconds caps Itime, which the legacy device multiplies into a
+// time.Duration of nanoseconds; a day is far past any real interval and far
+// below the overflow.
+const maxItimeSeconds = 86400
+
 // maxLegacyTagSize bounds a size argument of a tag in the legacy device, which
 // refuses above it.
 const maxLegacyTagSize = 1000

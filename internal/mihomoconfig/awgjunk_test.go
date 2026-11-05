@@ -37,3 +37,22 @@ func TestAmneziaJunkSize_BoundedAndOrdered(t *testing.T) {
 		t.Error("link jmax=100000: want an error")
 	}
 }
+
+// The legacy device reads Itime as seconds into a time.Duration, which a
+// large value overflows.
+func TestAmneziaItime_BoundedToADay(t *testing.T) {
+	for _, ok := range []string{"0", "12", "86400"} {
+		if _, err := ProxyMapFromLink(awgINIWith("Itime = " + ok + "\n")); err != nil {
+			t.Errorf("Itime = %s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"86401", "-1", "9223372036854775807", "9223372037"} {
+		if _, err := ProxyMapFromLink(awgINIWith("Itime = " + bad + "\n")); err == nil {
+			t.Errorf("Itime = %s: want an error", bad)
+		}
+	}
+	link := "wg://203.0.113.7:51820?pk=" + wgPrivateKey + "&pub=" + wgPublicKey + "&itime=9223372037"
+	if _, err := ProxyMapFromLink(link); err == nil {
+		t.Error("link itime=9223372037: want an error")
+	}
+}
