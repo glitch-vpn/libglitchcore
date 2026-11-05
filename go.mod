@@ -17,7 +17,7 @@ require (
 	google.golang.org/protobuf v1.36.12
 )
 
-replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.4
+replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.5
 
 replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.2
 
