@@ -87,8 +87,8 @@ const twoPeerINI = "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10
 	"[Peer]\nPublicKey = " + wgPrivateKey + "\nPresharedKey = " + wgPublicKey + "\nEndpoint = 198.51.100.9:2408\n" +
 	"AllowedIPs = 0.0.0.0/0, ::/0\nReserved = 7,8,9\nPersistentKeepalive = 15\n"
 
-// Every [Peer] reaches mihomo's peers option, and the server event names the
-// endpoint the outbound is named for: the first peer's.
+// Every [Peer] reaches mihomo's peers option, and the outbound's server and
+// the server event both name the peer that carries the default route.
 func TestWireGuardConfig_EveryPeerReachesMihomo(t *testing.T) {
 	p, err := ProxyMapFromLink(twoPeerINI)
 	if err != nil {
@@ -106,8 +106,8 @@ func TestWireGuardConfig_EveryPeerReachesMihomo(t *testing.T) {
 	if !reflect.DeepEqual(peers, want) {
 		t.Errorf("peers = %v\nwant %v", peers, want)
 	}
-	if p["server"] != "203.0.113.7" || p["port"] != 51820 {
-		t.Errorf("server = %v:%v, want the first peer's", p["server"], p["port"])
+	if p["server"] != "198.51.100.9" || p["port"] != 2408 {
+		t.Errorf("server = %v:%v, want the peer with the default route", p["server"], p["port"])
 	}
 	if p["persistent-keepalive"] != 15 {
 		t.Errorf("persistent-keepalive = %v, want the shortest, 15", p["persistent-keepalive"])
@@ -175,5 +175,32 @@ func TestWireGuardLinks_CarryEveryAmneziaWGKey(t *testing.T) {
 				t.Errorf("link option = %v, INI option = %v", opt, fromINI["amnezia-wg-option"])
 			}
 		})
+	}
+}
+
+func TestWireGuardConfig_ServerIsThePeerWithTheWidestAllowedIPs(t *testing.T) {
+	ini := "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10.0.0.2/32\n\n" +
+		"[Peer]\nPublicKey = " + wgPublicKey + "\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 10.1.0.0/16\n\n" +
+		"[Peer]\nPublicKey = " + wgPrivateKey + "\nEndpoint = 198.51.100.9:2408\nAllowedIPs = 10.0.0.0/8\n"
+	p, err := ProxyMapFromLink(ini)
+	if err != nil {
+		t.Fatalf("ProxyMapFromLink: %v", err)
+	}
+	if p["server"] != "198.51.100.9" || p["port"] != 2408 {
+		t.Errorf("server = %v:%v, want the /8 peer", p["server"], p["port"])
+	}
+	if got := serverinfo.FromLink(ini, 0); got.Host != p["server"] || got.Port != p["port"] {
+		t.Errorf("server event = %s:%d, dialled %v:%v", got.Host, got.Port, p["server"], p["port"])
+	}
+}
+
+// WireGuard merges two [Peer] sections of one public key into one peer that
+// keeps the last endpoint, so the config says something it does not do.
+func TestWireGuardConfig_RefusesDuplicatePublicKeys(t *testing.T) {
+	ini := "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10.0.0.2/32\n\n" +
+		"[Peer]\nPublicKey = " + wgPublicKey + "\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 10.1.0.0/16\n\n" +
+		"[Peer]\nPublicKey = " + wgPublicKey + "\nEndpoint = 198.51.100.9:2408\nAllowedIPs = 0.0.0.0/0\n"
+	if _, err := ProxyMapFromLink(ini); err == nil {
+		t.Error("two peers with one PublicKey: want an error")
 	}
 }

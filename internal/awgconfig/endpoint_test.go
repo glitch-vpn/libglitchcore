@@ -25,3 +25,32 @@ func TestEndpointHostPort(t *testing.T) {
 		t.Fatalf("missing endpoint: got %q:%d", host, port)
 	}
 }
+
+func TestEndpointHostPort_NamesThePeerThatCarriesTheDefaultRoute(t *testing.T) {
+	const head = "[Interface]\nPrivateKey = x\n\n"
+	cases := map[string]struct {
+		cfg  string
+		host string
+		port int
+	}{
+		"default route over the first peer": {
+			head + "[Peer]\nEndpoint = a.example:1\nAllowedIPs = 10.0.0.0/8\n[Peer]\nEndpoint = b.example:2\nAllowedIPs = 10.1.0.0/16, ::/0\n",
+			"b.example", 2,
+		},
+		"widest prefix without a default route": {
+			head + "[Peer]\nEndpoint = a.example:1\nAllowedIPs = 10.1.0.0/16\n[Peer]\nEndpoint = b.example:2\nAllowedIPs = 10.0.0.0/8\n",
+			"b.example", 2,
+		},
+		"a lone peer": {
+			head + "[Peer]\nEndpoint = a.example:1\n",
+			"a.example", 1,
+		},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			if host, port := EndpointHostPort(c.cfg); host != c.host || port != c.port {
+				t.Errorf("got %q:%d, want %q:%d", host, port, c.host, c.port)
+			}
+		})
+	}
+}

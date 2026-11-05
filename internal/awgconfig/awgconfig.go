@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"strconv"
 	"strings"
@@ -193,9 +194,73 @@ func AWG3Value(key, val string) (string, error) {
 	return val, CheckRange(val)
 }
 
-// Port 0 when absent/invalid; bracketed IPv6 loses the brackets.
+// ParseINI returns the [Interface] keys (lowercased) and one map per [Peer],
+// in order. A repeated key in a section keeps its last value.
+func ParseINI(ini string) (iface map[string]string, peers []map[string]string) {
+	iface = map[string]string{}
+	var current map[string]string
+	for _, raw := range strings.Split(ini, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
+			continue
+		}
+		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
+			switch strings.ToLower(strings.Trim(line, "[] \t")) {
+			case "interface":
+				current = iface
+			case "peer":
+				current = map[string]string{}
+				peers = append(peers, current)
+			default:
+				current = nil
+			}
+			continue
+		}
+		eq := strings.IndexByte(line, '=')
+		if eq < 0 || current == nil {
+			continue
+		}
+		current[strings.ToLower(strings.TrimSpace(line[:eq]))] = strings.TrimSpace(line[eq+1:])
+	}
+	return iface, peers
+}
+
+// PrimaryPeer is the index of the peer WireGuard sends a flow to when nothing
+// is more specific: the one whose AllowedIPs reach furthest (a default route
+// first, then the shortest prefix). Of equal peers it is the last, since
+// WireGuard keeps the later owner of a prefix. -1 when there is no peer.
+func PrimaryPeer(peers []map[string]string) int {
+	best, bestBits := -1, 1<<30
+	for i, peer := range peers {
+		bits := widestPrefixBits(peer["allowedips"])
+		if bits <= bestBits {
+			best, bestBits = i, bits
+		}
+	}
+	return best
+}
+
+// widestPrefixBits is the shortest prefix length in a comma-separated
+// AllowedIPs, 0 for a default route; a list with no prefix is the narrowest.
+func widestPrefixBits(allowedIPs string) int {
+	bits := 1 << 29
+	for _, f := range strings.Split(allowedIPs, ",") {
+		if prefix, err := netip.ParsePrefix(strings.TrimSpace(f)); err == nil && prefix.Bits() < bits {
+			bits = prefix.Bits()
+		}
+	}
+	return bits
+}
+
+// EndpointHostPort is the endpoint of the config's primary peer. Port 0 when
+// absent or invalid; a bracketed IPv6 loses its brackets.
 func EndpointHostPort(cfg string) (string, int) {
-	val := endpointValue(cfg)
+	_, peers := ParseINI(cfg)
+	i := PrimaryPeer(peers)
+	if i < 0 {
+		return "", 0
+	}
+	val := peers[i]["endpoint"]
 	if val == "" {
 		return "", 0
 	}
@@ -207,16 +272,4 @@ func EndpointHostPort(cfg string) (string, int) {
 		return h, port
 	}
 	return strings.Trim(val, "[]"), 0
-}
-
-func endpointValue(cfg string) string {
-	for _, l := range strings.Split(cfg, "\n") {
-		line := strings.TrimSpace(l)
-		if strings.HasPrefix(strings.ToLower(line), "endpoint") {
-			if idx := strings.Index(line, "="); idx >= 0 {
-				return strings.TrimSpace(line[idx+1:])
-			}
-		}
-	}
-	return ""
 }

@@ -1161,7 +1161,7 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("awg: %w", err)
 	}
-	iface, peers := parseINI(ini)
+	iface, peers := awgconfig.ParseINI(ini)
 	if len(peers) == 0 {
 		return nil, fmt.Errorf("awg: no [Peer] section")
 	}
@@ -1178,7 +1178,18 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 			return nil, err
 		}
 	}
-	first := wgPeers[0]
+	seenKeys := map[string]bool{}
+	for i, peer := range wgPeers {
+		id := peer.publicKey
+		if key, err := awgconfig.KeyBytes(id); err == nil {
+			id = string(key)
+		}
+		if seenKeys[id] {
+			return nil, fmt.Errorf("awg peer %d: PublicKey repeats an earlier peer's", i+1)
+		}
+		seenKeys[id] = true
+	}
+	first := wgPeers[awgconfig.PrimaryPeer(peers)]
 
 	p := map[string]any{
 		"name":        name,
@@ -1402,37 +1413,6 @@ func checkChains(iface map[string]string, keys []string, check func(string) erro
 		}
 	}
 	return nil
-}
-
-// parseINI returns the [Interface] keys (lowercased) and one map per [Peer],
-// in order. A repeated key in a section keeps its last value.
-func parseINI(ini string) (iface map[string]string, peers []map[string]string) {
-	iface = map[string]string{}
-	var current map[string]string
-	for _, raw := range strings.Split(ini, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			switch strings.ToLower(strings.Trim(line, "[] \t")) {
-			case "interface":
-				current = iface
-			case "peer":
-				current = map[string]string{}
-				peers = append(peers, current)
-			default:
-				current = nil
-			}
-			continue
-		}
-		eq := strings.IndexByte(line, '=')
-		if eq < 0 || current == nil {
-			continue
-		}
-		current[strings.ToLower(strings.TrimSpace(line[:eq]))] = strings.TrimSpace(line[eq+1:])
-	}
-	return iface, peers
 }
 
 func splitCSV(s string) []string {
