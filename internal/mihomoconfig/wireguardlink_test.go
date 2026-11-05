@@ -155,9 +155,17 @@ func TestWireGuardLinks_CarryEveryAmneziaWGKey(t *testing.T) {
 	const peer = "\n\n[Peer]\nPublicKey = " + wgPublicKey + "\nAllowedIPs = 0.0.0.0/0\nEndpoint = 203.0.113.7:51820\n"
 	for _, c := range cases {
 		t.Run(c.query, func(t *testing.T) {
-			link := "wg://203.0.113.7:51820?pk=" + wgPrivateKey + "&pub=" + wgPublicKey + "&ip=10.8.0.2&" +
+			// The device wants junk packet indices to run from 1 without a gap.
+			lowerQuery, lowerINI := "", ""
+			if len(c.query) == 2 && (c.query[0] == 'i' || c.query[0] == 'j') && c.query[1] >= '1' && c.query[1] <= '5' {
+				for n := '1'; n < rune(c.query[1]); n++ {
+					lowerQuery += "&" + c.query[:1] + string(n) + "=<r+4>"
+					lowerINI += strings.ToUpper(c.query[:1]) + string(n) + " = <r 4>\n"
+				}
+			}
+			link := "wg://203.0.113.7:51820?pk=" + wgPrivateKey + "&pub=" + wgPublicKey + "&ip=10.8.0.2" + lowerQuery + "&" +
 				c.query + "=" + strings.ReplaceAll(c.value, " ", "+")
-			ini := "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10.8.0.2/32\n" + c.ini + " = " + c.value + peer
+			ini := "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10.8.0.2/32\n" + lowerINI + c.ini + " = " + c.value + peer
 
 			fromLink, err := ProxyMapFromLink(link)
 			if err != nil {

@@ -65,23 +65,28 @@ func chainSize(tag chainTag) error {
 	return nil
 }
 
-func chainHex(tag chainTag, trimPrefix bool) error {
+// chainHex reads a <b> argument the way the device does. The legacy device
+// wants 0x or 0X, pads an odd count with a leading zero and takes no bytes at
+// all; the 3.x device trims a lowercase 0x if there is one, and wants a whole,
+// non-empty byte string.
+func chainHex(tag chainTag, legacy bool) error {
 	digits := tag.param
-	if trimPrefix {
-		digits = strings.TrimPrefix(strings.TrimPrefix(digits, "0x"), "0X")
-	} else if !strings.HasPrefix(digits, "0x") && !strings.HasPrefix(digits, "0X") {
-		return fmt.Errorf("<b %s>: want hex starting 0x", tag.param)
-	} else {
+	if legacy {
+		if !strings.HasPrefix(digits, "0x") && !strings.HasPrefix(digits, "0X") {
+			return fmt.Errorf("<b %s>: want hex starting 0x", tag.param)
+		}
 		digits = digits[2:]
-	}
-	if digits == "" {
-		return fmt.Errorf("<b %s>: no bytes", tag.param)
-	}
-	if len(digits)%2 != 0 && trimPrefix {
-		return fmt.Errorf("<b %s>: odd count of hex digits", tag.param)
-	}
-	if len(digits)%2 != 0 {
-		digits = "0" + digits
+		if len(digits)%2 != 0 {
+			digits = "0" + digits
+		}
+	} else {
+		digits = strings.TrimPrefix(digits, "0x")
+		if digits == "" {
+			return fmt.Errorf("<b %s>: no bytes", tag.param)
+		}
+		if len(digits)%2 != 0 {
+			return fmt.Errorf("<b %s>: odd count of hex digits", tag.param)
+		}
 	}
 	if _, err := hex.DecodeString(digits); err != nil {
 		return fmt.Errorf("<b %s>: %w", tag.param, err)
@@ -102,7 +107,7 @@ func checkLegacyChain(value string) error {
 	for _, tag := range tags {
 		switch tag.name {
 		case "b":
-			err = chainHex(tag, false)
+			err = chainHex(tag, true)
 		case "c", "t":
 			if tag.param != "" {
 				err = fmt.Errorf("<%s> takes no argument", tag.name)
@@ -149,7 +154,7 @@ func checkV3Chain(value string) error {
 	for _, tag := range tags {
 		switch tag.name {
 		case "b":
-			err = chainHex(tag, true)
+			err = chainHex(tag, false)
 		case "t", "d", "ds":
 			if tag.param != "" {
 				err = fmt.Errorf("<%s> takes no argument", tag.name)

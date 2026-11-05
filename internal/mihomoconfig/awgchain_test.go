@@ -72,3 +72,47 @@ func TestAmneziaChains_ValidStillPass(t *testing.T) {
 		})
 	}
 }
+
+// Each of these is accepted by the config reader and fails only when the
+// device is built, at the first dial.
+func TestAmneziaChains_RefusedAtBuildWhatTheDeviceRefuses(t *testing.T) {
+	long := "<b 0x" + strings.Repeat("ab", 40000) + ">"
+	bad := map[string]string{
+		"3.x uppercase 0X":           awgINIWith("RekeyTimeout = 5\nI1 = <b 0Xf6ab>\n"),
+		"3.x empty bytes":            awgINIWith("RekeyTimeout = 5\nI1 = <b 0x>\n"),
+		"3.x chain past the line":    awgINIWith("RekeyTimeout = 5\nI1 = " + long + "\n"),
+		"legacy chain past the line": awgINIWith("I1 = " + long + "\n"),
+		"i2 without i1":              awgINIWith("I2 = <r 4>\n"),
+		"i1 and i3 without i2":       awgINIWith("I1 = <r 4>\nI3 = <r 4>\n"),
+		"j2 without j1":              awgINIWith("J2 = <r 4>\n"),
+		"j3 with j1 only":            awgINIWith("J1 = <r 4>\nJ3 = <r 4>\n"),
+		"h1 dash":                    awgINIWith("H1 = -\n"),
+		"h1 open range":              awgINIWith("H1 = 1-\n"),
+		"h2 reversed":                awgINIWith("H2 = 5-3\n"),
+		"h3 letter":                  awgINIWith("H3 = a\n"),
+		"h4 past 32 bits":            awgINIWith("H4 = 4294967296\n"),
+		"h1 three parts":             awgINIWith("H1 = 1-2-3\n"),
+		"3.x h1 three parts":         awgINIWith("RekeyTimeout = 5\nH1 = 1-2-3\n"),
+	}
+	for name, ini := range bad {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ProxyMapFromLink(ini); err == nil {
+				t.Error("want an error")
+			}
+		})
+	}
+	good := map[string]string{
+		"legacy uppercase 0X":    awgINIWith("I1 = <b 0Xf6ab>\n"),
+		"legacy empty bytes":     awgINIWith("I1 = <b 0x>\n"),
+		"consecutive i and j":    awgINIWith("I1 = <r 4>\nI2 = <r 4>\nJ1 = <r 4>\nJ2 = <r 4>\n"),
+		"3.x i2 without i1":      awgINIWith("RekeyTimeout = 5\nI2 = <r 4>\n"),
+		"headers, single, range": awgINIWith("H1 = 7\nH2 = 100-200\n"),
+	}
+	for name, ini := range good {
+		t.Run(name, func(t *testing.T) {
+			if _, err := ProxyMapFromLink(ini); err != nil {
+				t.Errorf("ProxyMapFromLink: %v", err)
+			}
+		})
+	}
+}

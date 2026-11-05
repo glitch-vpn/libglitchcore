@@ -2,6 +2,7 @@
 package mihomoconfig
 
 import (
+	"bufio"
 	"encoding/base64"
 	"fmt"
 	"net"
@@ -1345,6 +1346,13 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 	}
 	// h1-h4 accept AWG 2.0 ranges; i1-i5 carry tag chains, checked once the
 	// device that reads them is known.
+	for _, k := range []string{"h1", "h2", "h3", "h4"} {
+		if v := iface[k]; v != "" {
+			if err := awgconfig.CheckRange(v); err != nil {
+				return nil, fmt.Errorf("awg %s: %w", k, err)
+			}
+		}
+	}
 	for _, k := range []string{"h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5"} {
 		if v := iface[k]; v != "" {
 			opt[k] = v
@@ -1389,6 +1397,11 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 	if err := checkChains(iface, []string{"i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3"}, checkLegacyChain); err != nil {
 		return nil, err
 	}
+	for _, group := range [][]string{{"i1", "i2", "i3", "i4", "i5"}, {"j1", "j2", "j3"}} {
+		if err := checkConsecutive(iface, group); err != nil {
+			return nil, err
+		}
+	}
 	for _, k := range awgconfig.AWG15Keys {
 		if k == "itime" {
 			n, ok, err := awgInt(iface, k)
@@ -1407,9 +1420,29 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 	return opt, nil
 }
 
+// checkConsecutive refuses a chain that skips an index (i2 with no i1): the
+// legacy device refuses the set when the indices are not 1 to n.
+func checkConsecutive(iface map[string]string, keys []string) error {
+	gap := ""
+	for _, k := range keys {
+		switch {
+		case iface[k] == "":
+			if gap == "" {
+				gap = k
+			}
+		case gap != "":
+			return fmt.Errorf("awg %s: needs %s, since junk packet indices run from 1 without a gap", k, gap)
+		}
+	}
+	return nil
+}
+
 func checkChains(iface map[string]string, keys []string, check func(string) error) error {
 	for _, k := range keys {
 		if v := iface[k]; v != "" {
+			if len(k)+1+len(v) >= bufio.MaxScanTokenSize {
+				return fmt.Errorf("awg %s: longer than the device's configuration line holds", k)
+			}
 			if err := check(v); err != nil {
 				return fmt.Errorf("awg %s: %w", k, err)
 			}
