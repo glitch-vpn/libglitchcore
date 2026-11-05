@@ -5,6 +5,7 @@ package core
 import (
 	"context"
 	"net"
+	"path/filepath"
 	"testing"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
@@ -38,7 +39,9 @@ func TestProcessSplitProxy_DirectFlowsGoToTheEngineForTheBlocks(t *testing.T) {
 		forceProxy:  force,
 		forceDirect: direct,
 		rules:       map[string]string{"direct.exe": routing.TargetDirect, "proxy.exe": routing.TargetProxy},
-		processName: func(*M.Metadata) (string, error) { return `C:\apps\Direct.exe`, nil },
+		processName: func(*M.Metadata) (string, error) {
+			return filepath.Join(string(filepath.Separator), "apps", "Direct.exe"), nil
+		},
 	}
 	flow := bridgeTestFlow(M.TCP, &net.TCPAddr{IP: net.IPv4(198, 51, 100, 9), Port: 443})
 	_, _ = split.DialContext(context.Background(), flow)
