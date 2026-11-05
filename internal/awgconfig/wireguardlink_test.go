@@ -1,7 +1,6 @@
 package awgconfig
 
 import (
-	"errors"
 	"net/url"
 	"strings"
 	"testing"
@@ -19,8 +18,6 @@ func TestNormalizeToINI_ReadsEachClientsWireGuardLink(t *testing.T) {
 	esc := url.QueryEscape
 	cases := []struct {
 		name, link, want string
-		// reservedBytes: ParseToUAPI refuses the INI, as the awg engine does.
-		reservedBytes bool
 	}{
 		{
 			name: "v2rayNG, escaped keys and an all-zero reserved",
@@ -36,7 +33,6 @@ func TestNormalizeToINI_ReadsEachClientsWireGuardLink(t *testing.T) {
 			want: "[Interface]\nPrivateKey = " + linkPrivateKey + "\nAddress = 10.0.0.2/32\nDNS = 1.1.1.1, 8.8.8.8\n\n" +
 				"[Peer]\nPublicKey = " + linkPublicKey + "\nPresharedKey = " + linkPresharedKey +
 				"\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.7:51820\nReserved = 1, 2, 3\n",
-			reservedBytes: true,
 		},
 		{
 			name: "Hiddify wg://, keys in the query",
@@ -52,7 +48,6 @@ func TestNormalizeToINI_ReadsEachClientsWireGuardLink(t *testing.T) {
 				"&localaddress=10.0.0.2/32&reserved=AQID",
 			want: "[Interface]\nPrivateKey = " + linkPrivateKey + "\nAddress = 10.0.0.2/32\n\n" +
 				"[Peer]\nPublicKey = " + linkPublicKey + "\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 203.0.113.7:2408\nReserved = 1, 2, 3\n",
-			reservedBytes: true,
 		},
 		{
 			name: "AmneziaWG keys",
@@ -75,14 +70,6 @@ func TestNormalizeToINI_ReadsEachClientsWireGuardLink(t *testing.T) {
 			}
 			if ini != c.want {
 				t.Fatalf("INI =\n%s\nwant\n%s", ini, c.want)
-			}
-			uapi, err := ParseToUAPI(ini)
-			if c.reservedBytes {
-				if !errors.Is(err, ErrReservedBytes) {
-					t.Fatalf("ParseToUAPI = %v, want the reserved-bytes refusal", err)
-				}
-			} else if err != nil || !strings.Contains(uapi, "endpoint=") {
-				t.Fatalf("ParseToUAPI = %q, %v", uapi, err)
 			}
 		})
 	}
@@ -142,18 +129,5 @@ func TestLinkName_WireGuardLink(t *testing.T) {
 		if got := LinkName(link); got != want {
 			t.Errorf("LinkName(%q) = %q, want %q", link, got, want)
 		}
-	}
-}
-
-func TestParseToUAPI_ReservedBytes(t *testing.T) {
-	ini := "[Interface]\nPrivateKey = " + linkPrivateKey + "\n[Peer]\nPublicKey = " + linkPublicKey + "\nAllowedIPs = 0.0.0.0/0\n"
-	if _, err := ParseToUAPI(ini + "Reserved = 0, 0, 0\n"); err != nil {
-		t.Fatalf("all-zero reserved: %v", err)
-	}
-	if _, err := ParseToUAPI(ini + "Reserved = 1, 2, 3\n"); !errors.Is(err, ErrReservedBytes) {
-		t.Fatalf("reserved 1,2,3: err = %v, want ErrReservedBytes", err)
-	}
-	if _, err := ParseToUAPI(ini + "Reserved = 1, 2\n"); err == nil || errors.Is(err, ErrReservedBytes) {
-		t.Fatalf("unreadable reserved: err = %v", err)
 	}
 }

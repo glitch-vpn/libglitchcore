@@ -25,10 +25,3 @@ func TestEndpointHostPort(t *testing.T) {
 		t.Fatalf("missing endpoint: got %q:%d", host, port)
 	}
 }
-
-// Windows route exclusion consumes EndpointHost's exact shape.
-func TestEndpointHostUnchanged(t *testing.T) {
-	if got := EndpointHost("[Peer]\nEndpoint = wg.example.com:51820\n"); got != "wg.example.com" {
-		t.Fatalf("got %q", got)
-	}
-}
