@@ -3,9 +3,11 @@ package mihomoconfig
 import (
 	"net/url"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
+	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 )
 
 // Made-up keys.
@@ -77,5 +79,56 @@ func TestWireGuardLinks_ReachMihomosWireGuardOutbound(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+const twoPeerINI = "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10.0.0.2/32\n\n" +
+	"[Peer]\nPublicKey = " + wgPublicKey + "\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 10.1.0.0/16\nPersistentKeepalive = 25\n\n" +
+	"[Peer]\nPublicKey = " + wgPrivateKey + "\nPresharedKey = " + wgPublicKey + "\nEndpoint = 198.51.100.9:2408\n" +
+	"AllowedIPs = 0.0.0.0/0, ::/0\nReserved = 7,8,9\nPersistentKeepalive = 15\n"
+
+// Every [Peer] reaches mihomo's peers option, and the server event names the
+// endpoint the outbound is named for: the first peer's.
+func TestWireGuardConfig_EveryPeerReachesMihomo(t *testing.T) {
+	p, err := ProxyMapFromLink(twoPeerINI)
+	if err != nil {
+		t.Fatalf("ProxyMapFromLink: %v", err)
+	}
+	peers, _ := p["peers"].([]map[string]any)
+	if len(peers) != 2 {
+		t.Fatalf("peers = %v, want two", p["peers"])
+	}
+	want := []map[string]any{
+		{"server": "203.0.113.7", "port": 51820, "public-key": wgPublicKey, "allowed-ips": []string{"10.1.0.0/16"}},
+		{"server": "198.51.100.9", "port": 2408, "public-key": wgPrivateKey, "pre-shared-key": wgPublicKey,
+			"allowed-ips": []string{"0.0.0.0/0", "::/0"}, "reserved": []int{7, 8, 9}},
+	}
+	if !reflect.DeepEqual(peers, want) {
+		t.Errorf("peers = %v\nwant %v", peers, want)
+	}
+	if p["server"] != "203.0.113.7" || p["port"] != 51820 {
+		t.Errorf("server = %v:%v, want the first peer's", p["server"], p["port"])
+	}
+	if p["persistent-keepalive"] != 15 {
+		t.Errorf("persistent-keepalive = %v, want the shortest, 15", p["persistent-keepalive"])
+	}
+	if _, ok := p["public-key"]; ok {
+		t.Errorf("public-key = %v at the top level beside peers", p["public-key"])
+	}
+	if _, err := BuildConfig([]string{twoPeerINI}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{}); err != nil {
+		t.Fatalf("mihomo refuses the proxy: %v", err)
+	}
+	if got := serverinfo.FromLink(twoPeerINI, 0); got.Host != p["server"] || got.Port != p["port"] {
+		t.Errorf("server event = %s:%d, dialled %v:%v", got.Host, got.Port, p["server"], p["port"])
+	}
+}
+
+func TestWireGuardConfig_SeveralPeersNeedAllowedIPs(t *testing.T) {
+	ini := "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10.0.0.2/32\n\n" +
+		"[Peer]\nPublicKey = " + wgPublicKey + "\nEndpoint = 203.0.113.7:51820\nAllowedIPs = 10.1.0.0/16\n\n" +
+		"[Peer]\nPublicKey = " + wgPublicKey + "\nEndpoint = 198.51.100.9:2408\n"
+	_, err := ProxyMapFromLink(ini)
+	if err == nil || !strings.Contains(err.Error(), "peer 2") || !strings.Contains(err.Error(), "AllowedIPs") {
+		t.Fatalf("err = %v, want a refusal naming peer 2 and AllowedIPs", err)
 	}
 }

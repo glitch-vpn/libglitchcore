@@ -1161,28 +1161,31 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 	if err != nil {
 		return nil, fmt.Errorf("awg: %w", err)
 	}
-	sections := parseINI(ini)
-	iface, peer := sections["interface"], sections["peer"]
-
-	host, portStr, err := net.SplitHostPort(peer["endpoint"])
-	if err != nil {
-		return nil, fmt.Errorf("awg endpoint %q: %w", peer["endpoint"], err)
+	iface, peers := parseINI(ini)
+	if len(peers) == 0 {
+		return nil, fmt.Errorf("awg: no [Peer] section")
 	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return nil, fmt.Errorf("awg endpoint port: %w", err)
+	if iface["privatekey"] == "" {
+		return nil, fmt.Errorf("awg: missing PrivateKey")
 	}
-	if iface["privatekey"] == "" || peer["publickey"] == "" {
-		return nil, fmt.Errorf("awg: missing PrivateKey or PublicKey")
+	wgPeers := make([]wireguardPeer, len(peers))
+	for i, peer := range peers {
+		wgPeers[i], err = readWireGuardPeer(peer, len(peers) > 1)
+		if err != nil {
+			if len(peers) > 1 {
+				return nil, fmt.Errorf("awg peer %d: %w", i+1, err)
+			}
+			return nil, err
+		}
 	}
+	first := wgPeers[0]
 
 	p := map[string]any{
 		"name":        name,
 		"type":        "wireguard",
-		"server":      host,
-		"port":        port,
+		"server":      first.host,
+		"port":        first.port,
 		"private-key": iface["privatekey"],
-		"public-key":  peer["publickey"],
 		"udp":         true,
 		// mihomo's default here is its own mips stack; gVisor is the one the
 		// rest of the core runs and the one this path is tested on.
@@ -1196,31 +1199,44 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 			p["ipv6"] = v6
 		}
 	}
-	if psk := peer["presharedkey"]; psk != "" {
-		p["pre-shared-key"] = psk
-	}
-	if v := peer["reserved"]; v != "" {
-		b, err := awgconfig.ReservedBytes(v)
-		if err != nil {
-			return nil, fmt.Errorf("awg: %w", err)
+	if len(wgPeers) == 1 {
+		p["public-key"] = first.publicKey
+		if first.presharedKey != "" {
+			p["pre-shared-key"] = first.presharedKey
 		}
-		if b != [3]byte{} {
-			p["reserved"] = []int{int(b[0]), int(b[1]), int(b[2])}
+		if first.reserved != nil {
+			p["reserved"] = first.reserved
 		}
-	}
-	if allowed := splitCSV(peer["allowedips"]); len(allowed) > 0 {
-		p["allowed-ips"] = allowed
+		p["allowed-ips"] = first.allowedIPs
 	} else {
-		p["allowed-ips"] = []string{"0.0.0.0/0", "::/0"}
+		list := make([]map[string]any, len(wgPeers))
+		for i, peer := range wgPeers {
+			entry := map[string]any{
+				"server":      peer.host,
+				"port":        peer.port,
+				"public-key":  peer.publicKey,
+				"allowed-ips": peer.allowedIPs,
+			}
+			if peer.presharedKey != "" {
+				entry["pre-shared-key"] = peer.presharedKey
+			}
+			if peer.reserved != nil {
+				entry["reserved"] = peer.reserved
+			}
+			list[i] = entry
+		}
+		p["peers"] = list
 	}
 	if mtu, err := strconv.Atoi(iface["mtu"]); err == nil && mtu > 0 {
 		p["mtu"] = mtu
 	}
-	// mihomo takes one interval; of an AWG 3.x range it gets the shortest,
-	// which keeps a NAT mapping alive as well as any value in the range.
-	keepalive, _, _ := strings.Cut(peer["persistentkeepalive"], "-")
-	if ka, err := strconv.Atoi(strings.TrimSpace(keepalive)); err == nil && ka > 0 {
-		p["persistent-keepalive"] = ka
+	// mihomo takes one keepalive for the whole outbound, and one interval of an
+	// AWG 3.x range; it gets the shortest across the peers and the range, which
+	// keeps every NAT mapping alive as well as any value they hold.
+	for _, peer := range wgPeers {
+		if peer.keepalive > 0 && (p["persistent-keepalive"] == nil || peer.keepalive < p["persistent-keepalive"].(int)) {
+			p["persistent-keepalive"] = peer.keepalive
+		}
 	}
 
 	awgOpt, err := amneziaOption(iface)
@@ -1232,6 +1248,54 @@ func wireguardProxy(link, name string) (map[string]any, error) {
 	}
 
 	return p, nil
+}
+
+// wireguardPeer is one [Peer] as mihomo's wireguard outbound takes it.
+type wireguardPeer struct {
+	host, publicKey, presharedKey string
+	port, keepalive               int
+	reserved                      []int
+	allowedIPs                    []string
+}
+
+// readWireGuardPeer reads a [Peer]. Several peers each need AllowedIPs: a
+// default of everything would overlap, and which peer carries a flow would
+// then be a guess.
+func readWireGuardPeer(peer map[string]string, several bool) (wireguardPeer, error) {
+	var w wireguardPeer
+	host, portStr, err := net.SplitHostPort(peer["endpoint"])
+	if err != nil {
+		return w, fmt.Errorf("awg endpoint %q: %w", peer["endpoint"], err)
+	}
+	port, err := strconv.Atoi(portStr)
+	if err != nil {
+		return w, fmt.Errorf("awg endpoint port: %w", err)
+	}
+	if peer["publickey"] == "" {
+		return w, fmt.Errorf("awg: missing PublicKey")
+	}
+	w.host, w.port, w.publicKey, w.presharedKey = host, port, peer["publickey"], peer["presharedkey"]
+	if v := peer["reserved"]; v != "" {
+		b, err := awgconfig.ReservedBytes(v)
+		if err != nil {
+			return w, fmt.Errorf("awg: %w", err)
+		}
+		if b != [3]byte{} {
+			w.reserved = []int{int(b[0]), int(b[1]), int(b[2])}
+		}
+	}
+	w.allowedIPs = splitCSV(peer["allowedips"])
+	if len(w.allowedIPs) == 0 {
+		if several {
+			return w, fmt.Errorf("awg: missing AllowedIPs")
+		}
+		w.allowedIPs = []string{"0.0.0.0/0", "::/0"}
+	}
+	keepalive, _, _ := strings.Cut(peer["persistentkeepalive"], "-")
+	if ka, err := strconv.Atoi(strings.TrimSpace(keepalive)); err == nil && ka > 0 {
+		w.keepalive = ka
+	}
+	return w, nil
 }
 
 // awgInt reads a whole-number AWG option. A value that is not one fails the
@@ -1319,29 +1383,35 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 	return opt, nil
 }
 
-func parseINI(ini string) map[string]map[string]string {
-	out := map[string]map[string]string{}
-	section := ""
+// parseINI returns the [Interface] keys (lowercased) and one map per [Peer],
+// in order. A repeated key in a section keeps its last value.
+func parseINI(ini string) (iface map[string]string, peers []map[string]string) {
+	iface = map[string]string{}
+	var current map[string]string
 	for _, raw := range strings.Split(ini, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") || strings.HasPrefix(line, ";") {
 			continue
 		}
 		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.ToLower(strings.Trim(line, "[] \t"))
-			if out[section] == nil {
-				out[section] = map[string]string{}
+			switch strings.ToLower(strings.Trim(line, "[] \t")) {
+			case "interface":
+				current = iface
+			case "peer":
+				current = map[string]string{}
+				peers = append(peers, current)
+			default:
+				current = nil
 			}
 			continue
 		}
 		eq := strings.IndexByte(line, '=')
-		if eq < 0 || section == "" {
+		if eq < 0 || current == nil {
 			continue
 		}
-		key := strings.ToLower(strings.TrimSpace(line[:eq]))
-		out[section][key] = strings.TrimSpace(line[eq+1:])
+		current[strings.ToLower(strings.TrimSpace(line[:eq]))] = strings.TrimSpace(line[eq+1:])
 	}
-	return out
+	return iface, peers
 }
 
 func splitCSV(s string) []string {
