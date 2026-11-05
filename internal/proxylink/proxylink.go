@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/sharelink"
@@ -101,6 +103,9 @@ func credentials(userinfo, protocol string) (user, pass string, err error) {
 		decoded, err := awgconfig.DecodeBase64Flexible(userinfo)
 		if err != nil || !strings.Contains(decoded, ":") {
 			return "", "", fmt.Errorf("%s: the userinfo is neither user:pass nor its base64", protocol)
+		}
+		if !utf8.ValidString(decoded) || strings.ContainsFunc(decoded, unicode.IsControl) {
+			return "", "", fmt.Errorf("%s: the decoded userinfo holds a control character or invalid text", protocol)
 		}
 		userinfo = decoded
 	}

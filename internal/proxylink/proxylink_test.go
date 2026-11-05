@@ -100,6 +100,26 @@ func TestParse_RefusalsKeepTheCredentialOut(t *testing.T) {
 	}
 }
 
+// A login or password that decodes to a control character is refused, as in
+// every other decoded part of a link.
+func TestParse_RefusesAControlCharacterInADecodedLogin(t *testing.T) {
+	for name, link := range map[string]string{
+		"socks, a newline password": "socks://YToK@good.example:80",
+		"http, a 0x01 password":     "http://YToB@good.example:80",
+		"a tab in the login":        "socks://CTpi@good.example:80",
+		"a C1 control, U+0085":      "socks://YTrChQ@good.example:80",
+		"a C1 control, U+009B":      "socks://YTrCmw@good.example:80",
+		"a C1 control in the login": "socks://woB4OmI@good.example:80",
+		"invalid UTF-8":             "socks://YTr__g@good.example:80",
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := Parse(link); err == nil {
+				t.Fatal("want an error")
+			}
+		})
+	}
+}
+
 func TestProtocol_FoldsTheSchemes(t *testing.T) {
 	for link, want := range map[string]string{
 		"socks://h:1":    Socks,
