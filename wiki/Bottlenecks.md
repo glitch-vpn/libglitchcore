@@ -48,8 +48,6 @@ set by the app process would not.
 
 ## DNS
 
-* **fake-ip is xray/mihomo only.** awg takes one plain resolver from the
-  config; everything else in `dnsConfig` is ignored there.
 * **xray has no DoT.** `tls://` resolvers are skipped with a log line; use
   `https://`, `quic://` or a plain address.
 * **`directServers` reach differs by mode.** In fake-ip both engines cover

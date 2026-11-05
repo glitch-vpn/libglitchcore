@@ -6,14 +6,14 @@ A VPN client data plane you can embed. It parses share links, brings up the
 tunnel, routes traffic and reports what is happening; the UI, the accounts and
 the product are yours.
 
-Three engines are compiled in and one runs at a time: **Xray** (VLESS, VMess,
-Trojan, Shadowsocks with Reality/XTLS/uTLS, SOCKS5 and HTTP proxies),
-**AmneziaWG** (WireGuard with obfuscation, AWG 1.0, 2.0 and 3.x) and **mihomo**
-(Hysteria2, TUIC, AnyTLS, WireGuard/AWG outbound, SOCKS5 proxies).
+Two engines are compiled in and one runs at a time: **Xray** (VLESS, VMess,
+Trojan, Shadowsocks with Reality/XTLS/uTLS, SOCKS5 and HTTP proxies) and
+**mihomo** (Hysteria2, TUIC, AnyTLS, WireGuard and AmneziaWG with AWG 1.0, 2.0
+and 3.x, SOCKS5 proxies).
 Targets are Android (arm64, x86_64), Windows (amd64) and Linux (amd64), behind
 a plain C ABI — so it binds from Dart, Kotlin, Swift, C# or anything else with
-an FFI. Ship only the engines you need: an awg-only build is 11 MB against
-60 MB for all three.
+an FFI. Ship only the engines you need: an xray-only build is 33 MB against
+60 MB for both.
 
 Building a Flutter app? The
 [glitch_vpn_core plugin](https://github.com/glitch-vpn/glitch_vpn_core_plugin)
@@ -49,7 +49,7 @@ config, and fetches the health-probe URL (configurable, default
 
 The source is MIT ([LICENSE](LICENSE)). A built binary's licence depends on the
 engines in it: anything containing mihomo links GPL-3.0 code and is a
-GPL-3.0 combined work when distributed; compositions of xray and awg link
+GPL-3.0 combined work when distributed; a build of xray alone links
 none.
 Per-composition attribution is in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

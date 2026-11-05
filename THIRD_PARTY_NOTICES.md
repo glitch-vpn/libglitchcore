@@ -6,8 +6,7 @@ via `make build ENGINES=...`), because Go links all dependencies statically:
 
 | Composition | GPL code linked | Effective binary license |
 |---|---|---|
-| `awg` only | none | permissive (MIT + BSD/Apache deps) - proprietary use OK |
-| `xray`, with or without `awg` | none (xray-core is MPL-2.0) | permissive; MPL-2.0 file-level terms apply to xray-core's files |
+| `xray` only | none (xray-core is MPL-2.0) | permissive; MPL-2.0 file-level terms apply to xray-core's files |
 | any composition with `mihomo` | mihomo + sing (GPL-3.0) | **GPL-3.0 combined work** |
 
 Note on xray: xray-core's own code is MPL-2.0, and as of v26.10.21 it no longer
@@ -23,7 +22,6 @@ guards.
 |---|---|---|
 | Xray-core | MPL-2.0 | https://github.com/XTLS/Xray-core |
 | mihomo (Clash.Meta) | GPL-3.0 | https://github.com/MetaCubeX/mihomo |
-| amneziawg-go | MIT | https://github.com/amnezia-vpn/amneziawg-go |
 | tun2socks (fork of xjasonlyu/tun2socks) | MIT | https://github.com/glitch-vpn/tun2socks |
 | wireguard/windows (tun/Wintun bindings) | MIT | https://git.zx2c4.com/wireguard-windows |
 | go-winio | MIT | https://github.com/microsoft/go-winio |

@@ -10,11 +10,8 @@ Windows `amd64` c-shared DLL, `-ldflags="-s -w"`, `with_gvisor`:
 
 | Composition | Size |
 |---|---|
-| awg | 11.2 MB |
 | xray | 32.6 MB |
-| xray + awg | 33.2 MB |
 | mihomo | 40.8 MB |
-| xray + awg + mihomo | 59.8 MB |
 
 Same source, other targets, full composition: Android arm64 `.so` 63.1 MB,
 Linux amd64 `.so` 69.4 MB, `glitch_vpn_core_service.exe` 59.7 MB.

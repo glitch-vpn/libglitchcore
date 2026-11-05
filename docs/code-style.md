@@ -77,7 +77,7 @@ A start that races a stop is caught by `sessionGen`: the start captures the
 generation, the stop bumps it in `clearSessionState`, the start arms its loops
 under `coreMutex`, and its tail calls `abortStaleEngineSession`, which tears
 them down while its own instance still runs. Without it a stop landing in the
-tail leaves the previous session's loops running — on desktop awg the
+tail leaves the previous session's loops running — on desktop the
 liveness prober would then measure the physical NIC and the IP fetch would
 publish the user's real address as the tunnel exit.
 
@@ -95,8 +95,7 @@ New session-scoped state that misses one of the three legs is a finding.
 Process-global environment as per-connection state (`applyGeoAssetsDir`) is a
 fourth, narrower shape: snapshot-on-first-override and restore-at-the-next
 opt-less start, mutated only under `coreMutex`, and applied at the top of every
-start path that loads geo data — xray and mihomo today, awg being the exception
-because it has no rule engine. An engine that reads the variable but skips the
+start path that loads geo data. An engine that reads the variable but skips the
 call inherits the previous session's override.
 
 ## 2. Events
@@ -110,7 +109,7 @@ defers through `deferredStatus` (§1.2) instead of calling the sink.
 
 Log lines go through `emitLog(level, component, message)`, and the level is the
 writer's: an engine's own severity (xray's message, mihomo's event, zap's level
-in tun2socks, the AmneziaWG device logger's two functions), or
+in tun2socks), or
 `logfmt.Warnf`/`logfmt.Errorf` for the core's own lines, a plain `log.Printf`
 being info. Those two write the level as the line's leading token ("warn: ",
 "error: "), which is the one place the standard log path reads a level from
@@ -162,9 +161,8 @@ a malformed request (`optsFromRequest`). It emits `EngineError` **without**
 `clearSessionState()` — the caller's request never became a session, and
 clearing would wipe the live one the guards above just protected.
 
-A feature wired into xray but not awg/mihomo (or vice versa) without a stated
-reason is a finding — `balancerStrategy` silently dropped on the awg path for
-months because of exactly this.
+A feature wired into xray but not mihomo (or vice versa) without a stated
+reason is a finding.
 
 ## 4. Build-tag composition
 

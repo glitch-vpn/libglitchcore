@@ -30,7 +30,7 @@ Rank findings by what they actually cost the user:
    local-first routing (`engineStop`, `engineIsRunning`, `startStats`,
    `stopStats`) survives the change, and that every test binary pins
    `SetServiceIPC(false)`.
-3. **Key material escapes.** Share links, awg INI and UAPI strings carry
+3. **Key material escapes.** Share links and WireGuard INI configs carry
    UUIDs, passwords and private keys. Grep the diff for `log.Printf`,
    `fmt.Errorf`, `emitStatus` and event payload builders near config
    variables. Event payloads expose parsed identity, never raw links.
@@ -48,7 +48,7 @@ Rank findings by what they actually cost the user:
 6. **License composition.** New imports in `internal/core` or
    `internal/pinger` reachable under a composition that must exclude them.
    Check the tag on the file, then reason through `go list -deps` per the CI
-   forbidden regexes. GPL code reachable from the awg-only build is a release
+   forbidden regexes. GPL code reachable from the xray-only build is a release
    blocker.
 7. **Untrusted input.** Links, subscription-shaped strings and INI bodies are
    attacker-controlled. Parsers must not panic (index past a Split result,

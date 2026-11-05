@@ -6,8 +6,9 @@ Rules for agents working in this repository. These override default behaviour.
 
 libglitchcore is a Go library built as a C shared library (`-buildmode=c-shared`)
 that runs VPN engines behind one FFI surface: **xray** (VLESS / VMess /
-Trojan / Shadowsocks / SOCKS5 / HTTP), **awg** (AmneziaWG) and **mihomo**
-(Hysteria2, TUIC, AnyTLS, plus the bridge paths). It is consumed by the Flutter plugin
+Trojan / Shadowsocks / SOCKS5 / HTTP) and **mihomo**
+(Hysteria2, TUIC, AnyTLS, WireGuard and AmneziaWG, plus the bridge paths). It is
+consumed by the Flutter plugin
 `glitch-vpn/glitch_vpn_core_plugin`, which downloads release binaries pinned by
 version + sha256. Platforms: Android, Windows, Linux.
 
@@ -19,8 +20,8 @@ under `internal/`. One `CoreController`, one engine at a time.
 | Topic | Decision |
 |---|---|
 | FFI surface | **Frozen by default.** New data flows ride the status port as new event codes; new knobs ride `EngineStart`'s `Opts` map. A new C export is a last resort: it changes `libglitchcore.h`, forces ffigen regen in the plugin (CI fails on drift) and needs a service IPC command on Windows |
-| Engine composition | Negative build tags `no_xray` / `no_awg` / `no_mihomo`; the tagless build links everything. `with_gvisor` is always on in real builds and tests |
-| Licensing | Repo is MIT; compositions with mihomo are GPL-3.0 combined works via `sing`; xray and awg compositions are GPL-free. CI `go list -deps` guards keep excluded engines out of the link |
+| Engine composition | Negative build tags `no_xray` / `no_mihomo`; the tagless build links everything. `with_gvisor` is always on in real builds and tests |
+| Licensing | Repo is MIT; compositions with mihomo are GPL-3.0 combined works via `sing`; the xray-only composition is GPL-free. CI `go list -deps` guards keep excluded engines out of the link |
 | Deploy builds | `make build` (Docker) only. Local mingw builds are a compile check, never a deliverable |
 | Windows elevation | Client library forwards engine commands to the `GlitchVpnCore` system service over named pipes (`useServiceIPC`); proxy mode stays in-process |
 | Language | Everything in the repo is **English** (code, comments, commits, docs) |
@@ -36,8 +37,8 @@ under `internal/`. One `CoreController`, one engine at a time.
    leaks into `libglitchcore.h` and breaks ffigen (see
    `notif_stats_android.go`). JNI and other native headers stay in `.c` files.
 3. **Engine-specific code lives in build-tagged files.** A file importing
-   `xray-core`, `amneziawg-go` or `mihomo` packages carries the matching
-   `//go:build !no_*` tag. The CI matrix (4 compositions) and the license
+   `xray-core` or `mihomo` packages carries the matching
+   `//go:build !no_*` tag. The CI matrix (3 compositions) and the license
    guards must stay green.
 4. **Any test touching `internal/core` engine or stats paths calls
    `core.SetServiceIPC(false)` in `TestMain`.** `useServiceIPC` defaults to
@@ -75,7 +76,7 @@ internal/
                            # session state, Windows service + IPC, platform TUN
   xrayconfig/              # share links -> xray config (+ balancer/observatory)
   mihomoconfig/            # share links -> mihomo config (+ proxy group)
-  awgconfig/               # awg:// / wireguard:// / INI parsing -> UAPI
+  awgconfig/               # awg:// / wireguard:// / wg:// / INI parsing for mihomo
   serverinfo/              # link -> display identity for ServerEvent
   sharelink/               # URL-shaped links parsed with credentials kept out of errors
   vmesslink/               # vmess:// (base64 JSON and URI) -> one shape
@@ -141,7 +142,7 @@ break it.
 ### Verification of a change (definition of done)
 
 1. `CGO_ENABLED=0 go test -tags=with_gvisor ./internal/...` plus the CI tag
-   matrix (`no_mihomo` / `no_xray no_awg` / `no_mihomo no_xray`).
+   matrix (`no_mihomo` / `no_xray`).
 2. Smoke: `CGO_ENABLED=0 go test -tags="integration with_gvisor"
    ./internal/smoke/`. A new feature gets a subtest here — the loopback suite
    proves link → config → engine → events end-to-end with no network. The
@@ -170,7 +171,7 @@ break it.
 ## 6. Commands
 
 ```bash
-make build [ENGINES="xray,awg"]      # deploy build, Docker
+make build [ENGINES=xray]           # deploy build, Docker
 make test                            # tests in the build container
 
 CGO_ENABLED=0 go test -tags=with_gvisor ./internal/...
