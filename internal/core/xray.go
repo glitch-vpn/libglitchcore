@@ -55,7 +55,7 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if x.awgSession.running.Load() || x.mihomoSession.running.Load() {
+	if x.mihomoSession.running.Load() {
 		x.emitStatus(EngineConflictOtherCore, "[Xray] Start rejected: another engine is running")
 		return glitchCoreResultError
 	}
@@ -142,7 +142,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 	if already, err := x.prepareStartLocked(&x.xraySession, mark, x.xrayStopLocked); err != nil || already {
 		return err
 	}
-	if x.awgSession.running.Load() || x.mihomoSession.running.Load() {
+	if x.mihomoSession.running.Load() {
 		return fmt.Errorf("[Xray] another engine is already running")
 	}
 	log.Println("[Xray] Initializing core")

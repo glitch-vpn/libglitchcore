@@ -1,4 +1,4 @@
-//go:build no_xray && (no_mihomo || no_awg)
+//go:build no_xray
 
 package core
 

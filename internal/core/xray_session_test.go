@@ -21,14 +21,12 @@ func xrayProxyStart(t *testing.T) (EngineStartRequest, string) {
 
 func TestXrayStop_TakenWhileALaterStartWaits(t *testing.T) {
 	x := &CoreController{}
-	x.initEngineState()
 	queuedStopScenario(t, x, "xray", &x.xraySession, x.HandleXrayStart, x.HandleXrayStop,
 		EngineStartRequest{Config: xraySessionTestLink})
 }
 
 func TestXrayStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	x := &CoreController{}
-	x.initEngineState()
 	t.Cleanup(func() {
 		x.stopStats()
 		x.coreMutex.Lock()
@@ -71,7 +69,6 @@ func TestXrayStart_CopiesTheTunFdInTheCall(t *testing.T) {
 	logs := captureLogs(t, 1)
 	release := holdStarts(t, "xray")
 	x := &CoreController{}
-	x.initEngineState()
 
 	if res := x.HandleXrayStart(EngineStartRequest{Config: xraySessionTestLink, TunFD: 7}); res != glitchCoreResultSuccess {
 		t.Fatalf("start = %d", res)

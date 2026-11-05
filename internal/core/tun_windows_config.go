@@ -136,40 +136,6 @@ func defaultGateway() (gw netip.Addr, ifIdx uint32, err error) {
 	return
 }
 
-func findInterfaceByIPv4Addr(ipv4 string) (winipcfg.LUID, uint32, bool) {
-	target := net.ParseIP(ipv4)
-	if target == nil || target.To4() == nil {
-		return 0, 0, false
-	}
-	ifaces, err := net.Interfaces()
-	if err != nil {
-		return 0, 0, false
-	}
-	for _, iface := range ifaces {
-		addrs, err := iface.Addrs()
-		if err != nil {
-			continue
-		}
-		for _, a := range addrs {
-			var ip net.IP
-			switch v := a.(type) {
-			case *net.IPNet:
-				ip = v.IP
-			case *net.IPAddr:
-				ip = v.IP
-			}
-			if ip != nil && ip.To4() != nil && ip.Equal(target) {
-				luid, e := winipcfg.LUIDFromIndex(uint32(iface.Index))
-				if e != nil {
-					return 0, 0, false
-				}
-				return luid, uint32(iface.Index), true
-			}
-		}
-	}
-	return 0, 0, false
-}
-
 // providerLookupIPv4 resolves host via the system resolver -- it runs BEFORE TUN
 // routes exist, so it must not depend on them.
 func providerLookupIPv4(ctx context.Context, host string) (string, error) {

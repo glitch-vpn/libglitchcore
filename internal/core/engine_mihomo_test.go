@@ -98,7 +98,7 @@ func TestHandleMihomoStart_RefusesRawConfigInPool(t *testing.T) {
 	setStatusSink(func(code int32, _ string) { codes = append(codes, code) })
 	defer setStatusSink(nil)
 
-	ctl := &CoreController{nextHandle: 1}
+	ctl := &CoreController{}
 	got := ctl.HandleMihomoStart(EngineStartRequest{Config: rawINIConfig + "\nhysteria2://p@h:443"})
 
 	if got != glitchCoreResultError || len(codes) != 1 || codes[0] != EngineError {

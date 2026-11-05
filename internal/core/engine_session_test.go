@@ -239,7 +239,6 @@ func listens(addr string) bool {
 func TestAbortStaleEngineSession_EndsTheLoopsUnlessALaterStartOwnsThem(t *testing.T) {
 	sessions := map[string]func(x *CoreController) *engineSession{
 		"xray":   func(x *CoreController) *engineSession { return &x.xraySession },
-		"awg":    func(x *CoreController) *engineSession { return &x.awgSession },
 		"mihomo": func(x *CoreController) *engineSession { return &x.mihomoSession },
 	}
 	cases := []struct {

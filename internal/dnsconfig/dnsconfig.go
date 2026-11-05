@@ -22,7 +22,7 @@ type Config struct {
 	FakeIPFilter []string `json:"fakeIpFilter"` // domains kept off fake-ip (direct-resolved)
 	// Static name -> addresses entries. Keys: bare hostname (exact match) or
 	// engine-native matcher syntax passed through verbatim (xray:
-	// domain:/geosite:/regexp:/keyword: prefixes). awg ignores.
+	// domain:/geosite:/regexp:/keyword: prefixes).
 	Hosts map[string][]string `json:"hosts,omitempty"`
 	// Resolvers for direct-routed names. mihomo maps them to
 	// direct-nameserver; xray has no such switch, so they are placed behind
@@ -30,7 +30,7 @@ type Config struct {
 	// when it dials a direct-routed name. Normal (non-fake-ip) mode has no
 	// fakedns to fall through, so there they are scoped by the profile's
 	// direct domain rules instead (direct-all: they become the default and the
-	// general list is scoped to the proxy rules). awg ignores.
+	// general list is scoped to the proxy rules).
 	DirectServers []string `json:"directServers,omitempty"`
 	// From opts["disableIPv6"], not dnsConfig JSON; routing side is Profile.DisableIPv6.
 	DisableIPv6 bool `json:"-"`
@@ -104,7 +104,7 @@ func isHostName(v string) bool {
 	return strings.Contains(v, ".") || strings.EqualFold(v, "lan")
 }
 
-// FirstPlainServer skips DoH/DoT/DoQ - AWG only accepts a plain UDP resolver on the interface.
+// FirstPlainServer skips DoH/DoT/DoQ - the TUN bridge takes a plain UDP resolver on the interface.
 func (c Config) FirstPlainServer() string {
 	for _, s := range c.Servers {
 		if s = strings.TrimSpace(s); s != "" && Scheme(s) == "" {
@@ -124,7 +124,7 @@ func Scheme(server string) string {
 
 // Validate refuses a fake-ip filter entry the engine that reads it would fail
 // the start on or read as something else, naming the entry. The filter is read
-// only in fake-ip mode; awg reads none. The grammar is the engine's own:
+// only in fake-ip mode. The grammar is the engine's own:
 //
 // mihomo reads a domain pattern whose wildcards are whole labels ("*" anywhere,
 // "+" as the first label of a longer name), with no trailing dot or empty

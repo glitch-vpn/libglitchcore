@@ -65,20 +65,16 @@ const (
 )
 
 // CoreController: one engine at a time. Engine-typed fields live in embedded
-// xrayState/awgState/bridgeState so an excluded engine links none of its packages.
+// xrayState/bridgeState so an excluded engine links none of its packages.
 type CoreController struct {
 	coreMutex          sync.Mutex
 	isTun2socksRunning atomic.Bool
-	currentAwgHandle   int
-	nextHandle         int
 	xraySession        engineSession
-	awgSession         engineSession
 	mihomoSession      engineSession
 	statsMu            sync.Mutex
 	statsTicker        *time.Ticker
 	statsQuit          chan struct{}
 	statsDone          chan struct{}
-	awgIFName          string
 	connectedAtUnixMs  atomic.Int64
 	// atomic.Int32 holding a liveness.State.
 	linkState   atomic.Int32
@@ -111,7 +107,6 @@ type CoreController struct {
 	selWatchDone chan struct{}
 
 	xrayState
-	awgState
 	bridgeState
 }
 

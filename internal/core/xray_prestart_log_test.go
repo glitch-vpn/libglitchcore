@@ -67,7 +67,6 @@ func TestXrayInstanceClose_LeavesTheCoreLogHandlerRegistered(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			logs := captureLogs(t, -1)
 			x := &CoreController{}
-			x.initEngineState()
 			x.xrayCoreInstance = newXrayInstanceForLogTest(t)
 			x.xraySession.running.Store(true)
 			x.coreMutex.Lock()

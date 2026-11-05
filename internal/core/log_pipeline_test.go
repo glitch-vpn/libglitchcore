@@ -29,7 +29,6 @@ func captureLogs(t *testing.T, verbosity int32) func() []capturedLog {
 	t.Helper()
 	prevCtl := globalController
 	globalController = &CoreController{}
-	globalController.initEngineState()
 	t.Cleanup(func() { globalController = prevCtl })
 
 	var mu sync.Mutex

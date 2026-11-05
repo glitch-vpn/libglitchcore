@@ -69,7 +69,7 @@ func (x *CoreController) clearSessionState() int64 {
 }
 
 // endSessionLoops undoes what a session armed. A stop's own cleanup can run
-// before the arming; on desktop awg a leaked liveness prober would then report
+// before the arming; a leaked liveness prober would then report
 // the physical NIC as the tunnel and publish the user's real address as the
 // exit IP.
 func (x *CoreController) endSessionLoops() {

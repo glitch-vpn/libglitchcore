@@ -37,7 +37,6 @@ func mihomoSessionHome(t *testing.T) string {
 func newMihomoSessionController(t *testing.T) *CoreController {
 	t.Helper()
 	x := &CoreController{}
-	x.initEngineState()
 	t.Cleanup(func() {
 		x.stopStats()
 		x.coreMutex.Lock()

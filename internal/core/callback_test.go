@@ -12,9 +12,7 @@ import (
 )
 
 func newTestController() *CoreController {
-	return &CoreController{
-		nextHandle: 1,
-	}
+	return &CoreController{}
 }
 
 // Window between an old Dart isolate dying and a new one registering.

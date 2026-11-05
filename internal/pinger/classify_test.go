@@ -12,7 +12,6 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 		return false
 	}
 	hasXray := registered("xray")
-	hasAwg := registered("awg")
 	hasMihomo := fallback != nil
 
 	check := func(link, want string) {
@@ -52,15 +51,6 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 	check("http://YWxpY2U6czNjcmV0@host:8080", xrayOnly)
 	check("https://alice:s3cret@host:443?sni=x", xrayOnly)
 
-	awg := ""
-	if hasAwg {
-		awg = "awg"
-	}
-	check("awg://YWJj#tokyo", awg)
-	check("[Interface]\nPrivateKey = k\n[Peer]\nEndpoint = h:51820", awg)
-	check("wireguard://k@host:51820?publickey=p", awg)
-	check("wg://host:51820?pk=k&pub=p", awg)
-
 	mihomoOnly := ""
 	if hasMihomo {
 		mihomoOnly = "mihomo"
@@ -68,6 +58,10 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 	check("hysteria2://pass@host:443", mihomoOnly)
 	check("tuic://uuid:pass@host:443", mihomoOnly)
 	check("anytls://pass@host:443", mihomoOnly)
+	check("awg://YWJj#tokyo", mihomoOnly)
+	check("[Interface]\nPrivateKey = k\n[Peer]\nEndpoint = h:51820", mihomoOnly)
+	check("wireguard://k@host:51820?publickey=p", mihomoOnly)
+	check("wg://host:51820?pk=k&pub=p", mihomoOnly)
 
 	check("nonsense://whatever", "")
 	check("socks4://host:1080", "")

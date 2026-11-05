@@ -29,7 +29,7 @@ const (
 type tunnelDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
 // Fixed for one engine session. dial must route through the tunnel; nil =
-// this engine/platform has no in-tunnel HTTP path (Android awg).
+// this engine/platform has no in-tunnel HTTP path.
 type ipResolveConfig struct {
 	enabled bool
 	urlV4   string

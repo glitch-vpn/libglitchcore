@@ -267,7 +267,7 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	if x == nil {
 		return glitchCoreResultError
 	}
-	if x.xraySession.running.Load() || x.awgSession.running.Load() {
+	if x.xraySession.running.Load() {
 		x.emitStatus(EngineConflictOtherCore, "[mihomo] Start rejected: another engine is running")
 		return glitchCoreResultError
 	}
@@ -311,7 +311,7 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	if already, err := x.prepareStartLocked(&x.mihomoSession, mark, x.mihomoStopLocked); err != nil || already {
 		return err
 	}
-	if x.xraySession.running.Load() || x.awgSession.running.Load() {
+	if x.xraySession.running.Load() {
 		return fmt.Errorf("[mihomo] another engine is already running")
 	}
 
@@ -528,7 +528,7 @@ func (x *CoreController) HandleMihomoIsRunning() int32 {
 	return glitchCoreResultError
 }
 
-// (rx=down, tx=up), per the xray/awg convention.
+// (rx=down, tx=up), per the xray convention.
 func (x *CoreController) getMihomoTraffic() (uint64, uint64) {
 	return mihomoSessionTraffic.proxied()
 }

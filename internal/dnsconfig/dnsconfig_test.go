@@ -22,12 +22,12 @@ func TestScheme(t *testing.T) {
 }
 
 func TestFirstPlainServer(t *testing.T) {
-	// DoH/DoT first, a plain one later -> the plain one wins (awg can't do DoH/DoT).
+	// DoH/DoT first, a plain one later -> the plain one wins (the bridge cannot do DoH/DoT).
 	c := Config{Servers: []string{"https://dns.google/dns-query", "tls://1.1.1.1", " 9.9.9.9 "}}
 	if got := c.FirstPlainServer(); got != "9.9.9.9" {
 		t.Fatalf("FirstPlainServer = %q, want 9.9.9.9", got)
 	}
-	// Only encrypted -> none applicable to awg.
+	// Only encrypted -> none applicable.
 	if got := (Config{Servers: []string{"https://x/dns-query"}}).FirstPlainServer(); got != "" {
 		t.Fatalf("FirstPlainServer = %q, want empty", got)
 	}
@@ -156,7 +156,6 @@ func TestValidateFakeIPFilterOnlyWhereItIsRead(t *testing.T) {
 	}{
 		"normal mode": {Config{Mode: ModeNormal, FakeIPFilter: bad}, "mihomo"},
 		"unset mode":  {Config{FakeIPFilter: bad}, "mihomo"},
-		"awg":         {Config{Mode: ModeFakeIP, FakeIPFilter: bad}, "awg"},
 	} {
 		if err := c.cfg.Validate(c.engine); err != nil {
 			t.Errorf("%s: Validate = %v, want nil", name, err)

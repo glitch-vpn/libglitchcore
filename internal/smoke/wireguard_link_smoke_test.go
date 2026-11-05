@@ -52,7 +52,7 @@ func TestSmoke_Mihomo_WireGuardLinks(t *testing.T) {
 			// Before the session: the ping's device and the session's share one
 			// key, and the peer answers only the endpoint it heard from last.
 			results := pinger.Measure(pinger.Request{Links: []string{link}, ProbeURL: echoURL, TimeoutMs: 5000})
-			if len(results) != 1 || !results[0].Alive || results[0].Engine != "awg" {
+			if len(results) != 1 || !results[0].Alive || results[0].Engine != "mihomo" {
 				t.Fatalf("ping = %+v", results)
 			}
 

@@ -5,8 +5,8 @@
 # sections below).
 #
 # Host targets (run these):
-#   make build                     full composition (xray+awg+mihomo), all platforms
-#   make build ENGINES="xray,awg"  any engine subset (comma/space separated)
+#   make build                     full composition (xray+mihomo), all platforms
+#   make build ENGINES=xray         any engine subset (comma/space separated)
 #   make test                      unit + integration smoke tests (in the container)
 #   make image                     (re)build the Docker toolchain image only
 #   make clean                     remove build_output
@@ -24,8 +24,8 @@ IMAGE_TAG      := $(or $(shell sha256sum "$(CURDIR)/Dockerfile" 2>/dev/null | cu
 IMAGE          := $(IMAGE_NAME):$(IMAGE_TAG)
 WINTUN_VERSION := 0.14.1
 
-# Engine composition (comma/space separated subset of: xray awg mihomo).
-ENGINES ?= xray,awg,mihomo
+# Engine composition (comma/space separated subset of: xray mihomo).
+ENGINES ?= xray,mihomo
 
 # One shell per recipe, abort on first failure.
 .ONESHELL:
@@ -40,7 +40,7 @@ ENGINES ?= xray,awg,mihomo
 help:
 	@echo "libglitchcore build:"
 	@echo "  make build                     full native libs (all platforms, via Docker)"
-	@echo "  make build ENGINES=\"xray,awg\"  any engine subset"
+	@echo "  make build ENGINES=xray         any engine subset"
 	@echo "  make test                      unit + smoke tests (via Docker)"
 	@echo "  make image                     rebuild the Docker toolchain image"
 	@echo "  make clean                     remove build_output"
@@ -80,28 +80,25 @@ ffi:
 	cd /app
 	go mod tidy
 	XRAY_VER=$$(go list -m -f '{{.Version}}' github.com/xtls/xray-core 2>/dev/null || echo unknown)
-	AWG_VER=$$(go list -m -f '{{.Version}}' github.com/amnezia-vpn/amneziawg-go/v3 2>/dev/null || echo unknown)
 	MIHOMO_VER=$$(go list -m -f '{{.Version}}' github.com/metacubex/mihomo 2>/dev/null || echo unknown)
-	LDFLAGS="-s -w -X main.builtXrayCoreVersion=$$XRAY_VER -X main.builtAmneziawgVersion=$$AWG_VER -X main.builtMihomoVersion=$$MIHOMO_VER"
+	LDFLAGS="-s -w -X main.builtXrayCoreVersion=$$XRAY_VER -X main.builtMihomoVersion=$$MIHOMO_VER"
 	# -checklinkname=0: xray's finalmask (via pion) links wlynxg/anet, whose Android
 	# file reaches net.zoneCache by go:linkname, which Go 1.27 refuses; xray's own
 	# release builds pass the same flag.
 	ANDROID_LDFLAGS="$$LDFLAGS -checklinkname=0 -extldflags \"-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384\""
 	# Engine set -> negative build tags (default: everything in).
-	ENGINE_SET=$$(printf '%s' "$${GLITCH_ENGINES:-xray,awg,mihomo}" | tr ',' ' ')
-	HAS_XRAY=""; HAS_AWG=""; HAS_MIHOMO=""
+	ENGINE_SET=$$(printf '%s' "$${GLITCH_ENGINES:-xray,mihomo}" | tr ',' ' ')
+	HAS_XRAY=""; HAS_MIHOMO=""
 	for e in $$ENGINE_SET; do
 	  case "$$e" in
 	    xray) HAS_XRAY=1 ;;
-	    awg) HAS_AWG=1 ;;
 	    mihomo) HAS_MIHOMO=1 ;;
-	    *) echo "[ERR] unknown engine '$$e' (valid: xray awg mihomo)"; exit 1 ;;
+	    *) echo "[ERR] unknown engine '$$e' (valid: xray mihomo)"; exit 1 ;;
 	  esac
 	done
-	if [ -z "$$HAS_XRAY$$HAS_AWG$$HAS_MIHOMO" ]; then echo "[ERR] empty engine set"; exit 1; fi
+	if [ -z "$$HAS_XRAY$$HAS_MIHOMO" ]; then echo "[ERR] empty engine set"; exit 1; fi
 	NO_TAGS=""
 	if [ -z "$$HAS_XRAY" ]; then NO_TAGS="$$NO_TAGS no_xray"; fi
-	if [ -z "$$HAS_AWG" ]; then NO_TAGS="$$NO_TAGS no_awg"; fi
 	if [ -z "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_mihomo"; fi
 	# mihomo outbounds no share link reaches; easytier alone embeds a ~7 MB WASM core.
 	if [ -n "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier"; fi
@@ -150,10 +147,9 @@ ffi:
 
 run-tests:
 	cd /app
-	ENGINE_SET=$$(printf '%s' "$${GLITCH_ENGINES:-xray,awg,mihomo}" | tr ',' ' ')
+	ENGINE_SET=$$(printf '%s' "$${GLITCH_ENGINES:-xray,mihomo}" | tr ',' ' ')
 	NO_TAGS=""
 	case " $$ENGINE_SET " in *" xray "*) ;; *) NO_TAGS="$$NO_TAGS no_xray" ;; esac
-	case " $$ENGINE_SET " in *" awg "*) ;; *) NO_TAGS="$$NO_TAGS no_awg" ;; esac
 	case " $$ENGINE_SET " in *" mihomo "*) NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier" ;; *) NO_TAGS="$$NO_TAGS no_mihomo" ;; esac
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=gcc CGO_CFLAGS="-I$$DART_SDK/include" \
 	  go test -tags="with_gvisor $$NO_TAGS" -count=1 -timeout 120s ./...

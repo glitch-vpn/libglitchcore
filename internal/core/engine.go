@@ -69,7 +69,6 @@ type engineOpts struct {
 	// fake-IP->domain mapping is never disabled (fake-ip can't route without it).
 	sniffing    bool
 	probeURL    string
-	awgPicked   string
 	livenessSec int
 	// xray Mux (mihomo ignores); muxConcurrency==0 = off.
 	muxConcurrency  int
@@ -77,7 +76,7 @@ type engineOpts struct {
 	fingerprint     string
 	// Caller-supplied dir with geoip.dat/geosite.dat, applied in the process
 	// that runs the engine (crosses the service IPC inside the request).
-	// "" = the Initialize-time default. awg ignores (no rule engine).
+	// "" = the Initialize-time default.
 	geoAssetsDir string
 	proxyUser    string // both empty = open inbound
 	proxyPass    string
@@ -112,7 +111,6 @@ func optsFromRequest(req EngineStartRequest, engine string) (engineOpts, error) 
 		proxyPort:       proxyPortFromOpts(o),
 		sniffing:        sniffing,
 		probeURL:        probeURLOpt(o["probeUrl"]),
-		awgPicked:       strings.TrimSpace(o["awgPicked"]),
 		livenessSec:     intOpt(o["livenessIntervalSec"]),
 		muxConcurrency:  intOpt(o["muxConcurrency"]),
 		xudpConcurrency: intOpt(o["xudpConcurrency"]),
@@ -250,8 +248,6 @@ func engineDisplayName(id string) string {
 	switch id {
 	case "xray":
 		return "Xray"
-	case "awg":
-		return "AWG"
 	default:
 		return id
 	}

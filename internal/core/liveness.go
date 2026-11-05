@@ -188,15 +188,3 @@ func tunnelProber(dial tunnelDialFunc, probeURL string) func(ctx context.Context
 		return probeOnce(ctx, probeURL, dial)
 	}
 }
-
-// directProber uses the OS default route - on desktop it goes into the TUN, so
-// the probe traverses the awg tunnel end-to-end.
-func directProber(probeURL string) func(ctx context.Context) (time.Duration, error) {
-	if probeURL == "" {
-		probeURL = defaultLivenessProbeURL
-	}
-	dialer := &net.Dialer{Timeout: livenessProbeTimeout}
-	return func(ctx context.Context) (time.Duration, error) {
-		return probeOnce(ctx, probeURL, dialer.DialContext)
-	}
-}

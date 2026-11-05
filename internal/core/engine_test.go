@@ -102,18 +102,21 @@ func jsonOf(t *testing.T, v any) string {
 	return string(b)
 }
 
+// "awg" is no engine: its links run on mihomo, and a request that names it is
+// refused like any other unknown id.
 func TestEngineDispatch_UnknownEngineRejected(t *testing.T) {
 	ctl := &CoreController{}
-	ctl.initEngineState()
 
-	if got := ctl.engineStart("nope", EngineStartRequest{}); got != glitchCoreResultError {
-		t.Errorf("engineStart(unknown) = %d, want error %d", got, glitchCoreResultError)
-	}
-	if got := ctl.engineStop("nope"); got != glitchCoreResultError {
-		t.Errorf("engineStop(unknown) = %d, want error %d", got, glitchCoreResultError)
-	}
-	if got := ctl.engineIsRunning("nope"); got != glitchCoreResultError {
-		t.Errorf("engineIsRunning(unknown) = %d, want error %d", got, glitchCoreResultError)
+	for _, id := range []string{"nope", "awg"} {
+		if got := ctl.engineStart(id, EngineStartRequest{}); got != glitchCoreResultError {
+			t.Errorf("engineStart(%q) = %d, want error %d", id, got, glitchCoreResultError)
+		}
+		if got := ctl.engineStop(id); got != glitchCoreResultError {
+			t.Errorf("engineStop(%q) = %d, want error %d", id, got, glitchCoreResultError)
+		}
+		if got := ctl.engineIsRunning(id); got != glitchCoreResultError {
+			t.Errorf("engineIsRunning(%q) = %d, want error %d", id, got, glitchCoreResultError)
+		}
 	}
 }
 
@@ -126,7 +129,7 @@ func TestCoreCapabilities_JSONShape(t *testing.T) {
 		t.Fatalf("coreCapabilities() is not valid JSON: %v", err)
 	}
 	// Engines are sorted and mirror the registry exactly, whatever this build's
-	// composition is (multi: awg/mihomo/xray; solo: mihomo).
+	// composition is (xray and mihomo, or either alone).
 	if !slices.IsSorted(caps.Engines) {
 		t.Errorf("engines %v not sorted", caps.Engines)
 	}
@@ -160,7 +163,6 @@ func TestDNSFromRequest_FilterIsCheckedWhereTheEngineReadsIt(t *testing.T) {
 		{"mihomo proxy mode, fake-ip", "mihomo", dnsconfig.ModeFakeIP, proxy, false},
 		{"mihomo proxy mode, unset", "mihomo", "", proxy, false},
 		{"xray, unset mode is not fake-ip", "xray", "", tunnel, false},
-		{"awg reads none", "awg", dnsconfig.ModeFakeIP, tunnel, false},
 	}
 	for _, c := range cases {
 		req := EngineStartRequest{Opts: c.opts, DNSConfig: &dnsconfig.Config{Mode: c.mode, FakeIPFilter: bad}}

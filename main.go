@@ -62,13 +62,12 @@ import (
 
 // Injected via -ldflags "-X main.built*"; forwarded to core in init.
 var (
-	builtXrayCoreVersion  = "unknown"
-	builtAmneziawgVersion = "unknown"
-	builtMihomoVersion    = "unknown"
+	builtXrayCoreVersion = "unknown"
+	builtMihomoVersion   = "unknown"
 )
 
 func init() {
-	core.SetBuiltVersions(builtXrayCoreVersion, builtAmneziawgVersion, builtMihomoVersion)
+	core.SetBuiltVersions(builtXrayCoreVersion, builtMihomoVersion)
 }
 
 //export RegisterStatusPort
@@ -118,13 +117,6 @@ func MeasurePings(cRequestJSON *C.char) *C.char {
 		return C.CString(fmt.Sprintf(`{"error":%q}`, logfmt.Scrub(err.Error())))
 	}
 	return C.CString(string(data))
-}
-
-//export AwgPick
-func AwgPick(cRequestJSON *C.char) *C.char {
-	// Caller frees via FreeStatusMessage. In-process like MeasurePings: the
-	// pick only probes and parses, so it needs no service command.
-	return C.CString(core.PickAwgJSON(C.GoString(cRequestJSON)))
 }
 
 //export EngineStart

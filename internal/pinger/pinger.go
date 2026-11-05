@@ -11,7 +11,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/glitch-vpn/libglitchcore/internal/awgconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
@@ -25,8 +24,7 @@ const (
 	probeSamples = 3
 )
 
-// Engine, when set, is the engine the caller pinned ("xray", "mihomo" or
-// "awg"): every link is measured on it alone, and a link it cannot carry is
+// Engine, when set, is the engine the caller pinned ("xray" or "mihomo"): every link is measured on it alone, and a link it cannot carry is
 // reported unreachable, never on another engine. Empty keeps the per-link choice.
 type Request struct {
 	Engine      string   `json:"engine,omitempty"`
@@ -69,10 +67,6 @@ func setFallbackMeasurer(m engineMeasurer) { fallback = &m }
 type fallsBack struct{ error }
 
 func (e fallsBack) Unwrap() error { return e.error }
-
-func matchAwgLink(trimmed, _ string) bool {
-	return awgconfig.IsLink(trimmed)
-}
 
 func classify(link string) (engine string, m measurer) {
 	trimmed := strings.TrimSpace(link)
