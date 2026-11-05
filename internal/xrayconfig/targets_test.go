@@ -497,3 +497,35 @@ func TestNamedTargets_LaterHopEchLookupIsRefused(t *testing.T) {
 		t.Error("a download leg that queries for its ECH config must be refused too")
 	}
 }
+
+// DialSystem resolves a domain by the socket options' strategies before it
+// hands the dial to the dialer proxy, so a hop after the first keeps neither.
+func TestNamedTargets_LaterHopSocketOptionsDoNotResolveLocally(t *testing.T) {
+	resolveAs(t, map[string]string{"one.example": "192.0.2.11"})
+	extra := strings.Replace(downloadExtra, `"network":"xhttp"`, `"network":"xhttp","sockopt":{"domainStrategy":"UseIP","addressPortStrategy":"SrvPortOnly","tcpKeepAliveInterval":15}`, 1)
+	res, err := BuildConfig([]string{poolLink}, BalancerOptions{}, chainProfile(linkOne, xhttpLink(extra)), "none")
+	if err != nil {
+		t.Fatal(err)
+	}
+	hop := outboundByTag(t, res.Config, "rc-c1-1")
+	var doc struct {
+		DownloadSettings struct {
+			Sockopt map[string]any `json:"sockopt"`
+		} `json:"downloadSettings"`
+	}
+	if err := json.Unmarshal(hop.StreamSetting.XHTTPSettings.Extra, &doc); err != nil {
+		t.Fatal(err)
+	}
+	sockopt := doc.DownloadSettings.Sockopt
+	if sockopt["dialerProxy"] != "rc-c1-0" || sockopt["domainStrategy"] != nil || sockopt["addressPortStrategy"] != nil || sockopt["tcpKeepAliveInterval"] != float64(15) {
+		t.Errorf("download leg sockopt = %v, want the dialer proxy and the keepalive only", sockopt)
+	}
+
+	own := xrayConf.OutboundDetourConfig{StreamSetting: &xrayConf.StreamConfig{SocketSettings: &xrayConf.SocketConfig{DomainStrategy: "UseIP", AddressPortStrategy: "SrvPortOnly"}}}
+	if err := setDialerProxy(&own, "rc-c1-0"); err != nil {
+		t.Fatal(err)
+	}
+	if got := own.StreamSetting.SocketSettings; got.DomainStrategy != "" || got.AddressPortStrategy != "" || got.DialerProxy != "rc-c1-0" {
+		t.Errorf("hop sockopt = %+v", got)
+	}
+}

@@ -192,6 +192,10 @@ func setDialerProxy(ob *xrayConf.OutboundDetourConfig, via string) error {
 	if stream.SocketSettings == nil {
 		stream.SocketSettings = &xrayConf.SocketConfig{}
 	}
+	// DialSystem resolves a domain by these strategies before it reaches the
+	// dialer proxy, so a hop after the first keeps neither.
+	stream.SocketSettings.DomainStrategy = ""
+	stream.SocketSettings.AddressPortStrategy = ""
 	stream.SocketSettings.DialerProxy = via
 	if stream.XHTTPSettings != nil && len(stream.XHTTPSettings.Extra) > 0 {
 		extra, err := dialDownloadThrough(stream.XHTTPSettings.Extra, via)
@@ -232,6 +236,8 @@ func dialDownloadThrough(extra json.RawMessage, via string) (json.RawMessage, er
 			return nil, fmt.Errorf("xhttp downloadSettings sockopt: %w", err)
 		}
 	}
+	delete(sockopt, "domainStrategy")
+	delete(sockopt, "addressPortStrategy")
 	sockopt["dialerProxy"], _ = json.Marshal(via)
 	download["sockopt"], _ = json.Marshal(sockopt)
 	doc["downloadSettings"], _ = json.Marshal(download)

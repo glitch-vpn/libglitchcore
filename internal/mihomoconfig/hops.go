@@ -46,10 +46,11 @@ func resolveLaterHop(proxy map[string]any, before []map[string]any, resolver str
 	if !slices.Contains(udpProxyTypes, proxy["type"]) || !namesAHost(proxy) {
 		return nil
 	}
-	via, err := dialerThrough(before)
+	via, closeHops, err := dialerThrough(before)
 	if err != nil {
 		return err
 	}
+	defer closeHops()
 	answers := map[string]string{}
 	resolve := func(entry map[string]any) error {
 		host, _ := entry["server"].(string)
@@ -151,10 +152,16 @@ func queryThrough(ctx context.Context, via C.Dialer, resolver, host string, qtyp
 }
 
 // dialerThrough is a dialer that leaves from the last of hops, each reached
-// through the one before it. The maps are the hops as built, resolved ones
+// through the one before it, and the func that closes what it built. The maps are the hops as built, resolved ones
 // included, with their dialer-proxy left out: the chain is wired here.
-func dialerThrough(hops []map[string]any) (C.Dialer, error) {
+func dialerThrough(hops []map[string]any) (C.Dialer, func(), error) {
 	var via C.Dialer
+	var built []C.Proxy
+	closeAll := func() {
+		for _, proxy := range built {
+			_ = proxy.Close()
+		}
+	}
 	for _, hop := range hops {
 		own := maps.Clone(hop)
 		delete(own, "dialer-proxy")
@@ -164,9 +171,11 @@ func dialerThrough(hops []map[string]any) (C.Dialer, error) {
 		}
 		proxy, err := adapter.ParseProxy(own, options...)
 		if err != nil {
-			return nil, err
+			closeAll()
+			return nil, nil, err
 		}
+		built = append(built, proxy)
 		via = proxydialer.New(proxy, false)
 	}
-	return via, nil
+	return via, closeAll, nil
 }
