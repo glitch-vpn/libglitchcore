@@ -115,6 +115,24 @@ when an engine gains an option:
   `regexp:expr`, `process:app.exe` or a bare IP/CIDR. A start fails on a
   domain, `full:` or `keyword:` matcher holding a comma, and on a regexp with
   a space beside a comma: mihomo splits its rule lines there.
+* `opts.routingTargets` and a tier's `routes` — a route sends what it matches
+  to a named server, group or chain instead of the pool. Inside a tier the
+  outcomes rank block, direct, routes in the order given, proxy. The targets
+  are `{"version":1,"servers":[{"id","link"}],"groups":[{"id","servers"}],
+  "chains":[{"id","hops"}]}` and a route is `{"to":"<id>","match":[…]}`. An id
+  is 1–16 characters of `a-z0-9`, unique across the three kinds; a group
+  balances over servers with `balancerStrategy`; a chain of 2–4 distinct
+  servers dials its first hop directly and every later hop through the one
+  before it, and its last hop exits. A route takes no `process:` matcher. A
+  start fails on an unknown version, a duplicate, unknown or malformed id, an
+  empty group, a chain out of bounds or naming a server twice, more than 64
+  servers, 16 groups or 16 chains, a route naming an id the targets do not
+  define, and a link the engine cannot build; an older core refuses `routes`
+  as an unknown field, and `CoreCapabilities()` lists `routeTargets` where they
+  work. Only what a route names is built. On xray a chain takes vless, vmess,
+  ss and trojan servers; a later hop keeps its host name for the hop before it
+  to resolve. mihomo resolves the host of a later hop that runs over UDP
+  (Hysteria2, TUIC, WireGuard) with its own resolver.
 * `dnsConfig` — resolvers (plain, DoT, DoH, DoQ), fake-ip mode, a hosts table
   and separate resolvers for direct-routed names.
 

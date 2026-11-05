@@ -194,9 +194,11 @@ func proxyPortFromOpts(o map[string]string) int {
 // without the rules it means, so their presence fails the start.
 var legacyRuleKeys = []string{"proxyRules", "directRules", "blockRules", "bypassCountries"}
 
-// routingFromOpts: "routingTiers" is a JSON array of {block,direct,proxy}.
-// Malformed tiers fail the start instead of degrading - silently dropping
-// block rules would bypass the kill-switch.
+// routingFromOpts: "routingTiers" is a JSON array of {block,direct,proxy,routes}
+// and "routingTargets" the {version,servers,groups,chains} the routes name.
+// Malformed tiers or targets fail the start instead of degrading - silently
+// dropping block rules would bypass the kill-switch, and a route that reached
+// nothing would send its traffic where the user did not ask.
 func routingFromOpts(o map[string]string) (routing.Profile, error) {
 	for _, key := range legacyRuleKeys {
 		if _, ok := o[key]; ok {
@@ -228,9 +230,22 @@ func routingFromOpts(o map[string]string) (routing.Profile, error) {
 		if p.Tiers == nil {
 			return routing.Profile{}, fmt.Errorf("routingTiers: null is not a tier list")
 		}
-		if err := p.Validate(); err != nil {
-			return routing.Profile{}, fmt.Errorf("routingTiers: %w", err)
+	}
+	if raw := strings.TrimSpace(o["routingTargets"]); raw != "" {
+		dec := json.NewDecoder(strings.NewReader(raw))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&p.Targets); err != nil {
+			return routing.Profile{}, fmt.Errorf("routingTargets: %w", err)
 		}
+		if dec.More() {
+			return routing.Profile{}, fmt.Errorf("routingTargets: trailing data after the targets")
+		}
+		if p.Targets == nil {
+			return routing.Profile{}, fmt.Errorf("routingTargets: null is not a targets object")
+		}
+	}
+	if err := p.Validate(); err != nil {
+		return routing.Profile{}, fmt.Errorf("routing: %w", err)
 	}
 	return p, nil
 }
@@ -344,7 +359,7 @@ func coreCapabilities() string {
 	}{
 		Engines:  ids,
 		Versions: engineVersions(),
-		Features: []string{"serverEvent", "ipEvent"},
+		Features: []string{"serverEvent", "ipEvent", "routeTargets"},
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {
