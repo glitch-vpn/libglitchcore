@@ -1340,6 +1340,9 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 			opt[k] = n
 		}
 	}
+	if err := checkJunkSizes(opt); err != nil {
+		return nil, err
+	}
 	// h1-h4 accept AWG 2.0 ranges; i1-i5 carry tag chains, checked once the
 	// device that reads them is known.
 	for _, k := range []string{"h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5"} {

@@ -15,6 +15,10 @@ import (
 // this core's own ceiling, far above the 4-12 the projects recommend.
 const maxJunkPacketCount = 128
 
+// maxJunkPacketSize caps Jmax. It is the ceiling the AmneziaWG documentation
+// recommends, not a limit amneziawg-go enforces.
+const maxJunkPacketSize = 1280
+
 // maxChainTagSize bounds a size argument of a tag chain; amneziawg-go's legacy
 // device refuses above it, its 3.x device does not.
 const maxChainTagSize = 1000
@@ -158,6 +162,19 @@ func checkV3Chain(value string) error {
 		if err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// checkJunkSizes holds Jmin and Jmax to 0 <= Jmin <= Jmax <= maxJunkPacketSize.
+func checkJunkSizes(opt map[string]any) error {
+	jmin, hasMin := opt["jmin"].(int)
+	jmax, hasMax := opt["jmax"].(int)
+	if jmin < 0 || jmax < 0 || jmax > maxJunkPacketSize {
+		return fmt.Errorf("awg jmin/jmax: want 0 to %d", maxJunkPacketSize)
+	}
+	if hasMin && hasMax && jmin > jmax {
+		return errors.New("awg jmin: exceeds jmax")
 	}
 	return nil
 }
