@@ -41,8 +41,9 @@ func (mihomoEngine) Start(x *CoreController, req EngineStartRequest) int32 {
 
 // Compiles without the tun2socks bridge (plain fields only).
 type bridgeSetup struct {
-	forceProxy bool // process->proxy rules need flows that always tunnel
-	hijackDNS  bool // fake-ip: mihomo's resolver answers the TUN's :53
+	forceProxy  bool // process->proxy rules need flows that always tunnel
+	forceDirect bool // process->direct rules need flows that meet the blocks, then go direct
+	hijackDNS   bool // fake-ip: mihomo's resolver answers the TUN's :53
 }
 
 func (mihomoEngine) Stop(x *CoreController) int32 { return x.HandleMihomoStop() }

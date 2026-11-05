@@ -23,6 +23,8 @@ const (
 // ProcessRules: process:NAME -> target. Mihomo uses PROCESS-NAME, or
 // PROCESS-NAME-REGEX for a name holding a comma; xray applies
 // direct/block in the tun2socks dialer (xray can't see the real app behind it).
+// A direct or proxy flow still reaches the engine, under an inbound that meets
+// every tier's block first.
 // The dialer consumes one flat map, so tier order cannot apply to process:
 // rules - only the global priority block > direct > proxy does (later writes win).
 func ProcessRules(p Profile) map[string]string {

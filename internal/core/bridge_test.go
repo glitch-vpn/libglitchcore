@@ -294,3 +294,40 @@ func TestBridgeFlowConn_DropsRepliesFromOtherSenders(t *testing.T) {
 		t.Fatalf("read %q from %v, %v; want only the reply from %s", b[:n], from, err, dst)
 	}
 }
+
+// answerDNS serves the addresses by name over UDP on loopback, an empty answer
+// for anything else, and returns its address.
+func answerDNS(t *testing.T, answers map[string]string) string {
+	t.Helper()
+	conn, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+	go func() {
+		buf := make([]byte, 1500)
+		for {
+			n, from, err := conn.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			query := new(D.Msg)
+			if query.Unpack(buf[:n]) != nil || len(query.Question) == 0 {
+				continue
+			}
+			reply := new(D.Msg)
+			reply.SetReply(query)
+			q := query.Question[0]
+			if address, ok := answers[q.Name]; ok && q.Qtype == D.TypeA {
+				reply.Answer = append(reply.Answer, &D.A{
+					Hdr: D.RR_Header{Name: q.Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60},
+					A:   net.ParseIP(address).To4(),
+				})
+			}
+			if packed, err := reply.Pack(); err == nil {
+				_, _ = conn.WriteTo(packed, from)
+			}
+		}
+	}()
+	return conn.LocalAddr().String()
+}

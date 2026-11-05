@@ -30,6 +30,7 @@ import (
 type tun2socksParams struct {
 	proxy       t2sproxy.Proxy
 	forceProxy  t2sproxy.Proxy // always tunnels: where process->proxy flows go (may be nil)
+	forceDirect t2sproxy.Proxy // meets the blocks, then goes direct: where process->direct flows go (may be nil)
 	tunFd       int            // fd path (non-Windows): a copy this start owns
 	serverIPv4s []string       // proxy server IPs pinned off the TUN (Windows)
 	dnsServer   string

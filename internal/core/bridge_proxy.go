@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net"
@@ -22,21 +23,36 @@ import (
 
 var _ t2sproxy.Proxy = (*processSplitProxy)(nil)
 
+// A direct flow with no force-direct dialer is refused rather than sent
+// through the engine's tiers, where a proxy rule could tunnel it.
+var errNoForceDirect = errors.New("process split: no force-direct dialer")
+
 // The owning process is resolved by source port before the flow reaches the
-// engine; unmatched flows fall through to base.
+// engine; unmatched flows fall through to base. A flow the rules send direct
+// or through the VPN still goes to the engine, under an inbound of its own, so
+// the blocks of every tier meet it first.
 type processSplitProxy struct {
 	base        t2sproxy.Proxy
 	forceProxy  t2sproxy.Proxy // always tunnels (may be nil)
+	forceDirect t2sproxy.Proxy // meets the blocks, then goes direct (may be nil)
 	rules       map[string]string
-	directIface string
 	logged      sync.Map
+	// processName is the executable behind a flow; the host's lookup by source
+	// port when nil.
+	processName func(*M.Metadata) (string, error)
 }
 
 func (p *processSplitProxy) decide(m *M.Metadata) string {
 	if m == nil || len(p.rules) == 0 {
 		return ""
 	}
-	name, err := procname.FindProcessName(m.Network.String(), m.SrcIP, int(m.SrcPort))
+	lookup := p.processName
+	if lookup == nil {
+		lookup = func(m *M.Metadata) (string, error) {
+			return procname.FindProcessName(m.Network.String(), m.SrcIP, int(m.SrcPort))
+		}
+	}
+	name, err := lookup(m)
 	if err != nil || name == "" {
 		if _, seen := p.logged.LoadOrStore("ERR", true); !seen {
 			logfmt.Warnf("[bridge] process-split: FindProcessName(%s %s:%d) failed: %v - per-process won't match", m.Network.String(), m.SrcIP, m.SrcPort, err)
@@ -63,8 +79,10 @@ func (p *processSplitProxy) proxyFor() t2sproxy.Proxy {
 func (p *processSplitProxy) DialContext(ctx context.Context, m *M.Metadata) (net.Conn, error) {
 	switch p.decide(m) {
 	case routing.TargetDirect:
-		d := net.Dialer{Control: interfaceDialControl(p.directIface)}
-		return d.DialContext(ctx, m.Network.String(), m.DestinationAddress())
+		if p.forceDirect == nil {
+			return nil, errNoForceDirect
+		}
+		return p.forceDirect.DialContext(ctx, m)
 	case routing.TargetBlock:
 		return nil, fmt.Errorf("process split: blocked %s", m.DestinationAddress())
 	case routing.TargetProxy:
@@ -77,8 +95,10 @@ func (p *processSplitProxy) DialContext(ctx context.Context, m *M.Metadata) (net
 func (p *processSplitProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 	switch p.decide(m) {
 	case routing.TargetDirect:
-		lc := net.ListenConfig{Control: interfaceDialControl(p.directIface)}
-		return lc.ListenPacket(context.Background(), "udp", "")
+		if p.forceDirect == nil {
+			return nil, errNoForceDirect
+		}
+		return p.forceDirect.DialUDP(m)
 	case routing.TargetBlock:
 		return nil, fmt.Errorf("process split: blocked %s", m.DestinationAddress())
 	case routing.TargetProxy:
@@ -101,7 +121,7 @@ func sessionBridgeProxy(p tun2socksParams) t2sproxy.Proxy {
 	return &processSplitProxy{
 		base:        p.proxy,
 		forceProxy:  p.forceProxy,
+		forceDirect: p.forceDirect,
 		rules:       rules,
-		directIface: physicalInterfaceName(),
 	}
 }

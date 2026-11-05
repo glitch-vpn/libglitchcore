@@ -102,7 +102,12 @@ resolves it at the first IP rule it meets. Under either of them:
 
 `process:` matchers feed a flat map consumed by the tun2socks dialer, so tier
 order does not apply to them: the global priority block > direct > proxy wins.
-Domain and IP matchers honour tier order normally.
+A flow the dialer sends direct or through the VPN still goes to the engine,
+under an inbound of its own, where every tier's block meets it first. A direct
+app's own DNS queries are not intercepted, so it keeps its own resolver: a
+block by name meets its flows through content sniffing, and through queries it
+sends the system resolver, which answer with fake IPs; an address block meets a
+name once the direct outbound resolves it. Domain and IP matchers honour tier order normally.
 
 ## Windows
 

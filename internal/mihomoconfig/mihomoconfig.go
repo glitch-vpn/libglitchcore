@@ -61,6 +61,10 @@ type Inbound struct {
 	// ForceProxy adds the rule that always tunnels flows named
 	// ForceProxyInName (the bridge's process->proxy dialer).
 	ForceProxy bool
+	// ForceDirect adds the rules that send flows named ForceDirectInName (the
+	// bridge's process->direct dialer) direct once every tier's block has
+	// passed on them.
+	ForceDirect bool
 	// Proxy-mode and bridge DNS (native TUN uses TunInbound.DNS). With
 	// fake-ip on the bridge, mihomo's resolver answers the :53 the bridge
 	// hands it.
@@ -73,6 +77,12 @@ type Inbound struct {
 
 // ForceProxyInName is the inbound name the bridge's force-proxy flows carry.
 const ForceProxyInName = "forceproxy"
+
+// ForceDirectInName is the inbound name the bridge's force-direct flows carry.
+const ForceDirectInName = "forcedirect"
+
+// directFlowsSubRule names the sub-rule that holds the force-direct flows' blocks.
+const directFlowsSubRule = "direct-flows"
 
 // forceFlowsSubRule names the sub-rule that holds the force-proxy flows' rules.
 const forceFlowsSubRule = "force-flows"
@@ -213,12 +223,23 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 		raw.ProxyGroup = []map[string]any{group}
 	}
 
-	rules := append(fakePoolRejectRules(raw), buildRules(prof, target, in.ForceProxy)...)
+	rules := append(fakePoolRejectRules(raw), buildRules(prof, target, in.ForceProxy, in.ForceDirect)...)
 	raw.Rule = rules
 	geoRules := rules
+	if in.ForceDirect && prof.HasBlock() {
+		subRule := directFlowRules(prof)
+		if raw.SubRules == nil {
+			raw.SubRules = map[string][]string{}
+		}
+		raw.SubRules[directFlowsSubRule] = subRule
+		geoRules = append(append([]string{}, geoRules...), subRule...)
+	}
 	if in.ForceProxy && forceFlowsNeedSubRule(prof) {
-		raw.SubRules = map[string][]string{forceFlowsSubRule: forceFlowRules(prof, target)}
-		geoRules = append(append([]string{}, rules...), raw.SubRules[forceFlowsSubRule]...)
+		if raw.SubRules == nil {
+			raw.SubRules = map[string][]string{}
+		}
+		raw.SubRules[forceFlowsSubRule] = forceFlowRules(prof, target)
+		geoRules = append(append([]string{}, geoRules...), raw.SubRules[forceFlowsSubRule]...)
 	}
 
 	if err := checkGeoAssets(geoRules, raw.DNS.FakeIPFilter); err != nil {
@@ -280,7 +301,7 @@ func requireGeoFile(path, listName, label string) error {
 // bridge's always-tunnel flows right after the kill-switches: they meet every
 // tier's block and the local networks, then reach the proxy even in direct-all
 // mode.
-func buildRules(p routing.Profile, target string, forceProxy bool) []string {
+func buildRules(p routing.Profile, target string, forceProxy, forceDirect bool) []string {
 	var rules []string
 	if p.DisableIPv6 {
 		rules = append(rules, "IP-CIDR,::/0,REJECT,no-resolve")
@@ -298,6 +319,14 @@ func buildRules(p routing.Profile, target string, forceProxy bool) []string {
 		// mihomo skips a matched rule whose proxy lacks UDP and moves on to the
 		// next one; this keeps such a flow from falling through to the tiers.
 		rules = append(rules, "IN-NAME,"+ForceProxyInName+",REJECT")
+	}
+	if forceDirect {
+		// DIRECT never lacks UDP, so no REJECT guard follows.
+		if p.HasBlock() {
+			rules = append(rules, "SUB-RULE,(IN-NAME,"+ForceDirectInName+"),"+directFlowsSubRule)
+		} else {
+			rules = append(rules, "IN-NAME,"+ForceDirectInName+",DIRECT")
+		}
 	}
 	outcomes := map[string]string{routing.TargetBlock: "REJECT", routing.TargetDirect: "DIRECT", routing.TargetProxy: target}
 	for _, tier := range p.Tiers {
@@ -364,6 +393,25 @@ func forceFlowRules(p routing.Profile, target string) []string {
 		}
 	}
 	return append(rules, "MATCH,"+target)
+}
+
+// directFlowRules is the sub-rule the force-direct flows enter: every tier's
+// block entries in tier order, with address rules resolving a name, then
+// DIRECT. Only those flows see it.
+func directFlowRules(p routing.Profile) []string {
+	var rules []string
+	for _, tier := range p.Tiers {
+		for _, step := range tier.Steps() {
+			if step.Target == routing.TargetBlock && len(step.Also) == 0 {
+				for _, line := range stepLines(step, "REJECT") {
+					// DIRECT dials the flow's name, so an address rule must
+					// resolve a name to meet the address it would be dialed at.
+					rules = append(rules, strings.TrimSuffix(line, ",no-resolve"))
+				}
+			}
+		}
+	}
+	return append(rules, "MATCH,DIRECT")
 }
 
 // stepLines is the step as mihomo rule lines routing to target: one line per

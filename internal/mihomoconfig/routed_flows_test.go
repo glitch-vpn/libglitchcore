@@ -163,6 +163,45 @@ func TestBuildConfig_ForceProxyRoutesByBlockThenProxy(t *testing.T) {
 	})
 }
 
+// A flow of an app a rule sends direct by process meets the kill-switches and
+// every tier's block, then goes direct; every other flow sees the tiers as
+// written.
+func TestBuildConfig_ForceDirectRoutesByBlockThenDirect(t *testing.T) {
+	useGeoFiles(t)
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
+	prof := forceFlowProfile(true)
+	prof.Tiers[1].Proxy = nil
+	prof.Tiers[1].Direct = []string{"process:app.exe"}
+	cfg, err := BuildConfig([]string{forceFlowLink}, Inbound{Bridge: true, ForceDirect: true, DNS: dns}, Options{}, prof)
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	f, app := ForceDirectInName, ""
+	tcp, udp := C.TCP, C.UDP
+	routeFlows(t, cfg, Target([]string{forceFlowLink}), []routedFlow{
+		{"force regex block", f, tcp, "track.example.com", "", "", "REJECT"},
+		{"force keyword block", f, tcp, "xkw(1)y.org", "", "", "REJECT"},
+		{"force geosite block", f, tcp, "sub.glitch.test", "", "", "REJECT"},
+		{"force geoip block", f, tcp, "", "203.0.113.9", "", "REJECT"},
+		{"force cidr block", f, tcp, "", "192.0.2.4", "", "REJECT"},
+		{"force later tier block", f, tcp, "later.example.com", "", "", "REJECT"},
+		{"force unlisted goes direct", f, tcp, "other.org", "", "", "DIRECT"},
+		{"force direct domain goes direct", f, tcp, "www.example.com", "", "", "DIRECT"},
+		{"force udp kill-switch", f, udp, "", "8.8.8.8", "", "REJECT"},
+		{"normal block", app, tcp, "", "192.0.2.4", "", "REJECT"},
+		{"normal unlisted", app, tcp, "other.org", "", "", "DIRECT"},
+	})
+}
+
+// Without a block the force-direct flows take one rule and no sub-rule.
+func TestBuildRules_ForceDirectWithoutBlocksGoesStraightDirect(t *testing.T) {
+	prof := routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Direct: []string{"process:app.exe"}}}}
+	got := buildRules(prof, "vpn", false, true)
+	if got[0] != "IN-NAME,"+ForceDirectInName+",DIRECT" {
+		t.Fatalf("rules = %v, want the force-direct flows direct first", got)
+	}
+}
+
 // Without the local-networks option a per-app VPN flow to a LAN address goes to
 // the proxy; a blocked LAN range stays blocked.
 func TestBuildConfig_ForceProxyLocalNetworksOff(t *testing.T) {
@@ -195,7 +234,7 @@ func TestBuildRules_ForceProxyUDPDoesNotReachTheTiers(t *testing.T) {
 		raw := config.DefaultRawConfig()
 		raw.GeodataMode = true
 		raw.Proxy = []map[string]any{{"name": "p", "type": "socks5", "server": "1.2.3.4", "port": 1080, "udp": false}}
-		raw.Rule = buildRules(prof, "p", true)
+		raw.Rule = buildRules(prof, "p", true, false)
 		if withBlock {
 			raw.SubRules = map[string][]string{forceFlowsSubRule: forceFlowRules(prof, "p")}
 		}

@@ -140,8 +140,9 @@ when an engine gains an option:
   blocked in the same tier, and the other way round. A `process:`
   block leads its tier and the tier's other `process:` entries close it. A
   flow a `process:` proxy entry sends through the VPN meets every tier's block
-  entries and goes to the proxy, so an exception to a block does not reach
-  it: that path fails closed. Matchers are `geoip:nl`,
+  entries and goes to the proxy, and one a `process:` direct entry sends direct
+  meets them and goes direct, so an exception to a block does not reach
+  either: that path fails closed. Matchers are `geoip:nl`,
   `geosite:category-ads-all`, `domain:example.com`, `full:host`, `keyword:str`,
   `regexp:expr`, `process:app.exe` or a bare IP/CIDR. A start fails on a
   domain, `full:` or `keyword:` matcher holding a comma, and on a regexp with

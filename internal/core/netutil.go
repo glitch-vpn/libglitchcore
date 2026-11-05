@@ -14,8 +14,18 @@ import (
 // process:->proxy rules need a mode-independent always-tunnel dialer; lives
 // here (not with xray) because the mihomo bridge checks it too.
 func routingHasForceProxy(prof routing.Profile) bool {
+	return routingHasProcessTarget(prof, routing.TargetProxy)
+}
+
+// process:->direct rules need a dialer whose flows meet the blocks before
+// they go direct.
+func routingHasForceDirect(prof routing.Profile) bool {
+	return routingHasProcessTarget(prof, routing.TargetDirect)
+}
+
+func routingHasProcessTarget(prof routing.Profile, want string) bool {
 	for _, t := range routing.ProcessRules(prof) {
-		if t == routing.TargetProxy {
+		if t == want {
 			return true
 		}
 	}

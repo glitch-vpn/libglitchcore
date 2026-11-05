@@ -292,10 +292,19 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		}
 	}
 
+	var forceDirect t2sproxy.Proxy
+	if routingHasForceDirect(routing) {
+		if forceDirect, err = x.newXrayBridgeProxy(x.xrayCoreInstance, xrayconfig.ForceDirectTag, sniffing, mark); err != nil {
+			x.xrayRollback()
+			return fmt.Errorf("[Xray] bridge: %w", err)
+		}
+	}
+
 	log.Println("[Xray] Starting tun2socks")
 	if err := x.startTun2socks(tun2socksParams{
 		proxy:       appProxy,
 		forceProxy:  forceProxy,
+		forceDirect: forceDirect,
 		tunFd:       tun.take(),
 		serverIPv4s: serverDialIPv4s,
 		dnsServer:   dnsServer,

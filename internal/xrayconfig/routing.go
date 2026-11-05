@@ -176,7 +176,7 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	direct := target{tag: directTag}
 	block := target{tag: blockTag}
 
-	needDirect := p.ResolvedMode() == ModeDirectAll || p.LocalNetworks || p.HasDirect()
+	needDirect := p.ResolvedMode() == ModeDirectAll || p.LocalNetworks || p.HasDirect() || hasProcessTarget(p, routing.TargetDirect)
 	needBlock := p.HasBlock() || p.DisableIPv6 || p.DisableUDP
 
 	if needDirect {
@@ -222,7 +222,7 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 	// Force-proxy flows (ForceProxyTag, per-process process->proxy) meet
 	// every tier's block and the local networks, then always tunnel, so "route only this app through
 	// the VPN" holds even in direct-all mode.
-	if hasProcessProxy(p) {
+	if hasProcessTarget(p, routing.TargetProxy) {
 		// Only those flows see these rules; the tiers below stay as they are
 		// for everyone else.
 		forceInbound := []string{ForceProxyTag}
@@ -242,6 +242,24 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		}
 		forceRule := fieldRule{InboundTag: forceInbound}
 		proxy.apply(&forceRule)
+		rules = append(rules, forceRule.raw())
+	}
+	// Force-direct flows (ForceDirectTag, per-process process->direct) meet
+	// every tier's block, then go direct.
+	if hasProcessTarget(p, routing.TargetDirect) {
+		forceInbound := []string{ForceDirectTag}
+		for _, tier := range p.Tiers {
+			rules = append(rules, stepRules(blockSteps(tier.Steps()), forceInbound, func(routing.Step) target { return block })...)
+		}
+		// The direct outbound resolves a name again, and an address a block
+		// names must not be dialed because the name was not blocked.
+		forceDirect := direct
+		if addresses := blockAddresses(p.Tiers); len(addresses) > 0 {
+			forceDirect = target{tag: forceDirectOutboundTag}
+			ensureOutbound(cfg, forceDirect.tag, forceDirectOutbound(p, forceDirect.tag, addresses))
+		}
+		forceRule := fieldRule{InboundTag: forceInbound}
+		forceDirect.apply(&forceRule)
 		rules = append(rules, forceRule.raw())
 	}
 	for i, tier := range p.Tiers {
@@ -332,9 +350,9 @@ func NormalizeDomainStrategy(s string) (string, bool) {
 	return "", false
 }
 
-func hasProcessProxy(p RoutingProfile) bool {
+func hasProcessTarget(p RoutingProfile, want string) bool {
 	for _, target := range routing.ProcessRules(p) {
-		if target == routing.TargetProxy {
+		if target == want {
 			return true
 		}
 	}
@@ -359,6 +377,34 @@ func directOutbound(p RoutingProfile, tag string) xrayConf.OutboundDetourConfig 
 	if p.DirectInterface != "" {
 		ob.StreamSetting.SocketSettings.Interface = p.DirectInterface
 	}
+	return ob
+}
+
+// forceDirectOutboundTag is the direct outbound of the per-process dialer's
+// direct flows when a tier blocks an address.
+const forceDirectOutboundTag = directTag + "-process"
+
+// blockAddresses is every address entry a tier blocks, as xray matchers.
+func blockAddresses(tiers []routing.Tier) []string {
+	var out []string
+	for _, tier := range tiers {
+		for _, e := range tier.Entries() {
+			if e.Target == routing.TargetBlock && e.ByAddress() {
+				out = append(out, xrayMatcher(e))
+			}
+		}
+	}
+	return out
+}
+
+// forceDirectOutbound dials any address but the blocked ones.
+func forceDirectOutbound(p RoutingProfile, tag string, blocked []string) xrayConf.OutboundDetourConfig {
+	ob := directOutbound(p, tag)
+	settings, _ := json.Marshal(struct {
+		FinalRules []freedomFinalRule `json:"finalRules"`
+	}{[]freedomFinalRule{{Action: "block", IP: blocked}}})
+	raw := json.RawMessage(settings)
+	ob.Settings = &raw
 	return ob
 }
 

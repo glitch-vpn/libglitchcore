@@ -98,6 +98,11 @@ func directRecorder(t *testing.T, host string, seen chan<- string) int {
 // client to the recorder, so where a flow went is observable.
 func startSniffInstance(t *testing.T, prof routing.Profile, socksPort int) *xrayCore.Instance {
 	t.Helper()
+	return startSniffInstanceDNS(t, prof, socksPort, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}})
+}
+
+func startSniffInstanceDNS(t *testing.T, prof routing.Profile, socksPort int, dns dnsconfig.Config) *xrayCore.Instance {
+	t.Helper()
 	res, err := xrayconfig.BuildConfig([]string{bridgeTestVlessLink}, xrayconfig.BalancerOptions{}, prof, "none")
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +113,7 @@ func startSniffInstance(t *testing.T, prof routing.Profile, socksPort int) *xray
 			res.Config.OutboundConfigs[i] = xrayConf.OutboundDetourConfig{Protocol: "socks", Tag: res.RouteTarget, Settings: &settings}
 		}
 	}
-	xrayconfig.ApplyDNS(res.Config, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}}, prof)
+	xrayconfig.ApplyDNS(res.Config, dns, prof)
 	built, err := res.Config.Build()
 	if err != nil {
 		t.Fatal(err)

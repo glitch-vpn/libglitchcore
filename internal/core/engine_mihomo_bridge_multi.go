@@ -37,14 +37,16 @@ func mihomoBridgeInbound(dns *dnsconfig.Config, prof routing.Profile) (mihomocon
 		dns.Servers = []string{xrayDefaultDnsServer}
 	}
 	b := &bridgeSetup{
-		hijackDNS:  dns.FakeIP(),
-		forceProxy: routingHasForceProxy(prof),
+		hijackDNS:   dns.FakeIP(),
+		forceProxy:  routingHasForceProxy(prof),
+		forceDirect: routingHasForceDirect(prof),
 	}
 	in := mihomoconfig.Inbound{
-		Bridge:     true,
-		Interface:  physicalInterfaceName(),
-		DNS:        *dns,
-		ForceProxy: b.forceProxy,
+		Bridge:      true,
+		Interface:   physicalInterfaceName(),
+		DNS:         *dns,
+		ForceProxy:  b.forceProxy,
+		ForceDirect: b.forceDirect,
 	}
 	return in, b
 }
@@ -55,14 +57,15 @@ func (x *CoreController) mihomoStartBridge(b *bridgeSetup, prof routing.Profile,
 	if dnsServer == "" {
 		dnsServer = xrayDefaultDnsServer
 	}
-	app, forceProxy := mihomoBridgeProxies(x, b, mark)
+	app, forceProxy, forceDirect := mihomoBridgeProxies(x, b, mark)
 	if err := x.startTun2socks(tun2socksParams{
-		proxy:      app,
-		forceProxy: forceProxy,
-		tunFd:      tunFd,
-		dnsServer:  dnsServer,
-		logLevel:   "warning",
-		routing:    prof,
+		proxy:       app,
+		forceProxy:  forceProxy,
+		forceDirect: forceDirect,
+		tunFd:       tunFd,
+		dnsServer:   dnsServer,
+		logLevel:    "warning",
+		routing:     prof,
 	}); err != nil {
 		x.stopTun2socks()
 		return err
@@ -72,13 +75,17 @@ func (x *CoreController) mihomoStartBridge(b *bridgeSetup, prof routing.Profile,
 }
 
 // mihomoBridgeProxies are what tun2socks hands flows to; force is nil when
-// no process->proxy rule needs flows that always tunnel.
-func mihomoBridgeProxies(x *CoreController, b *bridgeSetup, mark int64) (app, force t2sproxy.Proxy) {
+// no process->proxy rule needs flows that always tunnel, and direct when no
+// process->direct rule needs flows that meet the blocks.
+func mihomoBridgeProxies(x *CoreController, b *bridgeSetup, mark int64) (app, force, direct t2sproxy.Proxy) {
 	app = &mihomoBridgeProxy{x: x, mark: mark, hijackDNS: b.hijackDNS}
 	if b.forceProxy {
 		force = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceProxyInName}
 	}
-	return app, force
+	if b.forceDirect {
+		direct = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceDirectInName}
+	}
+	return app, force, direct
 }
 
 func (x *CoreController) mihomoStopBridge() { x.stopTun2socks() }

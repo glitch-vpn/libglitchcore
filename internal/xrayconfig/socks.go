@@ -26,6 +26,11 @@ const (
 	// as; applyRouting gives it a rule that always tunnels (mode-independent),
 	// so "route only this app through the VPN" works even in direct-all mode.
 	ForceProxyTag = "forceproxy"
+
+	// ForceDirectTag is what the per-process dialer sends process->direct
+	// flows as: they meet every tier's block, then go direct, so a blocked
+	// site stays blocked for an app a rule sends direct.
+	ForceDirectTag = "forcedirect"
 )
 
 // Sniffing recovers the domain for connections arriving as IP literals or fake

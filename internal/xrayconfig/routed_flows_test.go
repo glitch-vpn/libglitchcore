@@ -191,6 +191,29 @@ func TestApply_ForceProxyRoutesByBlockThenProxy(t *testing.T) {
 	})
 }
 
+// A flow of an app a rule sends direct by process meets the kill-switches and
+// every tier's block, then goes direct; every other flow sees the tiers as
+// written.
+func TestApply_ForceDirectRoutesByBlockThenDirect(t *testing.T) {
+	useGeoFiles(t)
+	prof := routedFlowProfile(false)
+	prof.Mode = routing.ModeProxyAll
+	prof.Tiers[1].Proxy = nil
+	prof.Tiers[1].Direct = []string{"process:app.exe"}
+	f, app := ForceDirectTag, AppTrafficTag
+	tcp, udp := xnet.Network_TCP, xnet.Network_UDP
+	routeFlows(t, prof, []routedFlow{
+		{"force regex block", f, tcp, "aa.example.com", 443, blockTag},
+		{"force geosite block", f, tcp, "sub.glitch.test", 443, blockTag},
+		{"force geoip block", f, tcp, "203.0.113.9", 443, blockTag},
+		{"force later tier block", f, tcp, "later.example.com", 443, blockTag},
+		{"force direct domain", f, tcp, "www.example.com", 443, forceDirectOutboundTag},
+		{"force unlisted goes direct", f, tcp, "other.org", 443, forceDirectOutboundTag},
+		{"force udp kill-switch", f, udp, "8.8.8.8", 443, blockTag},
+		{"normal unlisted goes to the proxy", app, tcp, "other.org", 443, OutboundTag},
+	})
+}
+
 // Without the local-networks option a per-app VPN flow to a LAN address goes
 // to the proxy; a blocked LAN range stays blocked.
 func TestApply_ForceProxyLocalNetworksOff(t *testing.T) {
