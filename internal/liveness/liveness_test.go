@@ -2,7 +2,6 @@ package liveness
 
 import (
 	"testing"
-	"time"
 )
 
 func TestTracker_UpImmediatelyDownDebounced(t *testing.T) {
@@ -33,36 +32,5 @@ func TestTracker_UpImmediatelyDownDebounced(t *testing.T) {
 	}
 	if st, _ := tr.ObserveFailure(); st != StateDown {
 		t.Fatalf("second failure while up -> %v, want down", st)
-	}
-}
-
-func TestTracker_ObserveWG(t *testing.T) {
-	var tr Tracker
-
-	// Fully idle: inconclusive, keeps unknown.
-	if st, changed := tr.ObserveWG(WGSample{}); st != StateUnknown || changed {
-		t.Fatalf("idle -> %v changed=%v, want unknown/false", st, changed)
-	}
-	// Rx progress -> tunnel is up.
-	if st, _ := tr.ObserveWG(WGSample{RxDelta: 100}); st != StateUp {
-		t.Fatalf("rx delta -> %v, want up", st)
-	}
-	// Fresh handshake alone keeps it up.
-	if st, _ := tr.ObserveWG(WGSample{HasHandshake: true, HandshakeAge: time.Minute}); st != StateUp {
-		t.Fatalf("fresh handshake -> %v, want up", st)
-	}
-	// Tx-without-rx on a stale handshake: two in a row flip down.
-	stale := WGSample{TxDelta: 50, HasHandshake: true, HandshakeAge: 10 * time.Minute}
-	tr.ObserveWG(stale)
-	if st, _ := tr.ObserveWG(stale); st != StateDown {
-		t.Fatalf("stale tx-only ×2 -> %v, want down", st)
-	}
-	// Idle after down must not resurrect the link.
-	if st, changed := tr.ObserveWG(WGSample{}); st != StateDown || changed {
-		t.Fatalf("idle after down -> %v changed=%v, want down/false", st, changed)
-	}
-	// Rx recovers immediately.
-	if st, _ := tr.ObserveWG(WGSample{RxDelta: 1}); st != StateUp {
-		t.Fatalf("rx after down -> %v, want up", st)
 	}
 }

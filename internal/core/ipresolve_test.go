@@ -2,7 +2,6 @@ package core
 
 import (
 	"context"
-	"encoding/json"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -98,25 +97,6 @@ func collectEvents(t *testing.T, code int32) func() []string {
 		mu.Lock()
 		defer mu.Unlock()
 		return append([]string(nil), got...)
-	}
-}
-
-func TestConfigureIPResolve_NoDialReportsUnsupported(t *testing.T) {
-	ctl := &CoreController{}
-	events := collectEvents(t, IPEvent)
-
-	ctl.configureIPResolve(ipResolveConfig{enabled: true})
-
-	msgs := events()
-	if len(msgs) != 1 {
-		t.Fatalf("events = %v", msgs)
-	}
-	var st externalIPState
-	if err := json.Unmarshal([]byte(msgs[0]), &st); err != nil {
-		t.Fatal(err)
-	}
-	if st.IPv4Error != "unsupported" || st.IPv6Error != "unsupported" {
-		t.Fatalf("state = %+v", st)
 	}
 }
 

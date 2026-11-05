@@ -22,14 +22,11 @@ const (
 // recovery without waiting the full interval.
 var quickLivenessInterval = 5 * time.Second
 
-// livenessParams: exactly one of probe/passive is set. probe actively fetches
-// through the tunnel; passive samples WireGuard counters on Android, where our
-// own package is excluded from the VPN and can't route into it.
+// livenessParams: probe actively fetches through the tunnel.
 type livenessParams struct {
 	engine   string
 	interval time.Duration
 	probe    func(ctx context.Context) (time.Duration, error)
-	passive  func() (liveness.WGSample, error)
 }
 
 func livenessInterval(sec int) time.Duration {
@@ -41,7 +38,7 @@ func livenessInterval(sec int) time.Duration {
 
 func (x *CoreController) startLiveness(p livenessParams) {
 	x.stopLiveness()
-	if p.probe == nil && p.passive == nil {
+	if p.probe == nil {
 		return
 	}
 	if p.interval <= 0 {
@@ -80,43 +77,25 @@ func (x *CoreController) startLiveness(p livenessParams) {
 			case <-timer.C:
 			}
 
-			if p.probe != nil {
-				ctx, cancel := context.WithTimeout(probes, livenessProbeTimeout)
-				elapsed, err := p.probe(ctx)
-				cancel()
-				if err != nil {
-					// Cancelled by the stop, not a link verdict.
-					select {
-					case <-quit:
-						return
-					default:
-					}
-					if _, changed := tr.ObserveFailure(); changed {
-						logfmt.Warnf("[liveness] %s: internet through tunnel is DOWN: %v", p.engine, err)
-					}
-				} else {
-					x.linkProbeMs.Store(elapsed.Milliseconds())
-					if _, changed := tr.ObserveSuccess(); changed {
-						log.Printf("[liveness] %s: internet through tunnel is up (%dms)", p.engine, elapsed.Milliseconds())
-						// The exit IP may (re)appear or change on recovery.
-						x.triggerIPResolve("link-up")
-					}
+			ctx, cancel := context.WithTimeout(probes, livenessProbeTimeout)
+			elapsed, err := p.probe(ctx)
+			cancel()
+			if err != nil {
+				// Cancelled by the stop, not a link verdict.
+				select {
+				case <-quit:
+					return
+				default:
+				}
+				if _, changed := tr.ObserveFailure(); changed {
+					logfmt.Warnf("[liveness] %s: internet through tunnel is DOWN: %v", p.engine, err)
 				}
 			} else {
-				sample, err := p.passive()
-				if err != nil {
-					// Can't read counters (engine tearing down) - not a link verdict.
-					select {
-					case <-quit:
-						return
-					default:
-					}
-					logfmt.Warnf("[liveness] %s: passive sample failed: %v", p.engine, err)
-				} else if st, changed := tr.ObserveWG(sample); changed {
-					log.Printf("[liveness] %s: internet through tunnel is %s (passive wg)", p.engine, st)
-					if st == liveness.StateUp {
-						x.triggerIPResolve("link-up (passive)")
-					}
+				x.linkProbeMs.Store(elapsed.Milliseconds())
+				if _, changed := tr.ObserveSuccess(); changed {
+					log.Printf("[liveness] %s: internet through tunnel is up (%dms)", p.engine, elapsed.Milliseconds())
+					// The exit IP may (re)appear or change on recovery.
+					x.triggerIPResolve("link-up")
 				}
 			}
 			if s := tr.State(); s != liveness.StateUnknown {

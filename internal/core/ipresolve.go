@@ -28,8 +28,7 @@ const (
 
 type tunnelDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-// Fixed for one engine session. dial must route through the tunnel; nil =
-// this engine/platform has no in-tunnel HTTP path.
+// Fixed for one engine session. dial must route through the tunnel.
 type ipResolveConfig struct {
 	enabled bool
 	urlV4   string
@@ -38,8 +37,8 @@ type ipResolveConfig struct {
 	dial    tunnelDialFunc
 }
 
-// IPEvent payload. A missing address always comes with its error ("disabled",
-// "unsupported", or the fetch failure).
+// IPEvent payload. A missing address always comes with its error ("disabled" or
+// the fetch failure).
 type externalIPState struct {
 	IPv4      string `json:"ipv4,omitempty"`
 	IPv6      string `json:"ipv6,omitempty"`
@@ -56,15 +55,10 @@ func (x *CoreController) configureIPResolve(cfg ipResolveConfig) {
 		cfg.urlV6 = defaultIPv6EchoURL
 	}
 	x.ipFetchMu.Lock()
-	gen := x.ipGen.Add(1)
+	x.ipGen.Add(1)
 	x.ipStateJSON.Store("")
 	x.ipResolve.Store(cfg)
 	x.ipFetchMu.Unlock()
-	if cfg.enabled && cfg.dial == nil {
-		// No way to route our own HTTP through this tunnel - say so explicitly
-		// so UIs don't wait forever.
-		x.setExternalIPState(gen, externalIPState{IPv4Error: "unsupported", IPv6Error: "unsupported"})
-	}
 }
 
 func (x *CoreController) stopIPResolve() {
@@ -101,7 +95,7 @@ func (x *CoreController) setExternalIPState(gen int64, st externalIPState) {
 // restart uses the new session's settings.
 func (x *CoreController) triggerIPResolve(reason string) {
 	cfg, _ := x.ipResolve.Load().(ipResolveConfig)
-	if !cfg.enabled || cfg.dial == nil {
+	if !cfg.enabled {
 		return
 	}
 	x.ipFetchMu.Lock()
@@ -118,7 +112,7 @@ func (x *CoreController) triggerIPResolve(reason string) {
 		for {
 			cfg, _ := x.ipResolve.Load().(ipResolveConfig)
 			gen := x.ipGen.Load()
-			if cfg.enabled && cfg.dial != nil {
+			if cfg.enabled {
 				x.setExternalIPState(gen, fetchExternalIPs(cfg))
 			}
 			x.ipFetchMu.Lock()
