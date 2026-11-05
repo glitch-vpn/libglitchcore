@@ -132,3 +132,48 @@ func TestWireGuardConfig_SeveralPeersNeedAllowedIPs(t *testing.T) {
 		t.Fatalf("err = %v, want a refusal naming peer 2 and AllowedIPs", err)
 	}
 }
+
+// Each AmneziaWG key a raw config or an awg:// link carries reaches mihomo
+// the same way through a wg:// link.
+func TestWireGuardLinks_CarryEveryAmneziaWGKey(t *testing.T) {
+	cases := []struct{ query, ini, value string }{
+		{"jc", "Jc", "4"}, {"jmin", "Jmin", "40"}, {"jmax", "Jmax", "70"},
+		{"s1", "S1", "15"}, {"s2", "S2", "18"}, {"s3", "S3", "20"}, {"s4", "S4", "23"},
+		{"h1", "H1", "100-200"}, {"h2", "H2", "300-400"}, {"h3", "H3", "500-600"}, {"h4", "H4", "700-800"},
+		{"i1", "I1", "<b 0xf6ab>"}, {"i2", "I2", "<r 10>"}, {"i3", "I3", "<r 11>"}, {"i4", "I4", "<r 12>"}, {"i5", "I5", "<r 13>"},
+		{"j1", "J1", "30"}, {"j2", "J2", "31"}, {"j3", "J3", "32"}, {"itime", "Itime", "5"},
+		{"headerprotectionkey", "HeaderProtectionKey", "13BhOBYHDAUF1VgW2f3cb4dXGHSSSCwSk5YeuSP6OSU="},
+		{"contentpaddingaddition", "ContentPaddingAddition", "0-64"},
+		{"rekeyaftertime", "RekeyAfterTime", "120-180"},
+		{"rekeytimeout", "RekeyTimeout", "5-10"},
+		{"rejectaftertime", "RejectAfterTime", "180-240"},
+		{"keepalivetimeout", "KeepaliveTimeout", "10-20"},
+		{"maxhandshakeattempts", "MaxHandshakeAttempts", "15-20"},
+		{"randomtrailers", "RandomTrailers", "on"},
+		{"disablecookies", "DisableCookies", "0"},
+	}
+	const peer = "\n\n[Peer]\nPublicKey = " + wgPublicKey + "\nAllowedIPs = 0.0.0.0/0\nEndpoint = 203.0.113.7:51820\n"
+	for _, c := range cases {
+		t.Run(c.query, func(t *testing.T) {
+			link := "wg://203.0.113.7:51820?pk=" + wgPrivateKey + "&pub=" + wgPublicKey + "&ip=10.8.0.2&" +
+				c.query + "=" + strings.ReplaceAll(c.value, " ", "+")
+			ini := "[Interface]\nPrivateKey = " + wgPrivateKey + "\nAddress = 10.8.0.2/32\n" + c.ini + " = " + c.value + peer
+
+			fromLink, err := ProxyMapFromLink(link)
+			if err != nil {
+				t.Fatalf("link: %v", err)
+			}
+			fromINI, err := ProxyMapFromLink(ini)
+			if err != nil {
+				t.Fatalf("INI: %v", err)
+			}
+			opt, _ := fromLink["amnezia-wg-option"].(map[string]any)
+			if len(opt) == 0 {
+				t.Fatalf("the link dropped %s: %v", c.query, fromLink)
+			}
+			if !reflect.DeepEqual(opt, fromINI["amnezia-wg-option"]) {
+				t.Errorf("link option = %v, INI option = %v", opt, fromINI["amnezia-wg-option"])
+			}
+		})
+	}
+}

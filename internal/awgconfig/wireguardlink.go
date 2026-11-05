@@ -34,10 +34,24 @@ func IsLink(link string) bool {
 	return strings.HasPrefix(lower, LinkScheme) || isURILink(lower) || strings.Contains(trimmed, "[Interface]")
 }
 
-// awgLinkKeys are the AmneziaWG keys a link may carry, as the query names
-// them; the INI key is the same name capitalised.
-var awgLinkKeys = []string{"jc", "jmin", "jmax", "s1", "s2", "s3", "s4",
-	"h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5"}
+// awgLinkKeys are the AmneziaWG keys a link may carry, as the query names them
+// (lowercase), with the INI key each becomes.
+var awgLinkKeys = []struct{ query, ini string }{
+	{"jc", "Jc"}, {"jmin", "Jmin"}, {"jmax", "Jmax"},
+	{"s1", "S1"}, {"s2", "S2"}, {"s3", "S3"}, {"s4", "S4"},
+	{"h1", "H1"}, {"h2", "H2"}, {"h3", "H3"}, {"h4", "H4"},
+	{"i1", "I1"}, {"i2", "I2"}, {"i3", "I3"}, {"i4", "I4"}, {"i5", "I5"},
+	{"j1", "J1"}, {"j2", "J2"}, {"j3", "J3"}, {"itime", "Itime"},
+	{"headerprotectionkey", "HeaderProtectionKey"},
+	{"contentpaddingaddition", "ContentPaddingAddition"},
+	{"rekeyaftertime", "RekeyAfterTime"},
+	{"rekeytimeout", "RekeyTimeout"},
+	{"rejectaftertime", "RejectAfterTime"},
+	{"keepalivetimeout", "KeepaliveTimeout"},
+	{"maxhandshakeattempts", "MaxHandshakeAttempts"},
+	{"randomtrailers", "RandomTrailers"},
+	{"disablecookies", "DisableCookies"},
+}
 
 // firstOf reads the first of a key's spellings the link carries.
 func firstOf(q map[string]string, keys ...string) string {
@@ -177,8 +191,8 @@ func linkToINI(link string) (string, error) {
 		ini.WriteString("MTU = " + v + "\n")
 	}
 	for _, k := range awgLinkKeys {
-		if v := q[k]; v != "" {
-			ini.WriteString(strings.ToUpper(k[:1]) + k[1:] + " = " + v + "\n")
+		if v := q[k.query]; v != "" {
+			ini.WriteString(k.ini + " = " + v + "\n")
 		}
 	}
 
