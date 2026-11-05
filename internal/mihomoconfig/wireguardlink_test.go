@@ -141,7 +141,7 @@ func TestWireGuardLinks_CarryEveryAmneziaWGKey(t *testing.T) {
 		{"s1", "S1", "15"}, {"s2", "S2", "18"}, {"s3", "S3", "20"}, {"s4", "S4", "23"},
 		{"h1", "H1", "100-200"}, {"h2", "H2", "300-400"}, {"h3", "H3", "500-600"}, {"h4", "H4", "700-800"},
 		{"i1", "I1", "<b 0xf6ab>"}, {"i2", "I2", "<r 10>"}, {"i3", "I3", "<r 11>"}, {"i4", "I4", "<r 12>"}, {"i5", "I5", "<r 13>"},
-		{"j1", "J1", "30"}, {"j2", "J2", "31"}, {"j3", "J3", "32"}, {"itime", "Itime", "5"},
+		{"j1", "J1", "<r 30>"}, {"j2", "J2", "<r 31>"}, {"j3", "J3", "<r 32>"}, {"itime", "Itime", "5"},
 		{"headerprotectionkey", "HeaderProtectionKey", "13BhOBYHDAUF1VgW2f3cb4dXGHSSSCwSk5YeuSP6OSU="},
 		{"contentpaddingaddition", "ContentPaddingAddition", "0-64"},
 		{"rekeyaftertime", "RekeyAfterTime", "120-180"},

@@ -131,3 +131,18 @@ func TestLinkName_WireGuardLink(t *testing.T) {
 		}
 	}
 }
+
+// A '+' in j1-j3 is a space, as it is in i1-i5: a chain separates its tags
+// with one and never holds a literal '+'.
+func TestLinkToINI_PlusInJunkChainIsSpace(t *testing.T) {
+	link := "wg://203.0.113.7:51820?pk=" + linkPrivateKey + "&pub=" + linkPublicKey + "&j1=<r+10>&j2=<b+0xf6ab>&j3=<t>"
+	ini, err := NormalizeToINI(link)
+	if err != nil {
+		t.Fatalf("NormalizeToINI: %v", err)
+	}
+	for _, want := range []string{"J1 = <r 10>\n", "J2 = <b 0xf6ab>\n", "J3 = <t>\n"} {
+		if !strings.Contains(ini, want) {
+			t.Errorf("ini lacks %q:\n%s", want, ini)
+		}
+	}
+}

@@ -1326,7 +1326,8 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 			opt[k] = n
 		}
 	}
-	// h1-h4 accept AWG 2.0 ranges, i1-i5 carry tag chains.
+	// h1-h4 accept AWG 2.0 ranges; i1-i5 carry tag chains, checked once the
+	// device that reads them is known.
 	for _, k := range []string{"h1", "h2", "h3", "h4", "i1", "i2", "i3", "i4", "i5"} {
 		if v := iface[k]; v != "" {
 			opt[k] = v
@@ -1362,8 +1363,14 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 				return nil, fmt.Errorf("awg: AWG 3.x keys cannot be combined with AWG 1.5's %s", k)
 			}
 		}
+		if err := checkChains(iface, []string{"i1", "i2", "i3", "i4", "i5"}, checkV3Chain); err != nil {
+			return nil, err
+		}
 		opt["version"] = 3
 		return opt, nil
+	}
+	if err := checkChains(iface, []string{"i1", "i2", "i3", "i4", "i5", "j1", "j2", "j3"}, checkLegacyChain); err != nil {
+		return nil, err
 	}
 	for _, k := range awgconfig.AWG15Keys {
 		if k == "itime" {
@@ -1381,6 +1388,17 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 		}
 	}
 	return opt, nil
+}
+
+func checkChains(iface map[string]string, keys []string, check func(string) error) error {
+	for _, k := range keys {
+		if v := iface[k]; v != "" {
+			if err := check(v); err != nil {
+				return fmt.Errorf("awg %s: %w", k, err)
+			}
+		}
+	}
+	return nil
 }
 
 // parseINI returns the [Interface] keys (lowercased) and one map per [Peer],

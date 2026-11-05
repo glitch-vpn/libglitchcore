@@ -65,7 +65,7 @@ func firstOf(q map[string]string, keys ...string) string {
 
 // linkQuery reads a query's keys case-folded, the first value of each.
 // Values keep '+': a base64 key is written with it unescaped as often as not.
-// In i1-i5 it is a space, which a tag chain separates with and never holds.
+// In i1-i5 and j1-j3 it is a space, which a tag chain separates with and never holds.
 func linkQuery(raw string) (map[string]string, error) {
 	q := map[string]string{}
 	for _, pair := range strings.Split(raw, "&") {
@@ -76,7 +76,7 @@ func linkQuery(raw string) (map[string]string, error) {
 			return nil, errors.New("wireguard: malformed query")
 		}
 		key = strings.ToLower(strings.TrimSpace(key))
-		if len(key) == 2 && key[0] == 'i' && key[1] >= '1' && key[1] <= '5' {
+		if isChainKey(key) {
 			val = strings.ReplaceAll(val, "+", " ")
 		}
 		if _, seen := q[key]; key != "" && !seen {
@@ -84,6 +84,10 @@ func linkQuery(raw string) (map[string]string, error) {
 		}
 	}
 	return q, nil
+}
+
+func isChainKey(key string) bool {
+	return len(key) == 2 && (key[0] == 'i' && key[1] >= '1' && key[1] <= '5' || key[0] == 'j' && key[1] >= '1' && key[1] <= '3')
 }
 
 // linkKey gives a key as the padded standard base64 mihomo decodes.
