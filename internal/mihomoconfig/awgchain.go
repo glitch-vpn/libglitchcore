@@ -10,6 +10,11 @@ import (
 	"github.com/metacubex/amneziawg-go/device_v1/awg"
 )
 
+// maxJunkPacketCount caps Jc: each junk packet is one more datagram before
+// every handshake. Neither amneziawg-go nor its docs set a maximum, so 128 is
+// this core's own ceiling, far above the 4-12 the projects recommend.
+const maxJunkPacketCount = 128
+
 // maxChainTagSize bounds a size argument of a tag chain; amneziawg-go's legacy
 // device refuses above it, its 3.x device does not.
 const maxChainTagSize = 1000

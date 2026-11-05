@@ -1323,6 +1323,9 @@ func amneziaOption(iface map[string]string) (map[string]any, error) {
 			return nil, err
 		}
 		if ok {
+			if k == "jc" && (n < 0 || n > maxJunkPacketCount) {
+				return nil, fmt.Errorf("awg jc: %d is outside 0 to %d", n, maxJunkPacketCount)
+			}
 			opt[k] = n
 		}
 	}
