@@ -96,6 +96,22 @@ func linkHasVision(link string) bool {
 
 // BuildConfig adds no inbound: the TUN path dials in process as AppTrafficTag, and proxy mode adds its own (ApplyProxyInbound).
 func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, xrayLogLevel string) (*BuildResult, error) {
+	return buildConfig(links, opts, routing, xrayLogLevel, preResolveIPv4)
+}
+
+// BuildConfigResolvingAtDial leaves the server's name to each dial. A dial that
+// outlives the address it was built with would otherwise reach whatever name a
+// tunnel's fake-ip pool hands that address to next.
+func BuildConfigResolvingAtDial(link string) (*BuildResult, error) {
+	res, err := buildConfig([]string{link}, BalancerOptions{}, RoutingProfile{}, "none", keepHost)
+	if err != nil {
+		return nil, err
+	}
+	res.DialIPv4s = nil // the server's name is not an address to route around
+	return res, nil
+}
+
+func buildConfig(links []string, opts BalancerOptions, routing RoutingProfile, xrayLogLevel string, resolve dialResolver) (*BuildResult, error) {
 	clean := make([]string, 0, len(links))
 	for _, l := range links {
 		if t := strings.TrimSpace(l); t != "" {
@@ -117,7 +133,7 @@ func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 	res := &BuildResult{Config: cfg, VisionTags: map[string]bool{}}
 
 	if len(clean) == 1 {
-		ob, server, dialIP, err := outboundFromLink(clean[0], OutboundTag, preResolveIPv4)
+		ob, server, dialIP, err := outboundFromLink(clean[0], OutboundTag, resolve)
 		if err != nil {
 			return nil, err
 		}
@@ -146,7 +162,7 @@ func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 
 	for i, link := range clean {
 		tag := fmt.Sprintf("%s%d", proxyTagPrefix, i)
-		ob, server, dialIP, berr := outboundFromLink(link, tag, preResolveIPv4)
+		ob, server, dialIP, berr := outboundFromLink(link, tag, resolve)
 		if berr != nil {
 			return nil, fmt.Errorf("link %d: %w", i, berr)
 		}
