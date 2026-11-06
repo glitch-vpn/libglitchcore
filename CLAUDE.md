@@ -81,7 +81,8 @@ internal/
   sharelink/               # URL-shaped links parsed with credentials kept out of errors
   vmesslink/               # vmess:// (base64 JSON and URI) -> one shape
   proxylink/               # socks:// and http(s):// proxy links -> one shape
-  pinger/                  # MeasurePings (standalone per-engine probes)
+  pinger/                  # MeasurePings (standalone per-engine probes) and the dial through one link
+  linkrelay/               # OpenLinkRelay/CloseLinkRelay: a loopback SOCKS5 listener over that dial, no session
   liveness/                # up/down debounce tracker
   smoke/                   # end-to-end self-verification (integration tag)
   loopbackport/            # loopback ports free on TCP and UDP, for the tests

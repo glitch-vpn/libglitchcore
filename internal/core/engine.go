@@ -359,7 +359,7 @@ func coreCapabilities() string {
 	}{
 		Engines:  ids,
 		Versions: engineVersions(),
-		Features: []string{"serverEvent", "ipEvent", "routeTargets"},
+		Features: []string{"serverEvent", "ipEvent", "routeTargets", "linkRelay"},
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {

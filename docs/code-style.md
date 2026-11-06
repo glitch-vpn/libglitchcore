@@ -73,6 +73,14 @@ a process-lifetime drain started on demand, with no quit/done, because
 never held across a callback, and past `maxDeferredStatus` it sheds the oldest
 `LogEvent`/`ConnEvent` only. The status sink it calls must not block.
 
+The third is a listener's accept loop (`internal/linkrelay`). Its stop flips
+`closed` under the relay's mutex, cancels the context the dials took, closes the
+listener and the open connections, waits for the accept loop (`serveDone`) and
+for every handler (a `WaitGroup`), and only then releases what the handlers
+used. Whoever stops it second waits on `stopped` instead of returning early, so
+a stop always returns with the link released. An accept error that is not a stop
+ends the relay through the same path.
+
 A start that races a stop is caught by `sessionGen`: the start captures the
 generation, the stop bumps it in `clearSessionState`, the start arms its loops
 under `coreMutex`, and its tail calls `abortStaleEngineSession`, which tears

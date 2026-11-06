@@ -71,7 +71,7 @@ Checks worth running when the diff touches the relevant area:
 
 ```bash
 # license guard, per composition (forbidden regexes in .github/workflows/ci.yml)
-CGO_ENABLED=0 go list -tags "no_mihomo no_xray with_gvisor" -deps ./internal/core/ ./internal/pinger/
+CGO_ENABLED=0 go list -tags "no_mihomo no_xray with_gvisor" -deps ./internal/core/ ./internal/pinger/ ./internal/linkrelay/
 # tag matrix compile
 CGO_ENABLED=0 go vet -tags "no_mihomo with_gvisor" ./internal/...
 ```

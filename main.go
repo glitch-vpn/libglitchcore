@@ -56,6 +56,7 @@ import (
 	"unsafe"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
+	"github.com/glitch-vpn/libglitchcore/internal/linkrelay"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/pinger"
 )
@@ -105,18 +106,51 @@ func CoreCapabilities() *C.char {
 	return C.CString(core.Capabilities())
 }
 
+// errorResult is the answer of an export that fails: its error text can quote
+// the link it was given, so it passes the scrubber.
+func errorResult(err error) *C.char {
+	return C.CString(fmt.Sprintf(`{"error":%q}`, logfmt.Scrub(err.Error())))
+}
+
 //export MeasurePings
 func MeasurePings(cRequestJSON *C.char) *C.char {
 	// Caller frees via FreeStatusMessage.
 	var req pinger.Request
 	if err := json.Unmarshal([]byte(C.GoString(cRequestJSON)), &req); err != nil {
-		return C.CString(fmt.Sprintf(`{"error":%q}`, logfmt.Scrub(err.Error())))
+		return errorResult(err)
 	}
 	data, err := json.Marshal(pinger.Measure(req))
 	if err != nil {
-		return C.CString(fmt.Sprintf(`{"error":%q}`, logfmt.Scrub(err.Error())))
+		return errorResult(err)
 	}
 	return C.CString(string(data))
+}
+
+// OpenLinkRelay and CloseLinkRelay run in the calling process, as MeasurePings
+// does: a relay is no session, so the Windows service has no command for it.
+//
+//export OpenLinkRelay
+func OpenLinkRelay(cRequestJSON *C.char) *C.char {
+	// Caller frees via FreeStatusMessage.
+	var req linkrelay.Request
+	if err := json.Unmarshal([]byte(C.GoString(cRequestJSON)), &req); err != nil {
+		return errorResult(err)
+	}
+	info, err := linkrelay.Open(req)
+	if err != nil {
+		return errorResult(err)
+	}
+	data, err := json.Marshal(info)
+	if err != nil {
+		linkrelay.Close(info.ID)
+		return errorResult(err)
+	}
+	return C.CString(string(data))
+}
+
+//export CloseLinkRelay
+func CloseLinkRelay(cID *C.char) {
+	linkrelay.Close(C.GoString(cID))
 }
 
 //export EngineStart

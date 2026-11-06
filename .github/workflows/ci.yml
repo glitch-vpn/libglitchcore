@@ -89,6 +89,6 @@ jobs:
       - name: License guard (excluded engines stay out of the link)
         if: matrix.forbidden != ''
         run: |
-          count=$(CGO_ENABLED=0 go list -tags="${{ matrix.tags }} with_gvisor" -deps ./internal/core/ ./internal/pinger/ | grep -cE "${{ matrix.forbidden }}" || true)
+          count=$(CGO_ENABLED=0 go list -tags="${{ matrix.tags }} with_gvisor" -deps ./internal/core/ ./internal/pinger/ ./internal/linkrelay/ | grep -cE "${{ matrix.forbidden }}" || true)
           echo "forbidden packages linked: $count"
           [ "$count" = "0" ]
