@@ -92,7 +92,12 @@ func TestPingKeepsTheSessionsDirectDials(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	_, _ = measureXray(ctx, "vless://11111111-1111-1111-1111-111111111111@127.0.0.1:1?type=tcp&security=none#ping", "http://127.0.0.1:1/")
+	dial, release, err := openXrayDialer("vless://11111111-1111-1111-1111-111111111111@127.0.0.1:1?type=tcp&security=none#ping", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = probe(ctx, "http://127.0.0.1:1/", dial)
+	release()
 
 	for _, name := range []string{"named.test", "geo.test"} {
 		before := hits.Load()

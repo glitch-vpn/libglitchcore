@@ -1,4 +1,5 @@
-// Package pinger measures per-link url-test latency without a running engine or TUN.
+// Package pinger measures per-link url-test latency, and dials through one link,
+// without a running engine or TUN.
 package pinger
 
 import (
@@ -45,61 +46,113 @@ type Result struct {
 
 type dialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
-type measurer func(ctx context.Context, link, probeURL string) (time.Duration, error)
+// dialOpener starts what a dial through one link needs and returns the dial
+// with the call that ends it. resolveAtDial leaves the server's name for each
+// dial to resolve, where an engine would otherwise resolve it once on opening;
+// mihomo always does.
+type dialOpener func(link string, resolveAtDial bool) (dial dialFunc, release func(), err error)
 
-type engineMeasurer struct {
-	engine  string
-	match   func(trimmed, lower string) bool
-	measure measurer
+type linkEngine struct {
+	engine string
+	match  func(trimmed, lower string) bool
+	open   dialOpener
 }
 
-// Specific measurers first; mihomo fallback covers the rest (or all, without xray).
+// Specific engines first; mihomo fallback covers the rest (or all, without xray).
 var (
-	measurers []engineMeasurer
-	fallback  *engineMeasurer
+	linkEngines []linkEngine
+	fallback    *linkEngine
 )
 
-func registerMeasurer(m engineMeasurer) { measurers = append(measurers, m) }
+func registerLinkEngine(e linkEngine) { linkEngines = append(linkEngines, e) }
 
-func setFallbackMeasurer(m engineMeasurer) { fallback = &m }
+func setFallbackLinkEngine(e linkEngine) { fallback = &e }
 
-// fallsBack marks a measurer's refusal of a link for something the engine
-// lacks, not for the link's safety: the fallback engine may carry it intact.
+// fallsBack marks an engine's refusal of a link for something it lacks, not for
+// the link's safety: the fallback engine may carry it intact.
 type fallsBack struct{ error }
 
 func (e fallsBack) Unwrap() error { return e.error }
 
-func classify(link string) (engine string, m measurer) {
+func lookup(link string) *linkEngine {
 	trimmed := strings.TrimSpace(link)
 	lower := strings.ToLower(trimmed)
-	for _, em := range measurers {
-		if em.match(trimmed, lower) {
-			return em.engine, em.measure
+	for i := range linkEngines {
+		if linkEngines[i].match(trimmed, lower) {
+			return &linkEngines[i]
 		}
 	}
 	if fallback != nil && fallback.match(trimmed, lower) {
-		return fallback.engine, fallback.measure
+		return fallback
 	}
-	return "", nil
+	return nil
 }
 
-// classifyOn is classify for a pinned engine: the measurer of that engine if it
-// carries the link, else none. Never a fallback to another engine.
-func classifyOn(pinned, link string) (engine string, m measurer, ok bool) {
+// lookupOn is lookup for a pinned engine: that engine if it carries the link,
+// else none. Never a fallback to another engine.
+func lookupOn(pinned, link string) *linkEngine {
 	trimmed := strings.TrimSpace(link)
 	lower := strings.ToLower(trimmed)
-	for _, em := range measurers {
-		if em.engine == pinned {
-			if em.match(trimmed, lower) {
-				return em.engine, em.measure, true
+	for i := range linkEngines {
+		if linkEngines[i].engine == pinned {
+			if linkEngines[i].match(trimmed, lower) {
+				return &linkEngines[i]
 			}
-			return pinned, nil, false
+			return nil
 		}
 	}
 	if fallback != nil && fallback.engine == pinned && fallback.match(trimmed, lower) {
-		return fallback.engine, fallback.measure, true
+		return fallback
 	}
-	return pinned, nil, false
+	return nil
+}
+
+var (
+	errUnsupportedLink = errors.New("unsupported link scheme")
+	errNotCarried      = errors.New("link not carried by the pinned engine")
+)
+
+// dialFor opens a dial through link on the pinned engine alone, or on the
+// link's own with the fallback for a capability it lacks. The engine's name
+// comes back with a refusal too.
+func dialFor(pinned, link string, resolveAtDial bool) (engine string, dial dialFunc, release func(), err error) {
+	pinned = strings.TrimSpace(pinned)
+	var chosen *linkEngine
+	if pinned != "" {
+		if chosen = lookupOn(pinned, link); chosen == nil {
+			return pinned, nil, nil, errNotCarried
+		}
+	} else if chosen = lookup(link); chosen == nil {
+		return "", nil, nil, errUnsupportedLink
+	}
+
+	dial, release, err = chosen.open(link, resolveAtDial)
+	var refused fallsBack
+	if trimmed := strings.TrimSpace(link); errors.As(err, &refused) && pinned == "" && fallback != nil &&
+		fallback.match(trimmed, strings.ToLower(trimmed)) {
+		chosen = fallback
+		dial, release, err = chosen.open(link, resolveAtDial)
+	}
+	return chosen.engine, dial, release, err
+}
+
+// Dialer dials through one link until Release, with no listener, session or TUN.
+type Dialer struct {
+	// Engine is "xray" or "mihomo".
+	Engine  string
+	Dial    func(ctx context.Context, network, addr string) (net.Conn, error)
+	Release func()
+}
+
+// NewDialer is for a dial that stays open: it resolves the server's name at each
+// dial, not once, since the address it got at the start can stop being that
+// server's (a tunnel's fake-ip pool restarts).
+func NewDialer(pinned, link string) (*Dialer, error) {
+	engine, dial, release, err := dialFor(pinned, link, true)
+	if err != nil {
+		return nil, err
+	}
+	return &Dialer{Engine: engine, Dial: dial, Release: release}, nil
 }
 
 // Measure: results are index-aligned; a dead link sets Alive=false, doesn't fail the batch.
@@ -122,40 +175,21 @@ func Measure(req Request) []Result {
 	var wg sync.WaitGroup
 
 	for i, link := range req.Links {
-		var engine string
-		var m measurer
-		if pinned := strings.TrimSpace(req.Engine); pinned != "" {
-			engine, m, _ = classifyOn(pinned, link)
-			results[i] = Result{Index: i, Engine: engine}
-			if m == nil {
-				results[i].Error = "link not carried by the pinned engine"
-				continue
-			}
-		} else {
-			engine, m = classify(link)
-			results[i] = Result{Index: i, Engine: engine}
-			if m == nil {
-				results[i].Error = "unsupported link scheme"
-				continue
-			}
-		}
-		pinnedRun := strings.TrimSpace(req.Engine) != ""
-
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(i int, link string, m measurer, pinnedRun bool) {
+		go func(i int, link string) {
 			defer wg.Done()
 			defer func() { <-sem }()
 
 			ctx, cancel := context.WithTimeout(context.Background(), timeout)
 			defer cancel()
 
-			delay, err := m(ctx, link, probeURL)
-			var refused fallsBack
-			if trimmed := strings.TrimSpace(link); errors.As(err, &refused) && !pinnedRun && fallback != nil &&
-				fallback.match(trimmed, strings.ToLower(trimmed)) {
-				results[i].Engine = fallback.engine
-				delay, err = fallback.measure(ctx, link, probeURL)
+			engine, dial, release, err := dialFor(req.Engine, link, false)
+			results[i] = Result{Index: i, Engine: engine}
+			var delay time.Duration
+			if err == nil {
+				defer release()
+				delay, err = probe(ctx, probeURL, dial)
 			}
 			if err != nil {
 				// A parse error quotes the link it rejected.
@@ -164,7 +198,7 @@ func Measure(req Request) []Result {
 			}
 			results[i].Alive = true
 			results[i].DelayMs = delay.Milliseconds()
-		}(i, link, m, pinnedRun)
+		}(i, link)
 	}
 
 	wg.Wait()

@@ -5,8 +5,8 @@ import (
 	"testing"
 )
 
-func hasMeasurer(engine string) bool {
-	for _, m := range measurers {
+func hasLinkEngine(engine string) bool {
+	for _, m := range linkEngines {
 		if m.engine == engine {
 			return true
 		}
@@ -17,7 +17,7 @@ func hasMeasurer(engine string) bool {
 // A link xray refuses for a missing capability pings as unreachable on xray
 // when xray is pinned, where the unpinned request carries it on mihomo.
 func TestMeasurePinnedXrayDoesNotFallBackToMihomo(t *testing.T) {
-	if fallback == nil || fallback.engine != "mihomo" || !hasMeasurer("xray") {
+	if fallback == nil || fallback.engine != "mihomo" || !hasLinkEngine("xray") {
 		t.Skip("needs xray and the mihomo fallback")
 	}
 	legacy := vmessLink(1, `"aid":"2","net":"tcp","type":"none","tls":""`)
@@ -32,7 +32,7 @@ func TestMeasurePinnedXrayDoesNotFallBackToMihomo(t *testing.T) {
 }
 
 func TestMeasurePinnedEngineRefusesALinkItDoesNotCarry(t *testing.T) {
-	if fallback == nil || !hasMeasurer("xray") {
+	if fallback == nil || !hasLinkEngine("xray") {
 		t.Skip("needs xray and the mihomo fallback")
 	}
 	cases := []struct{ engine, link string }{

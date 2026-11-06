@@ -2,10 +2,10 @@ package pinger
 
 import "testing"
 
-func TestClassifyMatchesRegistrations(t *testing.T) {
+func TestLookupMatchesRegistrations(t *testing.T) {
 	registered := func(engine string) bool {
-		for _, m := range measurers {
-			if m.engine == engine {
+		for _, e := range linkEngines {
+			if e.engine == engine {
 				return true
 			}
 		}
@@ -16,15 +16,12 @@ func TestClassifyMatchesRegistrations(t *testing.T) {
 
 	check := func(link, want string) {
 		t.Helper()
-		got, m := classify(link)
+		got := ""
+		if e := lookup(link); e != nil {
+			got = e.engine
+		}
 		if got != want {
-			t.Errorf("classify(%q) engine = %q, want %q", link, got, want)
-		}
-		if want == "" && m != nil {
-			t.Errorf("classify(%q): want nil measurer", link)
-		}
-		if want != "" && m == nil {
-			t.Errorf("classify(%q): want a measurer", link)
+			t.Errorf("lookup(%q) engine = %q, want %q", link, got, want)
 		}
 	}
 

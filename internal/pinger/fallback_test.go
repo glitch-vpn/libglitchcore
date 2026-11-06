@@ -18,11 +18,7 @@ func TestMeasureRoutesALinkXrayRefusesToMihomo(t *testing.T) {
 	if fallback == nil || fallback.engine != "mihomo" {
 		t.Skip("needs the mihomo fallback")
 	}
-	var hasXray bool
-	for _, m := range measurers {
-		hasXray = hasXray || m.engine == "xray"
-	}
-	if !hasXray {
+	if !hasLinkEngine("xray") {
 		t.Skip("needs xray")
 	}
 
@@ -55,11 +51,7 @@ func TestMeasureKeepsASafetyRefusalOnXray(t *testing.T) {
 	if fallback == nil || fallback.engine != "mihomo" {
 		t.Skip("needs the mihomo fallback")
 	}
-	var hasXray bool
-	for _, m := range measurers {
-		hasXray = hasXray || m.engine == "xray"
-	}
-	if !hasXray {
+	if !hasLinkEngine("xray") {
 		t.Skip("needs xray")
 	}
 

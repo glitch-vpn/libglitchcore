@@ -8,7 +8,6 @@ import (
 	"net"
 	"strconv"
 	"strings"
-	"time"
 
 	mihomoAdapter "github.com/metacubex/mihomo/adapter"
 	C "github.com/metacubex/mihomo/constant"
@@ -18,16 +17,15 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/proxylink"
 )
 
-func measureMihomo(ctx context.Context, link, probeURL string) (time.Duration, error) {
+func openMihomoDialer(link string, _ bool) (dialFunc, func(), error) {
 	pmap, err := mihomoconfig.ProxyMapFromLink(link)
 	if err != nil {
-		return 0, fmt.Errorf("parse link: %w", err)
+		return nil, nil, fmt.Errorf("parse link: %w", err)
 	}
 	proxy, err := mihomoAdapter.ParseProxy(pmap)
 	if err != nil {
-		return 0, fmt.Errorf("build proxy: %w", err)
+		return nil, nil, fmt.Errorf("build proxy: %w", err)
 	}
-	defer proxy.Close()
 
 	dial := func(dialCtx context.Context, _, addr string) (net.Conn, error) {
 		host, portStr, err := net.SplitHostPort(addr)
@@ -36,17 +34,17 @@ func measureMihomo(ctx context.Context, link, probeURL string) (time.Duration, e
 		}
 		port, err := strconv.Atoi(portStr)
 		if err != nil {
-			return nil, fmt.Errorf("invalid probe port %q: %w", portStr, err)
+			return nil, fmt.Errorf("invalid port %q: %w", portStr, err)
 		}
 		// Host (not a pre-resolved IP): mihomo's proxy resolves it remotely.
 		md := &C.Metadata{NetWork: C.TCP, Host: host, DstPort: uint16(port)}
 		return proxy.DialContext(dialCtx, md)
 	}
-	return probe(ctx, probeURL, dial)
+	return dial, func() { _ = proxy.Close() }, nil
 }
 
 func init() {
-	setFallbackMeasurer(engineMeasurer{
+	setFallbackLinkEngine(linkEngine{
 		engine: "mihomo",
 		match: func(trimmed, lower string) bool {
 			return strings.HasPrefix(lower, "vless://") ||
@@ -60,6 +58,6 @@ func init() {
 				proxylink.Protocol(trimmed) == proxylink.Socks ||
 				awgconfig.IsLink(trimmed)
 		},
-		measure: measureMihomo,
+		open: openMihomoDialer,
 	})
 }
