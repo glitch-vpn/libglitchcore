@@ -4,6 +4,7 @@ package core
 
 import (
 	"strings"
+	"sync/atomic"
 
 	"github.com/glitch-vpn/libglitchcore/internal/conninspect"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
@@ -35,6 +36,22 @@ func registerCoreLogHandler() {
 // unmasked access record inside.
 type xrayLogHandler struct{}
 
+// Severity is what xray asks before it builds a message: it follows the
+// verbosity the app set, live, so a message the gate would drop costs
+// nothing. With logging off even an error is not built.
+func (xrayLogHandler) Severity() xrayCommonLog.Severity {
+	switch v := atomic.LoadInt32(&statusVerbosity); {
+	case v < 0:
+		return xrayCommonLog.Severity_Unknown
+	case v >= 2:
+		return xrayCommonLog.Severity_Debug
+	case v == 1:
+		return xrayCommonLog.Severity_Info
+	default:
+		return xrayCommonLog.Severity_Error
+	}
+}
+
 // What MaskAddress "half" keeps of an address; a line xray writes outside an
 // instance, with no config to say, is masked the same way as one inside.
 const (
@@ -51,7 +68,7 @@ func (xrayLogHandler) Handle(msg xrayCommonLog.Message) {
 	inner := masked.Message
 	switch m := inner.(type) {
 	case *xrayCommonLog.AccessMessage:
-		handleXrayAccess(m)
+		handleXrayAccess(m, msg)
 	case *xrayCommonLog.GeneralMessage:
 		level := xrayMessageLevel(m.Severity)
 		if !logEnabled(level) {
@@ -63,7 +80,10 @@ func (xrayLogHandler) Handle(msg xrayCommonLog.Message) {
 }
 
 // xray records every connection whatever the config says.
-func handleXrayAccess(m *xrayCommonLog.AccessMessage) {
+func handleXrayAccess(m *xrayCommonLog.AccessMessage, masked xrayCommonLog.Message) {
+	if logEnabled(logfmt.Debug) {
+		emitLog(logfmt.Debug, "Xray", masked.String())
+	}
 	if !connInspectEnabled.Load() {
 		return
 	}

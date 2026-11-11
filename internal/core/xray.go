@@ -154,9 +154,8 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		return err
 	}
 
-	// Master switch off (default) holds xray at error, which its handler drops, and
-	// tun2socks silent, whatever the connect logLevel.
-	xrayLogLevel, tun2socksLogLevel := xrayconfig.LogLevels(logLevel, atomic.LoadInt32(&statusVerbosity) >= 0)
+	// Master switch off (default) holds tun2socks silent, whatever the connect logLevel.
+	tun2socksLogLevel := xrayconfig.Tun2socksLogLevel(logLevel, atomic.LoadInt32(&statusVerbosity) >= 0)
 	var cfg xrayConf.Config
 
 	log.Printf("[Xray] Parsing link(s)")
@@ -171,7 +170,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		return fmt.Errorf("[Xray] invalid domainStrategy %q (want asis|ipifnonmatch|ipondemand)", routing.DomainStrategy)
 	}
 	routing.DomainStrategy = ds
-	res, err := xrayconfig.BuildConfig(links, xrayconfig.BalancerOptions{Strategy: o.strategy, ProbeURL: o.probeURL}, routing, xrayLogLevel)
+	res, err := xrayconfig.BuildConfig(links, xrayconfig.BalancerOptions{Strategy: o.strategy, ProbeURL: o.probeURL}, routing, xrayconfig.InstanceLogLevel)
 	if err != nil {
 		return fmt.Errorf("[Xray] Link parse error: %w", err)
 	}
@@ -189,7 +188,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 	if cfg.LogConfig == nil {
 		cfg.LogConfig = &xrayConf.LogConfig{}
 	}
-	cfg.LogConfig.LogLevel = xrayLogLevel
+	cfg.LogConfig.LogLevel = xrayconfig.InstanceLogLevel
 	cfg.LogConfig.AccessLog = ""
 	cfg.LogConfig.ErrorLog = ""
 	cfg.LogConfig.DNSLog = false
@@ -366,6 +365,9 @@ func (x *CoreController) newXrayInstance(cfg *xrayCore.Config) (*xrayCore.Instan
 		return nil, err
 	}
 	x.xrayLife, x.xrayLifeCancel = life, cancel
+	// The instance registered its own log app as xray's handler, which holds
+	// the config's level for good; the core's follows the verbosity live.
+	registerCoreLogHandler()
 	return inst, nil
 }
 

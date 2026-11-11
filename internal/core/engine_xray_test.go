@@ -4,6 +4,7 @@ package core
 
 import (
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	xrayAppLog "github.com/xtls/xray-core/app/log"
@@ -90,4 +91,31 @@ func TestXrayLogHandler_AccessRecordNeedsTheInspector(t *testing.T) {
 	if len(conns) != 0 {
 		t.Fatalf("an access record became a ConnEvent with the inspector off: %v", conns)
 	}
+}
+
+func TestXrayLogHandler_SeverityFollowsVerbosity(t *testing.T) {
+	prev := atomic.LoadInt32(&statusVerbosity)
+	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, prev) })
+	for verbosity, want := range map[int32]xrayCommonLog.Severity{
+		-1: xrayCommonLog.Severity_Unknown,
+		0:  xrayCommonLog.Severity_Error,
+		1:  xrayCommonLog.Severity_Info,
+		2:  xrayCommonLog.Severity_Debug,
+	} {
+		atomic.StoreInt32(&statusVerbosity, verbosity)
+		if got := (xrayLogHandler{}).Severity(); got != want {
+			t.Errorf("verbosity %d: severity = %v, want %v", verbosity, got, want)
+		}
+	}
+}
+
+func TestXrayLogHandler_AccessLineIsADebugLogLine(t *testing.T) {
+	logs := captureLogs(t, 2)
+	xrayLogHandler{}.Handle(&xrayCommonLog.AccessMessage{
+		From:   xrayNet.TCPDestination(xrayNet.ParseAddress("127.0.0.1"), 50000),
+		To:     xrayNet.TCPDestination(xrayNet.ParseAddress("203.0.113.9"), 443),
+		Status: xrayCommonLog.AccessAccepted,
+		Detour: "tun2socks -> proxy",
+	})
+	assertLogs(t, logs(), []capturedLog{{LogEvent, "debug", "Xray", "from tcp:127.0.*.*:50000 accepted tcp:203.0.*.*:443 [tun2socks -> proxy]"}})
 }

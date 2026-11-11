@@ -8,36 +8,29 @@ const (
 	tun2socksLogSilentLevel = "silent"
 )
 
-// xray has no "silent": a level it does not know reads as warning. Its "none"
-// turns the access logger off with the error one, and the connection
-// inspector reads the access records, so the quietest level that keeps them
-// is "error".
-const (
-	xrayLogWarnLevel  = "warning"
-	xrayLogInfoLevel  = "info"
-	xrayLogDebugLevel = "debug"
-	xrayLogErrorLevel = "error"
-)
+// InstanceLogLevel is the level an xray instance's config carries. It only
+// matters while NewSession builds the instance: the core's handler replaces
+// the instance's own right after and gates xray's lines from the live
+// verbosity (xrayLogHandler.Severity).
+const InstanceLogLevel = "debug"
 
-// LogLevels maps the connect logLevel to the levels xray and tun2socks run at.
-// With logging off both are as quiet as they get. With it on, xray runs at
-// warning when the caller asked for none (0), while tun2socks stays silent
-// then: its lines carry full destination addresses, which xray masks.
-func LogLevels(requested int, loggingOn bool) (xrayLevel, tun2socksLevel string) {
+// Tun2socksLogLevel maps the connect logLevel to the level tun2socks runs at.
+// With logging off it is silent. With it on, it stays silent when the caller
+// asked for none (0): its lines carry full destination addresses, which xray
+// masks.
+func Tun2socksLogLevel(requested int, loggingOn bool) string {
 	if !loggingOn {
-		return xrayLogErrorLevel, tun2socksLogSilentLevel
+		return tun2socksLogSilentLevel
 	}
 	switch requested {
 	case 1:
-		return xrayLogWarnLevel, tun2socksLogWarnLevel
+		return tun2socksLogWarnLevel
 	case 2:
-		return xrayLogInfoLevel, tun2socksLogInfoLevel
+		return tun2socksLogInfoLevel
 	case 3:
-		return xrayLogDebugLevel, tun2socksLogDebugLevel
+		return tun2socksLogDebugLevel
 	case 4:
-		return xrayLogErrorLevel, tun2socksLogErrorLevel
-	case 0:
-		return xrayLogWarnLevel, tun2socksLogSilentLevel
+		return tun2socksLogErrorLevel
 	}
-	return xrayLogErrorLevel, tun2socksLogSilentLevel
+	return tun2socksLogSilentLevel
 }
