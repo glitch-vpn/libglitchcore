@@ -80,7 +80,9 @@ func (p *xrayBridgeProxy) dispatch(m *M.Metadata, network xrayNet.Network) (*tra
 	// CanSpliceCopy 3: no raw socket backs the flow, so xray must copy.
 	ctx = session.ContextWithInbound(ctx, &session.Inbound{Source: src, Tag: p.tag, CanSpliceCopy: 3})
 	ctx = session.ContextWithContent(ctx, &session.Content{SniffingRequest: p.sniffing})
-	ctx = xrayLog.ContextWithAccessMessage(ctx, &xrayLog.AccessMessage{From: src, To: dest, Status: xrayLog.AccessAccepted})
+	outbound := &session.Outbound{}
+	ctx = session.ContextWithOutbounds(ctx, []*session.Outbound{outbound})
+	ctx = xrayLog.ContextWithAccessMessage(ctx, &xrayLog.AccessMessage{From: src, To: sniffedTarget{dest: dest, outbound: outbound}, Status: xrayLog.AccessAccepted})
 	link, err := p.dispatcher.Dispatch(ctx, dest)
 	if err != nil {
 		cancel()
@@ -176,3 +178,24 @@ func (c *xrayLinkConn) RemoteAddr() net.Addr             { return &net.TCPAddr{}
 func (c *xrayLinkConn) SetDeadline(time.Time) error      { return nil }
 func (c *xrayLinkConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *xrayLinkConn) SetWriteDeadline(time.Time) error { return nil }
+
+// sniffedTarget is the access message's destination: the address the flow
+// came in on until xray's sniffer finds a domain in it. A fake-IP result
+// replaces the destination itself; route-only sniffing keeps the dialed
+// address and records the domain apart. The message reads both when it is
+// written, after the route is picked.
+type sniffedTarget struct {
+	dest     xrayNet.Destination
+	outbound *session.Outbound
+}
+
+func (t sniffedTarget) String() string {
+	dest := t.dest
+	for _, found := range []xrayNet.Destination{t.outbound.Target, t.outbound.RouteTarget} {
+		if found.IsValid() && found.Address.Family().IsDomain() {
+			dest.Address = found.Address
+			break
+		}
+	}
+	return dest.String()
+}

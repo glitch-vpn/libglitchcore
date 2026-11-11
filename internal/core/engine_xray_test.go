@@ -10,6 +10,7 @@ import (
 	xrayAppLog "github.com/xtls/xray-core/app/log"
 	xrayCommonLog "github.com/xtls/xray-core/common/log"
 	xrayNet "github.com/xtls/xray-core/common/net"
+	"github.com/xtls/xray-core/common/session"
 )
 
 func TestEngineRegistry_HasXray(t *testing.T) {
@@ -118,4 +119,21 @@ func TestXrayLogHandler_AccessLineIsADebugLogLine(t *testing.T) {
 		Detour: "tun2socks -> proxy",
 	})
 	assertLogs(t, logs(), []capturedLog{{LogEvent, "debug", "Xray", "from tcp:127.0.*.*:50000 accepted tcp:203.0.*.*:443 [tun2socks -> proxy]"}})
+}
+
+func TestSniffedTarget_NamesTheDomainRouteOnlySniffingFound(t *testing.T) {
+	dest := xrayNet.TCPDestination(xrayNet.ParseAddress("203.0.113.9"), 443)
+	outbound := &session.Outbound{}
+	target := sniffedTarget{dest: dest, outbound: outbound}
+	if got := target.String(); got != "tcp:203.0.113.9:443" {
+		t.Fatalf("before sniffing = %q", got)
+	}
+	outbound.RouteTarget = xrayNet.TCPDestination(xrayNet.ParseAddress("ads.example"), 443)
+	if got := target.String(); got != "tcp:ads.example:443" {
+		t.Fatalf("route-only sniffing = %q", got)
+	}
+	outbound.Target = xrayNet.TCPDestination(xrayNet.ParseAddress("fake.example"), 443)
+	if got := target.String(); got != "tcp:fake.example:443" {
+		t.Fatalf("fake-IP result = %q", got)
+	}
 }
