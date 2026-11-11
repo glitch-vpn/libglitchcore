@@ -92,7 +92,7 @@ func (x *CoreController) startStats(interval time.Duration) {
 				// Leak diagnostics for the slow "everything stops after hours" bug: a
 				// rising goroutine or handle count over a long session flags a leak
 				// (handles = sockets on Windows / fds on Linux). Log-only.
-				log.Printf("[Generic] Stats: rx=%d, tx=%d, durationMs=%d, rss=%d, goMem=%d, goroutines=%d, handles=%d%s",
+				logfmt.Debugf("[Generic] Stats: rx=%d, tx=%d, durationMs=%d, rss=%d, goMem=%d, goroutines=%d, handles=%d%s",
 					rx, tx, durationMs, rss, goMem, runtime.NumGoroutine(), currentProcessHandleCount(), link)
 				msg := fmt.Sprintf("{\"rx\":%d,\"tx\":%d,\"durationMs\":%d,\"rssBytes\":%d,\"goMemBytes\":%d%s}", rx, tx, durationMs, rss, goMem, link)
 				x.emitStatus(StatsEvent, msg)

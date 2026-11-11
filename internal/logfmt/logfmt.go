@@ -88,10 +88,14 @@ func SplitLine(raw string) (level Level, component string, msg string) {
 	return level, component, s
 }
 
-// Warnf and Errorf write through the standard log package with the level as
+// Debugf, Warnf and Errorf write through the standard log package with the level as
 // the leading token SplitLine reads; a plain log.Printf line is Info.
 func Warnf(format string, args ...any) {
 	_ = log.Output(2, string(Warn)+": "+fmt.Sprintf(format, args...))
+}
+
+func Debugf(format string, args ...any) {
+	_ = log.Output(2, string(Debug)+": "+fmt.Sprintf(format, args...))
 }
 
 func Errorf(format string, args ...any) {
