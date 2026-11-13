@@ -35,7 +35,7 @@ jobs:
         run: make test
 
       - name: Build FFI libraries
-        run: make build
+        run: make build CORE_VERSION="${GITHUB_REF_NAME}"
 
       - name: Take ownership of build_output
         run: sudo chown -R "$(id -u):$(id -g)" build_output

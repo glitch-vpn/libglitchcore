@@ -17,9 +17,13 @@ const (
 var (
 	builtXrayCoreVersion = "unknown"
 	builtMihomoVersion   = "unknown"
+	builtCoreVersion     = "unknown"
 )
 
-func SetBuiltVersions(xray, mihomo string) {
+func SetBuiltVersions(core, xray, mihomo string) {
+	if core != "" {
+		builtCoreVersion = core
+	}
 	if xray != "" {
 		builtXrayCoreVersion = xray
 	}
@@ -34,7 +38,8 @@ var engineVersionGetters = map[string]func() string{}
 func registerEngineVersion(key string, get func() string) { engineVersionGetters[key] = get }
 
 func engineVersions() map[string]string {
-	m := make(map[string]string, len(engineVersionGetters))
+	m := make(map[string]string, len(engineVersionGetters)+1)
+	m["core"] = normalizedVersion(builtCoreVersion)
 	for k, get := range engineVersionGetters {
 		m[k] = normalizedVersion(get())
 	}

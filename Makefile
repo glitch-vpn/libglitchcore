@@ -27,6 +27,9 @@ WINTUN_VERSION := 0.14.1
 # Engine composition (comma/space separated subset of: xray mihomo).
 ENGINES ?= xray,mihomo
 
+# The release tag stamped into the library; the release workflow passes it.
+CORE_VERSION ?= $(or $(shell git describe --tags --always 2>/dev/null),unknown)
+
 # One shell per recipe, abort on first failure.
 .ONESHELL:
 .SHELLFLAGS := -ec
@@ -81,7 +84,8 @@ ffi:
 	go mod tidy
 	XRAY_VER=$$(go list -m -f '{{.Version}}' github.com/xtls/xray-core 2>/dev/null || echo unknown)
 	MIHOMO_VER=$$(go list -m -f '{{.Version}}' github.com/metacubex/mihomo 2>/dev/null || echo unknown)
-	LDFLAGS="-s -w -X main.builtXrayCoreVersion=$$XRAY_VER -X main.builtMihomoVersion=$$MIHOMO_VER"
+	CORE_VER=$${GLITCH_CORE_VERSION:-unknown}
+	LDFLAGS="-s -w -X main.builtCoreVersion=$$CORE_VER -X main.builtXrayCoreVersion=$$XRAY_VER -X main.builtMihomoVersion=$$MIHOMO_VER"
 	# -checklinkname=0: xray's finalmask (via pion) links wlynxg/anet, whose Android
 	# file reaches net.zoneCache by go:linkname, which Go 1.27 refuses; xray's own
 	# release builds pass the same flag.

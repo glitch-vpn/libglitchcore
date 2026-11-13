@@ -65,10 +65,11 @@ import (
 var (
 	builtXrayCoreVersion = "unknown"
 	builtMihomoVersion   = "unknown"
+	builtCoreVersion     = "unknown"
 )
 
 func init() {
-	core.SetBuiltVersions(builtXrayCoreVersion, builtMihomoVersion)
+	core.SetBuiltVersions(builtCoreVersion, builtXrayCoreVersion, builtMihomoVersion)
 }
 
 //export RegisterStatusPort
