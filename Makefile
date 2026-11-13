@@ -63,6 +63,7 @@ build: image
 	  -v "$(CURDIR):/app" \
 	  -v "$(CURDIR)/build_output:/app/build_output" \
 	  -e GLITCH_ENGINES="$(ENGINES)" \
+	  -e GLITCH_CORE_VERSION="$(CORE_VERSION)" \
 	  $(IMAGE) ffi
 
 test: image
