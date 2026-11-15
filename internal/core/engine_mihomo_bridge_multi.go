@@ -34,10 +34,9 @@ func mihomoBridgeInbound(dns *dnsconfig.Config, prof routing.Profile) (mihomocon
 		dns.Mode = dnsconfig.ModeFakeIP
 	}
 	if len(dns.NormalizedServers("")) == 0 {
-		dns.Servers = []string{xrayDefaultDnsServer}
+		dns.Servers = []string{dnsconfig.DefaultResolver}
 	}
 	b := &bridgeSetup{
-		hijackDNS:   dns.FakeIP(),
 		forceProxy:  routingHasForceProxy(prof),
 		forceDirect: routingHasForceDirect(prof),
 	}
@@ -55,7 +54,7 @@ func mihomoBridgeInbound(dns *dnsconfig.Config, prof routing.Profile) (mihomocon
 func (x *CoreController) mihomoStartBridge(b *bridgeSetup, prof routing.Profile, dns dnsconfig.Config, tunFd int, mark int64) error {
 	dnsServer := dns.FirstPlainServer()
 	if dnsServer == "" {
-		dnsServer = xrayDefaultDnsServer
+		dnsServer = dnsconfig.DefaultResolver
 	}
 	app, forceProxy, forceDirect := mihomoBridgeProxies(x, b, mark)
 	if err := x.startTun2socks(tun2socksParams{
@@ -78,7 +77,7 @@ func (x *CoreController) mihomoStartBridge(b *bridgeSetup, prof routing.Profile,
 // no process->proxy rule needs flows that always tunnel, and direct when no
 // process->direct rule needs flows that meet the blocks.
 func mihomoBridgeProxies(x *CoreController, b *bridgeSetup, mark int64) (app, force, direct t2sproxy.Proxy) {
-	app = &mihomoBridgeProxy{x: x, mark: mark, hijackDNS: b.hijackDNS}
+	app = &mihomoBridgeProxy{x: x, mark: mark}
 	if b.forceProxy {
 		force = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceProxyInName}
 	}

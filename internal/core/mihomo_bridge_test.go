@@ -50,9 +50,6 @@ func startMihomoBridgeFor(t *testing.T, x *CoreController, prof routing.Profile,
 	t.Helper()
 	mihomoTestHome(t)
 	in, b := mihomoBridgeInbound(&dns, prof)
-	if !b.hijackDNS {
-		t.Fatalf("bridge plan %+v, want fake-ip DNS", b)
-	}
 	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink}, in, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)

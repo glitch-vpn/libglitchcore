@@ -51,8 +51,8 @@ func recordingResolver(t *testing.T) (addr string, asked <-chan string) {
 
 // A WireGuard outbound resolves the names of its flows inside its own tunnel:
 // the session's resolver is never asked from the device's own address. The
-// peer is dead, so the dial fails once the in-tunnel lookup gives up, and that
-// failure line is the proof the outbound carried the flow.
+// peer is dead, so the dial fails once the in-tunnel lookup gives up; the
+// dial-error line shows the outbound carried the flow.
 func TestMihomoWireGuard_ResolvesNamesInsideTheTunnel(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	mihomoTestHome(t)

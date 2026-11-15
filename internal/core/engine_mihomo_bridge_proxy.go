@@ -23,12 +23,12 @@ import (
 var _ t2sproxy.Proxy = (*mihomoBridgeProxy)(nil)
 
 // mihomoBridgeProxy hands tun2socks's flows to mihomo's tunnel in process, as
-// a TUN inbound would. Once its session has ended it refuses every flow.
+// a TUN inbound would, and the apps' :53 to mihomo's resolver. Once its
+// session has ended it refuses every flow.
 type mihomoBridgeProxy struct {
-	x         *CoreController
-	mark      int64
-	inName    string // the IN-NAME rule's name for force-proxy flows, else ""
-	hijackDNS bool
+	x      *CoreController
+	mark   int64
+	inName string // the IN-NAME rule's name for force-proxy flows, else ""
 }
 
 func (p *mihomoBridgeProxy) DialContext(_ context.Context, m *M.Metadata) (net.Conn, error) {
@@ -36,7 +36,7 @@ func (p *mihomoBridgeProxy) DialContext(_ context.Context, m *M.Metadata) (net.C
 		return nil, errSessionEnded
 	}
 	local, engine := bridgePipe()
-	if p.hijackDNS && m.DstPort == 53 {
+	if m.DstPort == 53 {
 		go func() { _ = resolver.RelayDnsConn(context.Background(), engine, resolver.DefaultDnsReadTimeout) }()
 		return local, nil
 	}
@@ -61,7 +61,7 @@ func (p *mihomoBridgeProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 	}
 	dst := m.DestinationAddrPort()
 	var flow *bridgeFlowConn
-	if p.hijackDNS && m.DstPort == 53 {
+	if m.DstPort == 53 {
 		flow = newBridgeFlowConn(dst, func(query []byte) error {
 			if p.x.sessionGen.Load() != p.mark {
 				return errSessionEnded

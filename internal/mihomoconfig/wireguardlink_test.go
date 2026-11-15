@@ -242,7 +242,7 @@ func TestWireGuardConfig_ResolvesNamesInsideTheTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantResolvers(t, raw.Proxy[0], []string{defaultResolver})
+	wantResolvers(t, raw.Proxy[0], []string{dnsconfig.DefaultResolver})
 
 	prof := routing.Profile{
 		Tiers:   []routing.Tier{{Routes: []routing.Route{{Match: []string{"domain:example.com"}, To: "wg"}}}},
@@ -258,7 +258,7 @@ func TestWireGuardConfig_ResolvesNamesInsideTheTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantResolvers(t, p, []string{defaultResolver})
+	wantResolvers(t, p, []string{dnsconfig.DefaultResolver})
 	if _, err := BuildConfig([]string{wg}, Inbound{Bridge: true, DNS: dnsconfig.Config{Servers: servers}}, Options{}, routing.Profile{}); err != nil {
 		t.Fatalf("mihomo refuses the proxy: %v", err)
 	}

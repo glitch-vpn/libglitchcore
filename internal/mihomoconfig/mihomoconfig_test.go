@@ -829,12 +829,14 @@ func TestBuildConfig_BridgeFakeIP(t *testing.T) {
 		t.Fatalf("fake-ip range = %q, want %q", got, fakeIPRangeBridge)
 	}
 
+	// Fake-ip off: the bridge hands mihomo's resolver the :53, which answers
+	// from upstream.
 	plain, err := BuildConfig([]string{link}, Inbound{Bridge: true, DNS: dnsconfig.Config{Mode: dnsconfig.ModeNormal}}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatalf("BuildConfig(bridge normal): %v", err)
 	}
-	if plain.DNS != nil && plain.DNS.Enable {
-		t.Fatalf("normal mode must not run mihomo's DNS on the bridge: %+v", plain.DNS)
+	if plain.DNS == nil || !plain.DNS.Enable || plain.DNS.EnhancedMode != C.DNSNormal {
+		t.Fatalf("bridge DNS in normal mode = %+v, want on and normal", plain.DNS)
 	}
 }
 

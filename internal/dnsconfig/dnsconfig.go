@@ -14,6 +14,9 @@ import (
 const (
 	ModeFakeIP = "fake-ip"
 	ModeNormal = "normal"
+
+	// DefaultResolver answers when the caller named none, on both engines.
+	DefaultResolver = "1.1.1.1"
 )
 
 type Config struct {
@@ -28,9 +31,9 @@ type Config struct {
 	// direct-nameserver; xray has no such switch, so they are placed behind
 	// fakedns, where the module's own lookups land - the ones freedom makes
 	// when it dials a direct-routed name. Normal (non-fake-ip) mode has no
-	// fakedns to fall through, so there they are scoped by the profile's
-	// direct domain rules instead (direct-all: they become the default and the
-	// general list is scoped to the proxy rules).
+	// fakedns to fall through, so there both engines scope them by the
+	// profile's direct domain rules instead (direct-all: they become the
+	// default and the general list is scoped to the proxy rules).
 	DirectServers []string `json:"directServers,omitempty"`
 	// From opts["disableIPv6"], not dnsConfig JSON; routing side is Profile.DisableIPv6.
 	DisableIPv6 bool `json:"-"`

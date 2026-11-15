@@ -26,7 +26,6 @@ var statusCallbackRegistered atomic.Bool
 var inFFICall atomic.Bool
 
 const (
-	xrayDefaultDnsServer    = "1.1.1.1"
 	defaultTunMTU           = 1420
 	defaultTunUDPTimeoutSec = 30
 )

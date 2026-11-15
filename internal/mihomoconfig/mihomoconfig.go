@@ -19,6 +19,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/vlessencryption"
 	"github.com/glitch-vpn/libglitchcore/internal/vmesslink"
+	"github.com/metacubex/mihomo/common/orderedmap"
 	"github.com/metacubex/mihomo/component/geodata"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
@@ -39,9 +40,6 @@ const (
 	// Bridge-path pool: clear of the wireguard/Wintun TUN's own 198.18.0.1, yet
 	// still inside its 128.0.0.0/1 split-default so fake IPs route in.
 	fakeIPRangeBridge = "198.19.0.0/16"
-
-	// The resolver a session or a probe asks when the caller named none.
-	defaultResolver = "1.1.1.1"
 )
 
 // TunInbound: Android adopts a VpnService fd; desktop creates the adapter.
@@ -129,7 +127,12 @@ func BuildConfig(links []string, in Inbound, opts Options, prof routing.Profile)
 	if err != nil {
 		return nil, err
 	}
-	if err := checkGeoAssets(geoRules, raw.DNS.FakeIPFilter); err != nil {
+	// mihomo reads the filter in fake-ip mode only.
+	var filter []string
+	if raw.DNS.EnhancedMode == C.DNSFakeIP {
+		filter = raw.DNS.FakeIPFilter
+	}
+	if err := checkGeoAssets(geoRules, filter); err != nil {
 		return nil, err
 	}
 	return config.ParseRawConfig(raw)
@@ -202,21 +205,25 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 			raw.MixedPort = in.MixedPort // allow-lan:false forces it onto 127.0.0.1
 		}
 	}
+	target := Target(links)
 	if in.MixedPort > 0 || in.Bridge {
 		applyHosts(raw, in.DNS)
 	}
 	if in.Bridge {
-		applyBridgeDNS(raw, in.DNS)
+		// The bridge's TUN carries v4 only, so no AAAA is answered: a real v6
+		// address would be reached outside the tunnel.
+		raw.DNS.IPv6 = false
+		applyAnsweredDNS(raw, in.DNS, prof, target, fakeIPRangeBridge)
 	}
 	if in.Interface != "" {
 		raw.Interface = in.Interface
 	}
 	if in.Tun != nil {
-		applyTun(raw, in.Tun)
+		applyTun(raw, in.Tun, prof, target)
 		applyHosts(raw, in.Tun.DNS)
 	}
 
-	resolvers := in.resolvers()
+	resolvers := in.dns().NormalizedServers(dnsconfig.DefaultResolver)
 	names := ProxyNames(links)
 	ni := 0
 	for i, link := range links {
@@ -224,20 +231,18 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 		if trimmed == "" {
 			continue
 		}
-		proxy, err := proxyFromLink(trimmed, names[ni])
+		proxy, err := proxyFromLink(trimmed, names[ni], resolvers)
 		ni++
 		if err != nil {
 			return nil, nil, fmt.Errorf("link %d: %w", i, err)
 		}
 		applyProxyFingerprint(proxy, opts.Fingerprint)
-		resolveInsideTunnel(proxy, resolvers)
 		raw.Proxy = append(raw.Proxy, proxy)
 	}
 	if len(names) == 0 {
 		return nil, nil, fmt.Errorf("no links provided")
 	}
 
-	target := Target(links)
 	if len(names) > 1 {
 		group, err := balancerGroup(GroupTag, names, opts.Strategy, opts.ProbeURL)
 		if err != nil {
@@ -253,6 +258,9 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 	rules := append(fakePoolRejectRules(raw), buildRules(prof, target, in.ForceProxy, in.ForceDirect, named)...)
 	raw.Rule = rules
 	geoRules := rules
+	if geo := policyGeoRules(raw); len(geo) > 0 {
+		geoRules = append(append([]string{}, geoRules...), geo...)
+	}
 	if in.ForceDirect && prof.HasBlock() {
 		subRule := directFlowRules(prof)
 		if raw.SubRules == nil {
@@ -577,23 +585,154 @@ func balancerGroup(name string, members []string, strategy, probe string) (map[s
 	return g, nil
 }
 
-// Bridge DNS: mihomo's resolver, which the bridge hands the TUN's :53.
-// v4-only fake IPs - AAAA would leak real v6.
-func applyBridgeDNS(raw *config.RawConfig, dns dnsconfig.Config) {
+// applyAnsweredDNS is mihomo's resolver answering the apps' :53 an inbound
+// hands it: the native TUN's hijack, or the bridge's. Fake-ip answers from
+// the pool in fakeRange, and only the names kept off it go upstream, plain.
+// mihomo parses tls://, https://, quic://, tcp:// and plain natively.
+func applyAnsweredDNS(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Profile, target, fakeRange string) {
+	raw.DNS.Enable = true
+	direct := dns.NormalizedDirectServers()
+	if len(direct) > 0 {
+		raw.DNS.DirectNameServer = direct
+	}
+	raw.DNS.DefaultNameserver = bootstrapResolvers(dns.NormalizedServers(dnsconfig.DefaultResolver), direct)
 	if !dns.FakeIP() {
+		raw.DNS.EnhancedMode = C.DNSNormal
+		routeQueries(raw, dns, prof, target)
 		return
 	}
-	raw.DNS.Enable = true
-	raw.DNS.IPv6 = false
 	raw.DNS.EnhancedMode = C.DNSFakeIP
-	raw.DNS.FakeIPRange = fakeIPRangeBridge
+	raw.DNS.FakeIPRange = fakeRange
 	if filter := dns.NormalizedFilter(); len(filter) > 0 {
 		raw.DNS.FakeIPFilter = filter
 	}
-	raw.DNS.NameServer = dns.NormalizedServers(defaultResolver)
-	if direct := dns.NormalizedDirectServers(); len(direct) > 0 {
-		raw.DNS.DirectNameServer = direct
+	raw.DNS.NameServer = dns.NormalizedServers(dnsconfig.DefaultResolver)
+}
+
+// dns is the intent a session's resolver reads, whichever inbound carries it.
+func (in Inbound) dns() dnsconfig.Config {
+	if in.Tun != nil {
+		return in.Tun.DNS
 	}
+	return in.DNS
+}
+
+// routeQueries places the resolvers of a session with fake-ip off, where no
+// pool answers the apps and every query goes upstream. A query travels as its
+// flow would: through the target where the catch-all proxies, plain where it
+// is direct, and a name a tier sends the other way takes the other resolvers
+// by policy, in the tiers' order, so the first rule that matches a name
+// decides its query as it decides its flow. A direct name with no direct
+// resolvers named stays on the proxied path in proxy-all. The target's own
+// address resolves plain: that query cannot travel through it.
+func routeQueries(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Profile, target string) {
+	general := dns.NormalizedServers(dnsconfig.DefaultResolver)
+	through := make([]string, len(general))
+	for i, server := range general {
+		through[i] = server + "#" + target
+	}
+	direct := dns.NormalizedDirectServers()
+	raw.DNS.ProxyServerNameserver = general
+
+	var plain []string
+	if prof.ResolvedMode() == routing.ModeDirectAll {
+		plain = general
+		if len(direct) > 0 {
+			plain = direct
+		}
+		raw.DNS.NameServer = plain
+	} else {
+		plain = direct
+		raw.DNS.NameServer = through
+	}
+	policy := orderedmap.New[string, any]()
+	for _, tier := range prof.Tiers {
+		for _, e := range tier.Entries() {
+			key, ok := policyKey(e)
+			if !ok {
+				continue
+			}
+			if _, set := policy.Get(key); set {
+				continue
+			}
+			switch e.Target {
+			case routing.TargetDirect:
+				if len(plain) > 0 {
+					policy.Set(key, plain)
+				}
+			case routing.TargetProxy, routing.TargetRoute:
+				// A route's query takes the main target's tunnel, not the
+				// route's own.
+				policy.Set(key, through)
+			}
+		}
+	}
+	if policy.Len() > 0 {
+		raw.DNS.NameServerPolicy = policy
+	}
+}
+
+// policyKey is an entry's name in mihomo's nameserver-policy form: a suffix as
+// "+.name", an exact name as itself, a geosite list by its code. A keyword or
+// a regular expression has no form there and an address matches no query, so
+// names under those resolve as the catch-all does.
+func policyKey(e routing.Entry) (string, bool) {
+	switch e.Kind {
+	case routing.KindDomainSuffix:
+		return "+." + e.Value, true
+	case routing.KindDomainFull:
+		return e.Value, true
+	case routing.KindGeoSite:
+		return "geosite:" + e.Value, true
+	}
+	return "", false
+}
+
+// bootstrapResolvers find the address of a resolver given by name: the
+// session's resolvers that are addresses already, else the default one. mihomo
+// takes addresses only here, and its own default is four it chose.
+func bootstrapResolvers(general, direct []string) []string {
+	var out []string
+	for _, server := range append(append([]string{}, general...), direct...) {
+		if net.ParseIP(resolverHost(server)) != nil {
+			out = append(out, server)
+		}
+	}
+	if len(out) == 0 {
+		out = []string{dnsconfig.DefaultResolver}
+	}
+	return out
+}
+
+// resolverHost is the address a resolver is dialed at: the host of a URL,
+// or a plain entry without its port.
+func resolverHost(server string) string {
+	if dnsconfig.Scheme(server) != "" {
+		u, err := url.Parse(server)
+		if err != nil {
+			return ""
+		}
+		return u.Hostname()
+	}
+	if host, _, err := net.SplitHostPort(server); err == nil {
+		return host
+	}
+	return server
+}
+
+// policyGeoRules names the geosite lists a nameserver policy reads, as the
+// rule lines checkGeoAssets reads.
+func policyGeoRules(raw *config.RawConfig) []string {
+	if raw.DNS.NameServerPolicy == nil {
+		return nil
+	}
+	var rules []string
+	for pair := raw.DNS.NameServerPolicy.Oldest(); pair != nil; pair = pair.Next() {
+		if code, ok := strings.CutPrefix(pair.Key, "geosite:"); ok {
+			rules = append(rules, "GEOSITE,"+code)
+		}
+	}
+	return rules
 }
 
 // applyHosts fills mihomo's top-level hosts table (use-hosts defaults true).
@@ -606,7 +745,7 @@ func applyHosts(raw *config.RawConfig, dns dnsconfig.Config) {
 }
 
 // gVisor is the only stack that works uniformly across Android/Windows/Linux here.
-func applyTun(raw *config.RawConfig, t *TunInbound) {
+func applyTun(raw *config.RawConfig, t *TunInbound, prof routing.Profile, target string) {
 	mtu := t.MTU
 	if mtu <= 0 {
 		mtu = 1420
@@ -637,28 +776,12 @@ func applyTun(raw *config.RawConfig, t *TunInbound) {
 		raw.Tun.AutoDetectInterface = true
 	}
 
-	raw.DNS.Enable = true
 	// AAAA is answered unless the caller turned IPv6 off; without it a name
 	// resolves to IPv6 only for literals.
 	raw.DNS.IPv6 = !t.DNS.DisableIPv6
-	if t.DNS.FakeIP() {
-		raw.DNS.EnhancedMode = C.DNSFakeIP
-		raw.DNS.FakeIPRange = fakeIPRange
-		if raw.DNS.IPv6 {
-			raw.DNS.FakeIPRange6 = fakeIPRange6
-		}
-		if filter := t.DNS.NormalizedFilter(); len(filter) > 0 {
-			raw.DNS.FakeIPFilter = filter
-		}
-	} else {
-		raw.DNS.EnhancedMode = C.DNSNormal
-	}
-	// mihomo parses tls://, https://, quic://, tcp:// and plain natively.
-	if servers := t.DNS.NormalizedServers(""); len(servers) > 0 {
-		raw.DNS.NameServer = servers
-	}
-	if direct := t.DNS.NormalizedDirectServers(); len(direct) > 0 {
-		raw.DNS.DirectNameServer = direct
+	applyAnsweredDNS(raw, t.DNS, prof, target, fakeIPRange)
+	if t.DNS.FakeIP() && raw.DNS.IPv6 {
+		raw.DNS.FakeIPRange6 = fakeIPRange6
 	}
 }
 
@@ -674,25 +797,20 @@ func applyProxyFingerprint(proxy map[string]any, fp string) {
 }
 
 // For the pinger's throwaway adapter, which has no session to take resolvers
-// from: a WireGuard probe resolves its names through the default resolver,
-// inside the tunnel.
+// from.
 func ProxyMapFromLink(link string) (map[string]any, error) {
-	proxy, err := proxyFromLink(strings.TrimSpace(link), "probe")
+	return proxyFromLink(strings.TrimSpace(link), "probe", []string{dnsconfig.DefaultResolver})
+}
+
+// proxyFromLink is one link as mihomo's proxy map, with resolvers of its own
+// where its outbound looks names up itself.
+func proxyFromLink(link, name string, resolvers []string) (map[string]any, error) {
+	proxy, err := linkProxy(link, name)
 	if err != nil {
 		return nil, err
 	}
-	resolveInsideTunnel(proxy, []string{defaultResolver})
+	resolveInsideTunnel(proxy, resolvers)
 	return proxy, nil
-}
-
-// resolvers is what an outbound asks when it has to look a flow's name up
-// itself.
-func (in Inbound) resolvers() []string {
-	dns := in.DNS
-	if in.Tun != nil {
-		dns = in.Tun.DNS
-	}
-	return dns.NormalizedServers(defaultResolver)
 }
 
 // resolveInsideTunnel keeps a WireGuard outbound's lookups inside its tunnel.
@@ -707,7 +825,7 @@ func resolveInsideTunnel(proxy map[string]any, resolvers []string) {
 	proxy["dns"] = resolvers
 }
 
-func proxyFromLink(link, name string) (map[string]any, error) {
+func linkProxy(link, name string) (map[string]any, error) {
 	lower := strings.ToLower(link)
 	switch {
 	case strings.HasPrefix(lower, "vless://"):
@@ -779,9 +897,9 @@ func linkName(link string, idx int) string {
 	if awgconfig.IsLink(link) {
 		frag = awgconfig.LinkName(link)
 	} else if vmesslink.IsLink(link) {
-		// ps is written as is; only the comma rule applies to it.
+		// ps is written as is; '+' is a plus there.
 		l, _ := vmesslink.Parse(link)
-		if name := strings.TrimSpace(strings.ReplaceAll(l.Name, ",", " ")); name != "" {
+		if name := strings.TrimSpace(dropUnsafeNameRunes(l.Name)); name != "" {
 			return name
 		}
 		return fmt.Sprintf("proxy-%d", idx)
@@ -794,12 +912,22 @@ func linkName(link string, idx int) string {
 	return fmt.Sprintf("proxy-%d", idx)
 }
 
-// Commas would break rule lines; spaces/pipes/emoji are fine as proxy names.
 // '+' means space in v2rayN-style remarks (url.Parse leaves it undecoded).
 func sanitizeName(s string) string {
-	s = strings.ReplaceAll(s, ",", " ")
-	s = strings.ReplaceAll(s, "+", " ")
-	return strings.TrimSpace(s)
+	return strings.TrimSpace(dropUnsafeNameRunes(strings.ReplaceAll(s, "+", " ")))
+}
+
+// A comma would break a rule line, and a nameserver names the proxy it
+// dials through in a URL fragment, where '&' and '=' are separators and '%'
+// an escape: with one of these the query dials plain or binds to an
+// interface of that name. Spaces, pipes and emoji are fine as proxy names.
+func dropUnsafeNameRunes(s string) string {
+	return strings.Map(func(r rune) rune {
+		if strings.ContainsRune(",&=%", r) {
+			return ' '
+		}
+		return r
+	}, s)
 }
 
 // mihomo requires unique proxy names.

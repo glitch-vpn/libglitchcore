@@ -43,7 +43,6 @@ func (mihomoEngine) Start(x *CoreController, req EngineStartRequest) int32 {
 type bridgeSetup struct {
 	forceProxy  bool // process->proxy rules need flows that always tunnel
 	forceDirect bool // process->direct rules need flows that meet the blocks, then go direct
-	hijackDNS   bool // fake-ip: mihomo's resolver answers the TUN's :53
 }
 
 func (mihomoEngine) Stop(x *CoreController) int32 { return x.HandleMihomoStop() }
@@ -339,7 +338,7 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 			dns.Mode = dnsconfig.ModeFakeIP
 		}
 		if len(dns.NormalizedServers("")) == 0 {
-			dns.Servers = []string{xrayDefaultDnsServer}
+			dns.Servers = []string{dnsconfig.DefaultResolver}
 		}
 		tin := &mihomoconfig.TunInbound{MTU: defaultTunMTU, DNS: dns}
 		if tun.fd >= 0 {

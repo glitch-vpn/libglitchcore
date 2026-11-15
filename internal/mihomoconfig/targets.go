@@ -53,11 +53,10 @@ func addNamedProxies(raw *config.RawConfig, poolNames []string, p routing.Profil
 		used[name] = true
 	}
 	addProxy := func(id, name, link string) (map[string]any, error) {
-		proxy, err := proxyFromLink(link, name)
+		proxy, err := proxyFromLink(link, name, resolvers)
 		if err != nil {
 			return nil, fmt.Errorf("target %q: %w", id, err)
 		}
-		resolveInsideTunnel(proxy, resolvers)
 		raw.Proxy = append(raw.Proxy, proxy)
 		return proxy, nil
 	}
