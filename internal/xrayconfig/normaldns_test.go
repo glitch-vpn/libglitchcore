@@ -32,11 +32,15 @@ func TestApplyDNS_NormalModeInterceptsAppQueries(t *testing.T) {
 	wantServers(t, cfg, "1.1.1.1#"+dnsDirectTag+"[domain:ru]", "1.1.1.1")
 	wantModuleQueryRules(t, cfg, before)
 
-	// Direct-all: the direct resolvers answer by default, and the proxied
-	// names' copies of the general resolver keep the proxied path.
+	// Direct-all: the direct resolvers answer by default and the general ones
+	// behind them, both direct; the proxied names' copies of the general
+	// resolver keep the proxied path.
 	directAll := RoutingProfile{Mode: ModeDirectAll, Tiers: []routing.Tier{{Proxy: []string{"domain:youtube.com"}}}}
 	cfg, before = appliedDNSConfig(t, directAll, dnsconfig.Config{Servers: []string{"1.1.1.1"}, DirectServers: []string{"77.88.8.8"}})
-	wantServers(t, cfg, "1.1.1.1[domain:youtube.com]", "77.88.8.8#"+dnsDirectTag, "1.1.1.1")
+	wantServers(t, cfg, "1.1.1.1[domain:youtube.com]", "77.88.8.8#"+dnsDirectTag, "1.1.1.1#"+dnsDirectTag)
+	wantModuleQueryRules(t, cfg, before)
+	cfg, before = appliedDNSConfig(t, directAll, dnsconfig.Config{Servers: []string{"1.1.1.1"}})
+	wantServers(t, cfg, "1.1.1.1[domain:youtube.com]", "1.1.1.1#"+dnsDirectTag)
 	wantModuleQueryRules(t, cfg, before)
 }
 

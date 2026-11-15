@@ -66,9 +66,10 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfi
 	nsList := general
 	switch {
 	case prof.ResolvedMode() == ModeDirectAll:
-		// Catch-all is direct: the direct resolvers answer by default.
+		// Catch-all is direct: the direct resolvers answer by default, the
+		// general ones behind them, and both leave direct.
 		proxyScoped := scopedCopies(general, tierDomains(prof, routing.TargetProxy))
-		nsList = append(append(proxyScoped, direct...), general...)
+		nsList = append(append(proxyScoped, direct...), taggedCopies(general, dnsDirectTag)...)
 	case len(direct) == 0:
 	default:
 		if domains := tierDomains(prof, routing.TargetDirect); len(domains) > 0 {
