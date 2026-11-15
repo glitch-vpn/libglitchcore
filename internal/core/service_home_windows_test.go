@@ -317,7 +317,14 @@ func TestServiceHome_StageRefusesAnOversizedGeoFile(t *testing.T) {
 
 func TestServiceHome_StageRefusesAPathOffALocalDrive(t *testing.T) {
 	home := testServiceHome(t)
-	for _, dir := range []string{`\localhost\c$\geo`, `\.\pipe\glitch-b0306-probe`, `\?\C:\geo`, `C:geo`} {
+	for _, dir := range []string{
+		`\\localhost\c$\geo`,
+		`\\.\pipe\glitch-b0306-probe`,
+		`\\?\C:\geo`,
+		`\\?\UNC\localhost\c$\geo`,
+		`C:geo`,
+		`\geo`,
+	} {
 		if _, err := home.stageSession(dir); err == nil || !strings.Contains(err.Error(), "local drive") {
 			t.Fatalf("%s must be refused before any open, got %v", dir, err)
 		}
