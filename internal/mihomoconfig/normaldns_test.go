@@ -148,6 +148,33 @@ func TestBuildConfig_NormalModeQueriesTravelWithTheirFlows(t *testing.T) {
 	}
 }
 
+// Fake-ip answers the app from the pool; the upstream queries left - the
+// filter's names, the target's address - stay plain, and mihomo's own filter
+// gives way to the caller's, empty included.
+func TestBuildConfig_FakeIPLeavesUpstreamPlain(t *testing.T) {
+	for name, in := range map[string]Inbound{
+		"tun":    {Tun: &TunInbound{FileDescriptor: 42, DNS: dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}}},
+		"bridge": {Bridge: true, DNS: dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}},
+	} {
+		raw, _, err := buildRaw([]string{namedLinkThr}, in, Options{}, routing.Profile{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(raw.DNS.FakeIPFilter) != 0 {
+			t.Fatalf("%s: fake-ip-filter = %v, want none", name, raw.DNS.FakeIPFilter)
+		}
+		if raw.DNS.NameServerPolicy != nil || len(raw.DNS.ProxyServerNameserver) != 0 {
+			t.Fatalf("%s: fake-ip mode carries a policy or a proxy-server resolver: %+v", name, raw.DNS)
+		}
+		cfg, err := BuildConfig([]string{namedLinkThr}, in, Options{}, routing.Profile{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		wantDials(t, name+" nameserver", cfg.DNS.NameServer, []string{"1.1.1.1:53"}, "")
+		wantDials(t, name+" default-nameserver", cfg.DNS.DefaultNameserver, []string{"1.1.1.1:53"}, "")
+	}
+}
+
 // A nameserver names the proxy it dials through in a URL fragment, where
 // '&' and '=' separate and '%' escapes: a remark holding one would make the
 // query dial plain, or bind it to an interface of that name.

@@ -591,6 +591,7 @@ func balancerGroup(name string, members []string, strategy, probe string) (map[s
 // mihomo parses tls://, https://, quic://, tcp:// and plain natively.
 func applyAnsweredDNS(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Profile, target, fakeRange string) {
 	raw.DNS.Enable = true
+	raw.DNS.FakeIPFilter = dns.NormalizedFilter()
 	direct := dns.NormalizedDirectServers()
 	if len(direct) > 0 {
 		raw.DNS.DirectNameServer = direct
@@ -603,9 +604,6 @@ func applyAnsweredDNS(raw *config.RawConfig, dns dnsconfig.Config, prof routing.
 	}
 	raw.DNS.EnhancedMode = C.DNSFakeIP
 	raw.DNS.FakeIPRange = fakeRange
-	if filter := dns.NormalizedFilter(); len(filter) > 0 {
-		raw.DNS.FakeIPFilter = filter
-	}
 	raw.DNS.NameServer = dns.NormalizedServers(dnsconfig.DefaultResolver)
 }
 
