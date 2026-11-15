@@ -1,9 +1,13 @@
 package core
 
 import (
+	"errors"
+	"fmt"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof" // registers /debug/pprof handlers on DefaultServeMux
+	"net/netip"
 	"os"
 	"runtime"
 	"sync"
@@ -21,6 +25,10 @@ func maybeStartPprof() {
 	if addr == "" {
 		return
 	}
+	if err := checkPprofListenAddr(addr); err != nil {
+		logfmt.Errorf("[pprof] GLITCH_PPROF_ADDR: %v", err)
+		return
+	}
 	pprofOnce.Do(func() {
 		runtime.SetBlockProfileRate(1)
 		runtime.SetMutexProfileFraction(1)
@@ -31,4 +39,24 @@ func maybeStartPprof() {
 			}
 		}()
 	})
+}
+
+// checkPprofListenAddr accepts a loopback host:port only: the profiler serves
+// heap and goroutine dumps of the engine's process to whoever reaches it.
+func checkPprofListenAddr(addr string) error {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return err
+	}
+	if host == "localhost" {
+		return nil
+	}
+	ip, err := netip.ParseAddr(host)
+	if err != nil {
+		return errors.New("host must be localhost or a loopback IP")
+	}
+	if !ip.IsLoopback() {
+		return fmt.Errorf("%s is not a loopback address", ip)
+	}
+	return nil
 }
