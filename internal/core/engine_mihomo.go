@@ -481,10 +481,13 @@ const mihomoTeardownConfig = "log-level: silent"
 
 // Safe under coreMutex - no controller re-entry.
 func mihomoTeardown() {
+	// The listeners and the TUN close first, so the resolver stands until no
+	// packet can arrive: a query between the two would otherwise be answered
+	// by mihomo's system client, plain.
+	executor.Shutdown()
 	if empty, err := mihomoCfg.Parse([]byte(mihomoTeardownConfig)); err == nil {
 		executor.ApplyConfig(empty, true)
 	}
-	executor.Shutdown()
 	// mihomo's tunnel outlives the session and keeps each flow until its own
 	// timeout; a stopped session ends the flows it opened.
 	statistic.DefaultManager.Range(func(t statistic.Tracker) bool {
