@@ -3,6 +3,7 @@
 package core
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -220,6 +221,26 @@ func TestServiceHome_StageRewritesTheRequestToTheSession(t *testing.T) {
 	}
 	if rel, err := filepath.Rel(home.root, req.Opts["geoAssetsDir"]); err != nil || !filepath.IsLocal(rel) {
 		t.Fatalf("the request still names %q", req.Opts["geoAssetsDir"])
+	}
+}
+
+func TestServiceDispatch_EngineStart_RefusesAProxyPortWithoutCredentials(t *testing.T) {
+	Initialize()
+	testServiceHome(t)
+	for name, opts := range map[string]map[string]string{
+		"none":         {"proxyPort": "1080"},
+		"user only":    {"proxyPort": "1080", "proxyUser": "u"},
+		"blank secret": {"proxyPort": "1080", "proxyUser": "u", "proxyPass": " "},
+	} {
+		req, _ := json.Marshal(EngineStartRequest{Config: "vless://b831381d-6324-4d53-ad4f-8cda48b30811@127.0.0.1:1?security=none&type=tcp", Opts: opts})
+		payload, _ := json.Marshal(map[string]any{"engineId": "xray", "request": string(req)})
+		resp := dispatchCommand(pipeCommand{Action: "engine_start", Payload: payload})
+		if resp.OK || resp.Error != proxyWithoutCredentialsReply {
+			t.Fatalf("%s: got %+v", name, resp)
+		}
+		if globalController.engineIsRunning("xray") == glitchCoreResultSuccess {
+			t.Fatalf("%s: the engine runs", name)
+		}
 	}
 }
 

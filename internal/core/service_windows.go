@@ -691,6 +691,9 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		if err := json.Unmarshal([]byte(payload.Request), &req); err != nil {
 			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid request: %v", err)}
 		}
+		if proxyWithoutCredentials(req) {
+			return pipeResponse{OK: false, Error: proxyWithoutCredentialsReply}
+		}
 		if refusal := stageGeoAssets(&req); refusal != "" {
 			return pipeResponse{OK: false, Error: refusal}
 		}

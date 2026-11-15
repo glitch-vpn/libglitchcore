@@ -182,4 +182,6 @@ somebody else made it first. `geoAssetsDir` is only read there: the service
 copies `geoip.dat` and `geosite.dat` into a folder of each start's own, where
 mihomo also keeps its home, and refuses a folder that lacks either file, is
 off a local drive (`X:\...`), is reached through a junction or a symlink, or
-holds a file over 256 MiB.
+holds a file over 256 MiB. A start that names `proxyPort`
+without `proxyUser` and `proxyPass` is refused by the service too; the
+library never sends it one.

@@ -21,8 +21,9 @@ import (
 const serviceHomeSDDL = "D:P(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)"
 
 const (
-	serviceHomeUnavailableReply = "the service's data folder is not its own"
-	geoAssetsRefusedReply       = "the geo assets folder cannot be read as a plain folder"
+	serviceHomeUnavailableReply  = "the service's data folder is not its own"
+	geoAssetsRefusedReply        = "the geo assets folder cannot be read as a plain folder"
+	proxyWithoutCredentialsReply = "a proxy port needs proxyUser and proxyPass"
 )
 
 const serviceSessionsFolder = "sessions"
@@ -310,4 +311,11 @@ func stageGeoAssets(req *EngineStartRequest) (refusal string) {
 	}
 	req.Opts["geoAssetsDir"] = session
 	return ""
+}
+
+// proxyWithoutCredentials is true of a start that would bind a loopback
+// inbound every local account could use.
+func proxyWithoutCredentials(req EngineStartRequest) bool {
+	return proxyPortFromOpts(req.Opts) > 0 &&
+		(strings.TrimSpace(req.Opts["proxyUser"]) == "" || strings.TrimSpace(req.Opts["proxyPass"]) == "")
 }
