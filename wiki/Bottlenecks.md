@@ -60,21 +60,28 @@ set by the app process would not.
   `full:` and `geosite:` entries), so a direct list of only
   `geoip:`/CIDR/`process:` entries leaves nothing to scope and the resolvers
   are ignored (xray logs it). In `direct-all` the direct resolvers become the
-  default and the general list is scoped to the explicit proxy rules. With
-  fake-ip on, mihomo answers A and AAAA from the pool and sends the rest
-  upstream the same way: the filter's names, and every other record type. xray
-  resolves the filter's names through the proxy; its module otherwise looks a
-  name up only to dial it direct (`asis`, or `direct-all`), so the direct
-  resolvers answer those lookups, the general ones behind them, and both leave
-  direct. Each of xray's resolvers sends its queries under an inbound tag of
-  its own, so a direct resolver that is also a general one is told
-  apart. On mihomo a direct dial resolves its name through `direct-nameserver`
-  - the direct resolvers, or the general ones plain when none are named: a
-  direct flow is seen on the way anyway - and a resolver given by name is
-  found through the session's resolvers that are addresses
-  (`default-nameserver`), not mihomo's own four.
-  A server's own hostname is resolved by the system resolver, from the device,
-  on both engines: it has to be reached before anything can travel through it.
+  default, the general list answers direct behind them, and a copy of the
+  general list is scoped to the explicit proxy rules. With fake-ip on, mihomo
+  answers A and AAAA from the pool and sends the rest upstream the same way:
+  the filter's names, and every other record type. xray answers no other
+  record type under fake-ip (TXT, MX, HTTPS get an empty NOERROR); it
+  resolves the filter's names through the proxy, and its module otherwise
+  looks a name up only to dial it direct (`asis`, or `direct-all`), so the
+  direct resolvers answer those lookups, the general ones behind them, and
+  both leave direct. Each of xray's resolvers sends its queries under an
+  inbound tag of its own, ahead of the tiers: a tier holding a resolver's
+  address does not route its queries, a direct resolver that is also a general
+  one is told apart, and a resolver on the local networks is reached direct
+  by either. On mihomo a direct dial resolves its name through
+  `direct-nameserver` - the direct resolvers, or the general ones plain when
+  none are named: a direct flow is seen on the way anyway - and a resolver
+  given by name is found through the session's resolvers that are addresses
+  (`default-nameserver`), not mihomo's own four. A direct app's names do
+  reach the proxy on both engines where a lookup precedes the route: xray's
+  router lookups under `ipifnonmatch`/`ipondemand` in `proxy-all`, and
+  mihomo's lookup for an address block a tier holds. A server's own hostname
+  is resolved by the system resolver, from the device, on both engines: it
+  has to be reached before anything can travel through it.
 * **A WireGuard or AmneziaWG outbound resolves inside its tunnel** with the
   session's resolvers as its own. That outbound takes no bootstrap resolvers,
   so a resolver given by name (`https://dns.google/dns-query`) has its name
