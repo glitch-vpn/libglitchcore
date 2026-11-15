@@ -36,7 +36,8 @@ func openMihomoDialer(link string, _ bool) (dialFunc, func(), error) {
 		if err != nil {
 			return nil, fmt.Errorf("invalid port %q: %w", portStr, err)
 		}
-		// Host (not a pre-resolved IP): mihomo's proxy resolves it remotely.
+		// Host, not a pre-resolved IP: the proxy sends it to its server, or a
+		// WireGuard one looks it up inside its tunnel (ProxyMapFromLink).
 		md := &C.Metadata{NetWork: C.TCP, Host: host, DstPort: uint16(port)}
 		return proxy.DialContext(dialCtx, md)
 	}

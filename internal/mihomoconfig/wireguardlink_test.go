@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 )
@@ -210,5 +211,55 @@ func TestWireGuardConfig_RefusesDuplicatePublicKeys(t *testing.T) {
 		"[Peer]\nPublicKey = " + wgPublicKey + "\nEndpoint = 198.51.100.9:2408\nAllowedIPs = 0.0.0.0/0\n"
 	if _, err := ProxyMapFromLink(ini); err == nil {
 		t.Error("two peers with one PublicKey: want an error")
+	}
+}
+
+// A WireGuard outbound looks its flows' names up itself, so it carries the
+// session's resolvers and asks them inside its tunnel: the pool's proxy, a
+// route's target and the pinger's probe alike.
+func TestWireGuardConfig_ResolvesNamesInsideTheTunnel(t *testing.T) {
+	wg := "wireguard://" + url.QueryEscape(wgPrivateKey) + "@203.0.113.7:2408?publickey=" + url.QueryEscape(wgPublicKey) + "&address=172.16.0.2/32"
+	wantResolvers := func(t *testing.T, p map[string]any, want []string) {
+		t.Helper()
+		if p["remote-dns-resolve"] != true || !reflect.DeepEqual(p["dns"], want) {
+			t.Fatalf("remote-dns-resolve = %v, dns = %v, want true and %v", p["remote-dns-resolve"], p["dns"], want)
+		}
+	}
+	servers := []string{"10.0.0.53", "tls://9.9.9.9"}
+	for name, in := range map[string]Inbound{
+		"tun":    {Tun: &TunInbound{FileDescriptor: 42, DNS: dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: servers}}},
+		"bridge": {Bridge: true, DNS: dnsconfig.Config{Mode: dnsconfig.ModeNormal, Servers: servers}},
+	} {
+		raw, _, err := buildRaw([]string{wg}, in, Options{}, routing.Profile{})
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		wantResolvers(t, raw.Proxy[0], servers)
+	}
+
+	// No resolver named: the default one, still inside the tunnel.
+	raw, _, err := buildRaw([]string{wg}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResolvers(t, raw.Proxy[0], []string{defaultResolver})
+
+	prof := routing.Profile{
+		Tiers:   []routing.Tier{{Routes: []routing.Route{{Match: []string{"domain:example.com"}, To: "wg"}}}},
+		Targets: &routing.Targets{Version: 1, Servers: []routing.TargetServer{{ID: "wg", Link: wg}}},
+	}
+	raw, _, err = buildRaw([]string{namedLinkOne}, Inbound{Bridge: true, DNS: dnsconfig.Config{Servers: servers}}, Options{}, prof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResolvers(t, proxyNamed(t, raw.Proxy, serverNamePrefix+"wg"), servers)
+
+	p, err := ProxyMapFromLink(wg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantResolvers(t, p, []string{defaultResolver})
+	if _, err := BuildConfig([]string{wg}, Inbound{Bridge: true, DNS: dnsconfig.Config{Servers: servers}}, Options{}, routing.Profile{}); err != nil {
+		t.Fatalf("mihomo refuses the proxy: %v", err)
 	}
 }

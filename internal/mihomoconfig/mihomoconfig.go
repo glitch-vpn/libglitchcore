@@ -39,6 +39,9 @@ const (
 	// Bridge-path pool: clear of the wireguard/Wintun TUN's own 198.18.0.1, yet
 	// still inside its 128.0.0.0/1 split-default so fake IPs route in.
 	fakeIPRangeBridge = "198.19.0.0/16"
+
+	// The resolver a session or a probe asks when the caller named none.
+	defaultResolver = "1.1.1.1"
 )
 
 // TunInbound: Android adopts a VpnService fd; desktop creates the adapter.
@@ -213,6 +216,7 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 		applyHosts(raw, in.Tun.DNS)
 	}
 
+	resolvers := in.resolvers()
 	names := ProxyNames(links)
 	ni := 0
 	for i, link := range links {
@@ -226,6 +230,7 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 			return nil, nil, fmt.Errorf("link %d: %w", i, err)
 		}
 		applyProxyFingerprint(proxy, opts.Fingerprint)
+		resolveInsideTunnel(proxy, resolvers)
 		raw.Proxy = append(raw.Proxy, proxy)
 	}
 	if len(names) == 0 {
@@ -240,7 +245,7 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 		}
 		raw.ProxyGroup = []map[string]any{group}
 	}
-	named, err := addNamedProxies(raw, names, prof, opts)
+	named, err := addNamedProxies(raw, names, prof, opts, resolvers)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -585,7 +590,7 @@ func applyBridgeDNS(raw *config.RawConfig, dns dnsconfig.Config) {
 	if filter := dns.NormalizedFilter(); len(filter) > 0 {
 		raw.DNS.FakeIPFilter = filter
 	}
-	raw.DNS.NameServer = dns.NormalizedServers("1.1.1.1")
+	raw.DNS.NameServer = dns.NormalizedServers(defaultResolver)
 	if direct := dns.NormalizedDirectServers(); len(direct) > 0 {
 		raw.DNS.DirectNameServer = direct
 	}
@@ -668,9 +673,38 @@ func applyProxyFingerprint(proxy map[string]any, fp string) {
 	}
 }
 
-// For the pinger's throwaway adapter.
+// For the pinger's throwaway adapter, which has no session to take resolvers
+// from: a WireGuard probe resolves its names through the default resolver,
+// inside the tunnel.
 func ProxyMapFromLink(link string) (map[string]any, error) {
-	return proxyFromLink(strings.TrimSpace(link), "probe")
+	proxy, err := proxyFromLink(strings.TrimSpace(link), "probe")
+	if err != nil {
+		return nil, err
+	}
+	resolveInsideTunnel(proxy, []string{defaultResolver})
+	return proxy, nil
+}
+
+// resolvers is what an outbound asks when it has to look a flow's name up
+// itself.
+func (in Inbound) resolvers() []string {
+	dns := in.DNS
+	if in.Tun != nil {
+		dns = in.Tun.DNS
+	}
+	return dns.NormalizedServers(defaultResolver)
+}
+
+// resolveInsideTunnel keeps a WireGuard outbound's lookups inside its tunnel.
+// Any other outbound sends the name to its server; a WireGuard one has to
+// find the address itself, and without resolvers of its own it asks mihomo's
+// default resolver, which dials from the device's own address.
+func resolveInsideTunnel(proxy map[string]any, resolvers []string) {
+	if proxy["type"] != "wireguard" {
+		return
+	}
+	proxy["remote-dns-resolve"] = true
+	proxy["dns"] = resolvers
 }
 
 func proxyFromLink(link, name string) (map[string]any, error) {

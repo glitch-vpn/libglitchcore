@@ -33,7 +33,7 @@ func freeName(base string, used map[string]bool) string {
 // chain's hop after the first dials through the one before it with
 // dialer-proxy, and mihomo's parser refuses a hop whose dialer is missing or
 // that closes a cycle. A group balances with the session's strategy.
-func addNamedProxies(raw *config.RawConfig, poolNames []string, p routing.Profile, opts Options) (map[string]string, error) {
+func addNamedProxies(raw *config.RawConfig, poolNames []string, p routing.Profile, opts Options, resolvers []string) (map[string]string, error) {
 	var ids []string
 	for _, tier := range p.Tiers {
 		for _, r := range tier.Routes {
@@ -57,6 +57,7 @@ func addNamedProxies(raw *config.RawConfig, poolNames []string, p routing.Profil
 		if err != nil {
 			return nil, fmt.Errorf("target %q: %w", id, err)
 		}
+		resolveInsideTunnel(proxy, resolvers)
 		raw.Proxy = append(raw.Proxy, proxy)
 		return proxy, nil
 	}
