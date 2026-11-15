@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/adapter"
+	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/hub/executor"
 	mihomoLog "github.com/metacubex/mihomo/log"
 	D "github.com/miekg/dns"
@@ -642,5 +644,45 @@ func TestMihomoBridge_ProcessDirectTCPFlowNeverDialsAnAddressItDidNotCheck(t *te
 	directFlowReaches(t, direct, &net.TCPAddr{IP: fake, Port: port})
 	if n := blocked.Load(); n != 0 {
 		t.Errorf("the blocked address took %d connections", n)
+	}
+}
+
+// A name mihomo's resolver maps an address to is not given back to mihomo
+// with that address: the flow is dialed at the address that passed the
+// blocks, and no lookup of the name can find another.
+func TestMihomoBridge_ProcessDirectTCPFlowToAMappedAddressDialsTheCheckedAddress(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	var lookups atomic.Int32
+	answers := []net.IP{net.IPv4(127, 0, 0, 6), net.IPv4(127, 0, 0, 5)}
+	server := scriptedResolver(t, net.IPv4(127, 0, 0, 1), func(name string, qtype uint16) ([]D.RR, time.Duration) {
+		if name != "mapped.test" || qtype != D.TypeA {
+			return nil, 0
+		}
+		ip := answers[int(lookups.Add(1)-1)%len(answers)]
+		return []D.RR{&D.A{Hdr: D.RR_Header{Name: name + ".", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 0}, A: ip.To4()}}, 0
+	})
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dnsconfig.Config{Servers: []string{server}}, socksRelay(t))
+	port := echoAt(t, "127.0.0.6", 0)
+	blocked := connectionsAt(t, "127.0.0.5", port)
+	fake := fakeIPFor(t, "mapped.test")
+	resolver.InsertHostByIP(netip.MustParseAddr("127.0.0.6"), "mapped.test")
+	lookups.Store(0)
+	if !directFlowReaches(t, direct, &net.TCPAddr{IP: fake, Port: port}) {
+		t.Error("the flow was not dialed at the address that passed the blocks")
+	}
+	if n := blocked.Load(); n != 0 {
+		t.Errorf("the blocked address took %d connections", n)
+	}
+}
+
+// A name's addresses are tried in order, as DIRECT tries them: the flow
+// reaches the second when the first does not answer.
+func TestMihomoBridge_ProcessDirectTCPFlowTriesTheNextCheckedAddress(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	dns := dnsconfig.Config{Servers: []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, map[string][]net.IP{"second.test": {net.IPv4(127, 0, 0, 7), net.IPv4(127, 0, 0, 6)}})}}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRelay(t))
+	port := echoAt(t, "127.0.0.6", 0)
+	if !directFlowReachesName(t, direct, "second.test", port) {
+		t.Error("the flow did not reach the second address when the first refused it")
 	}
 }

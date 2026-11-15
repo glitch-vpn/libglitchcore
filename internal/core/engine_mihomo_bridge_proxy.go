@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/netip"
 	"sync/atomic"
+	"time"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 	N "github.com/metacubex/mihomo/common/net"
@@ -17,6 +18,7 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/socks5"
 	mihomoTunnel "github.com/metacubex/mihomo/tunnel"
+	"github.com/metacubex/mihomo/tunnel/statistic"
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 )
@@ -52,31 +54,35 @@ type mihomoBridgeProxy struct {
 	// and a read of the package's variables could meet that write.
 	hostMapper     resolver.Enhancer
 	directResolver resolver.Resolver
+	// direct is mihomo's DIRECT outbound, dialing the checked addresses of a
+	// named flow here, with the dialer options (interface, protect) it holds.
+	direct C.Proxy
 }
 
 // destination is what the flow is dialed at: dst, or, with the blocks checked
-// here and dst standing for a name, the name and the address that passed them.
-func (p *mihomoBridgeProxy) destination(ctx context.Context, dst netip.Addr) (host string, ip netip.Addr, err error) {
+// here and dst standing for a name, the name and every address that passed
+// them, in the order the direct resolvers gave them.
+func (p *mihomoBridgeProxy) destination(ctx context.Context, dst netip.Addr) (host string, ips []netip.Addr, err error) {
 	if p.directBlocks == nil {
-		return "", dst, nil
+		return "", []netip.Addr{dst}, nil
 	}
 	if p.hostMapper == nil {
-		return "", dst, nil
+		return "", []netip.Addr{dst}, nil
 	}
 	host, ok := p.hostMapper.FindHostByIP(dst)
 	if !ok {
 		if p.hostMapper.IsFakeIP(dst) {
-			return "", netip.Addr{}, errFakeRecordMissing
+			return "", nil, errFakeRecordMissing
 		}
-		return "", dst, nil
+		return "", []netip.Addr{dst}, nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, resolver.DefaultDNSTimeout)
 	defer cancel()
 	addresses, err := p.directAddresses(ctx, host)
 	if err != nil {
-		return "", netip.Addr{}, err
+		return "", nil, err
 	}
-	return host, addresses[0], nil
+	return host, addresses, nil
 }
 
 // directAddresses walks the blocks in order: a name rule against host, an
@@ -139,13 +145,16 @@ func (p *mihomoBridgeProxy) DialContext(ctx context.Context, m *M.Metadata) (net
 		go func() { _ = resolver.RelayDnsConn(context.Background(), engine, resolver.DefaultDnsReadTimeout) }()
 		return local, nil
 	}
-	_, dstIP, err := p.destination(ctx, m.DstIP)
+	host, addresses, err := p.destination(ctx, m.DstIP)
 	if err != nil {
 		return nil, err
 	}
 	// A lookup may have waited through the session's end.
 	if p.x.sessionGen.Load() != p.mark {
 		return nil, errSessionEnded
+	}
+	if host != "" {
+		return p.dialChecked(ctx, m, host, addresses)
 	}
 	local, engine := bridgePipe()
 	metadata := &C.Metadata{
@@ -154,11 +163,57 @@ func (p *mihomoBridgeProxy) DialContext(ctx context.Context, m *M.Metadata) (net
 		InName:  p.inName,
 		SrcIP:   m.SrcIP,
 		SrcPort: m.SrcPort,
-		DstIP:   dstIP,
+		DstIP:   addresses[0],
 		DstPort: m.DstPort,
 	}
 	go mihomoTunnel.Tunnel.HandleTCPConn(engine, metadata)
 	return local, nil
+}
+
+// dialChecked dials a named flow at the addresses that passed the blocks, one
+// after another until one answers, through DIRECT itself: handed to mihomo's
+// tunnel, a name is looked up again and an address is mapped back to one.
+func (p *mihomoBridgeProxy) dialChecked(ctx context.Context, m *M.Metadata, host string, addresses []netip.Addr) (net.Conn, error) {
+	if p.direct == nil {
+		return nil, errDirectNameUnresolved
+	}
+	ctx, cancel := context.WithTimeout(ctx, C.DefaultTCPTimeout)
+	defer cancel()
+	attempt := C.DefaultTCPTimeout / time.Duration(len(addresses))
+	var dialErr error
+	for _, address := range addresses {
+		if p.x.sessionGen.Load() != p.mark {
+			return nil, errSessionEnded
+		}
+		metadata := &C.Metadata{
+			NetWork: C.TCP,
+			Type:    C.TUN,
+			InName:  p.inName,
+			SrcIP:   m.SrcIP,
+			SrcPort: m.SrcPort,
+			DstIP:   address,
+			DstPort: m.DstPort,
+		}
+		attemptCtx, cancelAttempt := context.WithTimeout(ctx, attempt)
+		conn, err := p.direct.DialContext(attemptCtx, metadata)
+		cancelAttempt()
+		if err != nil {
+			dialErr = err
+			continue
+		}
+		if p.x.sessionGen.Load() != p.mark {
+			_ = conn.Close()
+			return nil, errSessionEnded
+		}
+		metadata.Host = host
+		tracked := statistic.NewTCPTracker(conn, statistic.DefaultManager, metadata, nil, 0, 0, true)
+		// The inbound the flow was routed by; the tunnel itself names its
+		// force-direct sub-rule.
+		tracked.TrackerInfo.Rule = C.InName.String()
+		tracked.TrackerInfo.RulePayload = p.inName
+		return tracked, nil
+	}
+	return nil, dialErr
 }
 
 var mihomoBridgeFlowID atomic.Uint64
@@ -186,11 +241,11 @@ func (p *mihomoBridgeProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 		}, nil)
 		return flow, nil
 	}
-	host, dstIP, err := p.destination(context.Background(), dst.Addr())
+	host, addresses, err := p.destination(context.Background(), dst.Addr())
 	if err != nil {
 		return nil, err
 	}
-	dialed := netip.AddrPortFrom(dstIP, dst.Port())
+	dialed := netip.AddrPortFrom(addresses[0], dst.Port())
 	// mihomo keys its UDP NAT on the source address's text, and tun2socks
 	// hands over one flow per destination: a per-flow key keeps two flows
 	// from one app port apart, while the address underneath stays the app's.

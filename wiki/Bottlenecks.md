@@ -143,10 +143,11 @@ sends the system resolver, which answer with fake IPs. On mihomo an address
 block meets a name at every address DIRECT could dial it at: the bridge
 resolves the name through the direct resolvers before the engine sees the
 flow, checks each address against the blocks, and refuses the flow when one
-is blocked or the name cannot be answered. A flow the bridge lets through is
-handed to the engine with the address that passed, so a TCP flow
-and a UDP flow both dial that address and no other lookup can change it.
-Domain and IP matchers honour tier order normally.
+is blocked or the name cannot be answered. A TCP flow to such a name is dialed
+by the bridge through mihomo's DIRECT outbound, at the addresses that passed,
+in the order the resolvers gave them until one answers; a UDP flow is handed
+to the engine with the first of them. Domain and IP matchers honour tier order
+normally.
 
 ## Windows
 
