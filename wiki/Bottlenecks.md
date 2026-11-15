@@ -68,6 +68,11 @@ set by the app process would not.
   travels through the proxy. On mihomo a resolver given by name is found
   through the session's resolvers that are addresses (`default-nameserver`),
   not mihomo's own four.
+* **A WireGuard or AmneziaWG outbound resolves inside its tunnel** with the
+  session's resolvers as its own. That outbound takes no bootstrap resolvers,
+  so a resolver given by name (`https://dns.google/dns-query`) has its name
+  looked up by the system resolver, from the device; a `hosts` entry for the
+  resolver's name avoids that lookup.
 * **A hosts entry opts its name out of fake-ip.** Static hosts are consulted
   before any nameserver, so the app gets the real address and domain-plane
   routing for that name depends on sniffing.

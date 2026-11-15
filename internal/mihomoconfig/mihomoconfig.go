@@ -840,7 +840,10 @@ func proxyFromLink(link, name string, resolvers []string) (map[string]any, error
 // resolveInsideTunnel keeps a WireGuard outbound's lookups inside its tunnel.
 // Any other outbound sends the name to its server; a WireGuard one has to
 // find the address itself, and without resolvers of its own it asks mihomo's
-// default resolver, which dials from the device's own address.
+// default resolver, which dials from the device's own address. The outbound
+// takes no bootstrap resolvers, so one of these given by name is found
+// through the system resolver, from the device, unless a hosts entry pins
+// it.
 func resolveInsideTunnel(proxy map[string]any, resolvers []string) {
 	if proxy["type"] != "wireguard" {
 		return
