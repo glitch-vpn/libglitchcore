@@ -90,32 +90,39 @@ func TestBuildConfig_NormalModeQueriesTravelWithTheirFlows(t *testing.T) {
 		wantDials(t, "policy "+domain, policyFor(t, cfg.DNS.NameServerPolicy, domain), general, "three")
 	}
 
-	// The tiers' order decides a name's query as it decides its flow: an
-	// earlier tier's proxied name under a later, broader direct rule keeps
-	// the target, and the other way round.
+	// The tiers' order decides a name's query as it decides its flow. mihomo
+	// answers from the deepest suffix listed, so a name under an earlier,
+	// broader rule is not listed at all: the broader rule's resolvers answer
+	// it, as its rule routes it.
 	for _, c := range []struct {
-		mode   string
-		tiers  []routing.Tier
-		first  string
-		second string
+		mode    string
+		tiers   []routing.Tier
+		through []string // per listed policy, in order: the target or ""
 	}{
-		{routing.ModeProxyAll, []routing.Tier{{Proxy: []string{"domain:vk.ru"}}, {Direct: []string{"domain:ru"}}}, "three", ""},
-		{routing.ModeProxyAll, []routing.Tier{{Direct: []string{"domain:vk.ru"}}, {Proxy: []string{"domain:ru"}}}, "", "three"},
-		{routing.ModeDirectAll, []routing.Tier{{Proxy: []string{"domain:vk.ru"}}, {Direct: []string{"domain:ru"}}}, "three", ""},
+		{routing.ModeProxyAll, []routing.Tier{{Proxy: []string{"domain:vk.ru"}}, {Direct: []string{"domain:ru"}}}, []string{"three", ""}},
+		{routing.ModeProxyAll, []routing.Tier{{Direct: []string{"domain:vk.ru"}}, {Proxy: []string{"domain:ru"}}}, []string{"", "three"}},
+		{routing.ModeDirectAll, []routing.Tier{{Proxy: []string{"domain:vk.ru"}}, {Direct: []string{"domain:ru"}}}, []string{"three", ""}},
+		{routing.ModeProxyAll, []routing.Tier{{Proxy: []string{"domain:ru"}}, {Direct: []string{"domain:vk.ru", "full:mail.ru", "full:bank.local"}}}, []string{"three", ""}},
+		{routing.ModeDirectAll, []routing.Tier{{Direct: []string{"domain:ru"}}, {Proxy: []string{"domain:vk.ru"}}}, []string{""}},
 	} {
-		cfg, err := BuildConfig([]string{namedLinkThr}, Inbound{Bridge: true, DNS: dns}, Options{Strategy: ""}, routing.Profile{Mode: c.mode, Tiers: c.tiers})
+		cfg, err := BuildConfig([]string{namedLinkThr}, Inbound{Bridge: true, DNS: dns}, Options{}, routing.Profile{Mode: c.mode, Tiers: c.tiers})
 		if err != nil {
 			t.Fatal(err)
 		}
-		if n := len(cfg.DNS.NameServerPolicy); n != 2 || cfg.DNS.NameServerPolicy[0].Domain != "+.vk.ru" || cfg.DNS.NameServerPolicy[1].Domain != "+.ru" {
-			t.Fatalf("%s %v: policies = %+v, want +.vk.ru then +.ru", c.mode, c.tiers, cfg.DNS.NameServerPolicy)
+		if len(cfg.DNS.NameServerPolicy) != len(c.through) {
+			t.Fatalf("%s %v: policies = %+v, want %d", c.mode, c.tiers, cfg.DNS.NameServerPolicy, len(c.through))
 		}
-		for i, through := range []string{c.first, c.second} {
+		for i, through := range c.through {
 			servers := general
 			if through == "" {
 				servers = direct
 			}
 			wantDials(t, c.mode+" policy "+cfg.DNS.NameServerPolicy[i].Domain, cfg.DNS.NameServerPolicy[i].NameServers, servers, through)
+		}
+		if c.tiers[0].Proxy != nil && c.tiers[0].Proxy[0] == "domain:ru" {
+			if cfg.DNS.NameServerPolicy[0].Domain != "+.ru" || len(cfg.DNS.NameServerPolicy) != 2 || cfg.DNS.NameServerPolicy[1].Domain != "bank.local" {
+				t.Fatalf("policies = %+v, want +.ru and bank.local only", cfg.DNS.NameServerPolicy)
+			}
 		}
 	}
 

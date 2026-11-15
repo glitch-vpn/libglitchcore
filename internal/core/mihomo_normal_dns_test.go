@@ -19,25 +19,32 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
-// With fake-ip off the bridge hands an app's query to mihomo's resolver, and
-// the resolver reaches its upstream through the proxy, never from the
-// device's own address.
-func TestMihomoBridge_NormalModeQueriesTravelThroughTheProxy(t *testing.T) {
-	skipWhereMihomoRaces(t)
+// bridgeNormalModeQuery sends one app query through the bridge with fake-ip
+// off: the general resolver sits behind a socks recorder standing in for the
+// target, the direct one on loopback, and each reports what reached it.
+func bridgeNormalModeQuery(t *testing.T, prof routing.Profile, withDirect bool, name string) (proxied, fromDevice <-chan string) {
+	t.Helper()
 	mihomoTestHome(t)
 	t.Cleanup(mihomoTeardown)
 
-	upstreamPort, err := loopbackport.Pick()
+	generalPort, err := loopbackport.Pick()
 	if err != nil {
 		t.Fatal(err)
 	}
-	fromDevice := make(chan string, 8)
-	listenDirect(t, net.IPv4(127, 0, 0, 1), upstreamPort, fromDevice)
-	proxied := make(chan string, 8)
-	socksPort := socksRecorder(t, proxied)
+	directPort, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	device := make(chan string, 8)
+	listenDirect(t, net.IPv4(127, 0, 0, 1), generalPort, device)
+	listenDirect(t, net.IPv4(127, 0, 0, 2), directPort, device)
+	seen := make(chan string, 8)
+	socksPort := socksRecorder(t, seen)
 
-	prof := routing.Profile{Mode: routing.ModeProxyAll}
-	dns := dnsconfig.Config{Mode: dnsconfig.ModeNormal, Servers: []string{"tcp://127.0.0.1:" + strconv.Itoa(upstreamPort)}}
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeNormal, Servers: []string{"tcp://127.0.0.1:" + strconv.Itoa(generalPort)}}
+	if withDirect {
+		dns.DirectServers = []string{"tcp://127.0.0.2:" + strconv.Itoa(directPort)}
+	}
 	in, _ := mihomoBridgeInbound(&dns, prof)
 	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink}, in, mihomoconfig.Options{}, prof)
 	if err != nil {
@@ -58,27 +65,59 @@ func TestMihomoBridge_NormalModeQueriesTravelThroughTheProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DialUDP: %v", err)
 	}
-	defer pc.Close()
+	t.Cleanup(func() { _ = pc.Close() })
 	q := new(D.Msg)
-	q.SetQuestion("outside.test.", D.TypeA)
+	q.SetQuestion(name+".", D.TypeA)
 	query, _ := q.Pack()
 	if _, err := pc.WriteTo(query, resolver); err != nil {
 		t.Fatal(err)
 	}
+	return seen, device
+}
 
+func requireQueryTravels(t *testing.T, proxied, fromDevice <-chan string, want string) {
+	t.Helper()
 	select {
 	case seen := <-proxied:
-		if seen != "proxy:127.0.0.1" {
-			t.Fatalf("the proxy carried %s, want the upstream resolver", seen)
+		if want != seen {
+			t.Fatalf("the proxy carried %s, want %s", seen, want)
 		}
 	case seen := <-fromDevice:
-		t.Fatalf("the upstream resolver was reached %s, from the device's own address", seen)
+		if want != seen {
+			t.Fatalf("%s was reached from the device's own address, want %s", seen, want)
+		}
 	case <-time.After(15 * time.Second):
-		t.Fatal("the query reached neither the proxy nor the resolver")
+		t.Fatal("the query reached neither the proxy nor a resolver")
 	}
 	select {
 	case seen := <-fromDevice:
-		t.Fatalf("the upstream resolver was reached %s, from the device's own address", seen)
+		t.Fatalf("%s was also reached from the device's own address", seen)
 	case <-time.After(time.Second):
 	}
+}
+
+// With fake-ip off the bridge hands an app's query to mihomo's resolver, and
+// the resolver reaches its upstream through the proxy, never from the
+// device's own address.
+func TestMihomoBridge_NormalModeQueriesTravelThroughTheProxy(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	proxied, fromDevice := bridgeNormalModeQuery(t, routing.Profile{Mode: routing.ModeProxyAll}, false, "outside.test")
+	requireQueryTravels(t, proxied, fromDevice, "proxy:127.0.0.1")
+}
+
+// A name under an earlier tier's broader proxied suffix is proxied by that
+// tier, and its query takes the proxied path too, though a later tier names
+// it direct: mihomo answers from the deepest suffix it is given, so the
+// narrower direct name is kept out of the policy.
+func TestMihomoBridge_NormalModeQueryFollowsTheEarlierTier(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	prof := routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Proxy: []string{"domain:ru"}}, {Direct: []string{"domain:vk.ru"}}}}
+	proxied, fromDevice := bridgeNormalModeQuery(t, prof, true, "vk.ru")
+	requireQueryTravels(t, proxied, fromDevice, "proxy:127.0.0.1")
+
+	// The other way round the direct name's rule comes first, and its query
+	// goes to the direct resolver.
+	prof = routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Direct: []string{"domain:vk.ru"}}, {Proxy: []string{"domain:ru"}}}}
+	proxied, fromDevice = bridgeNormalModeQuery(t, prof, true, "vk.ru")
+	requireQueryTravels(t, proxied, fromDevice, "direct:127.0.0.2")
 }

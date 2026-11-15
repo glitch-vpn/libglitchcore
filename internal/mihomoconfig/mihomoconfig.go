@@ -619,10 +619,12 @@ func (in Inbound) dns() dnsconfig.Config {
 // pool answers the apps and every query goes upstream. A query travels as its
 // flow would: through the target where the catch-all proxies, plain where it
 // is direct, and a name a tier sends the other way takes the other resolvers
-// by policy, in the tiers' order, so the first rule that matches a name
-// decides its query as it decides its flow. A direct name with no direct
-// resolvers named stays on the proxied path in proxy-all. The target's own
-// address resolves plain: that query cannot travel through it.
+// by policy. mihomo answers a name from its deepest suffix in the policy,
+// not the first listed, so a name under an earlier tier's broader suffix is
+// not listed: the earlier rule decides its query as it decides its flow. A
+// direct name with no direct resolvers named stays on the proxied path in
+// proxy-all. The target's own address resolves plain: that query cannot
+// travel through it.
 func routeQueries(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Profile, target string) {
 	general := dns.NormalizedServers(dnsconfig.DefaultResolver)
 	through := make([]string, len(general))
@@ -644,14 +646,18 @@ func routeQueries(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Prof
 		raw.DNS.NameServer = through
 	}
 	policy := orderedmap.New[string, any]()
+	var suffixes []string
 	for _, tier := range prof.Tiers {
 		for _, e := range tier.Entries() {
 			key, ok := policyKey(e)
 			if !ok {
 				continue
 			}
-			if _, set := policy.Get(key); set {
+			if _, set := policy.Get(key); set || underSuffix(key, suffixes) {
 				continue
+			}
+			if e.Kind == routing.KindDomainSuffix {
+				suffixes = append(suffixes, e.Value)
 			}
 			switch e.Target {
 			case routing.TargetDirect:
@@ -668,6 +674,21 @@ func routeQueries(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Prof
 	if policy.Len() > 0 {
 		raw.DNS.NameServerPolicy = policy
 	}
+}
+
+// underSuffix says whether a policy key names a domain under one of the
+// suffixes, or one of them.
+func underSuffix(key string, suffixes []string) bool {
+	name, ok := strings.CutPrefix(key, "+.")
+	if !ok {
+		name = key
+	}
+	for _, suffix := range suffixes {
+		if name == suffix || strings.HasSuffix(name, "."+suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // policyKey is an entry's name in mihomo's nameserver-policy form: a suffix as
