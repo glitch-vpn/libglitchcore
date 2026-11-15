@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net"
+	"net/netip"
 	"net/url"
 	"os"
 	"regexp"
@@ -629,6 +630,10 @@ func routeQueries(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Prof
 	general := dns.NormalizedServers(dnsconfig.DefaultResolver)
 	through := make([]string, len(general))
 	for i, server := range general {
+		// A bare IPv6 address needs its brackets once a fragment follows.
+		if ip, err := netip.ParseAddr(server); err == nil && !ip.Is4() {
+			server = "[" + server + "]"
+		}
 		through[i] = server + "#" + target
 	}
 	direct := dns.NormalizedDirectServers()

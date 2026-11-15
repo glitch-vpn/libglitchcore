@@ -202,3 +202,14 @@ func TestBuildConfig_ProxyNameIsSafeInANameserver(t *testing.T) {
 		wantDials(t, "nameserver", cfg.DNS.NameServer, []string{"1.1.1.1:53"}, name)
 	}
 }
+
+// A bare IPv6 resolver takes brackets before the proxy reference, as a URL
+// wants it.
+func TestBuildConfig_NormalModeBracketsABareIPv6Resolver(t *testing.T) {
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeNormal, Servers: []string{"2001:4860:4860::8888", "[2001:4860:4860::8844]:5353"}}
+	cfg, err := BuildConfig([]string{namedLinkThr}, Inbound{Bridge: true, DNS: dns}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDials(t, "nameserver", cfg.DNS.NameServer, []string{"[2001:4860:4860::8888]:53", "[2001:4860:4860::8844]:5353"}, "three")
+}
