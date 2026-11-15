@@ -125,7 +125,7 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 	log.Println("[tun2socks] started")
 
 	if runtime.GOOS == "windows" {
-		if err := configureTunV3("GlitchVPN", "", p.serverIPv4s, p.dnsServer); err != nil {
+		if err := configureTunV3("GlitchVPN", p.serverIPv4s, p.dnsServer, planTun(!p.routing.DisableIPv6, p.routing.LocalNetworks)); err != nil {
 			return fmt.Errorf("configure tun: %w", err)
 		}
 	}

@@ -2,7 +2,7 @@
 
 package core
 
-func configureTunV3(iface string, tunCIDR string, serverIPs []string, dnsServer string) error {
+func configureTunV3(iface string, serverIPs []string, dnsServer string, plan tunPlan) error {
 	return nil
 }
 

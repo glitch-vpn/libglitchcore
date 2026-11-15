@@ -17,33 +17,36 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
-const (
-	defaultTunCIDR = "198.18.0.1/32"
-	logPrefix      = "[WINDOWS][TUNCONFIG]"
-)
+const logPrefix = "[WINDOWS][TUNCONFIG]"
 
 var (
 	familyUnspec = winipcfg.AddressFamily(windows.AF_UNSPEC)
 	familyIPv4   = winipcfg.AddressFamily(windows.AF_INET)
+	familyIPv6   = winipcfg.AddressFamily(windows.AF_INET6)
 )
 
-// State that cleanupTun must reverse (assigned addresses, pinned routes, excludes).
 var (
-	lastPhyLUID       winipcfg.LUID
-	lastServerIPv4s   []netip.Addr
-	lastExclusionsSet bool
-	lastPhyIfIndex    uint32
+	lastPlan        tunPlan
+	lastPhyLUID     winipcfg.LUID
+	lastServerIPv4s []netip.Addr
 )
+
+func addressFamily(prefix netip.Prefix) winipcfg.AddressFamily {
+	if prefix.Addr().Is6() {
+		return familyIPv6
+	}
+	return familyIPv4
+}
 
 func setAddressWithRetry(luid winipcfg.LUID, pfx netip.Prefix) bool {
 	for i := 0; i < 20; i++ {
-		if err := luid.SetIPAddressesForFamily(familyIPv4, []netip.Prefix{pfx}); err == nil {
+		if err := luid.SetIPAddressesForFamily(addressFamily(pfx), []netip.Prefix{pfx}); err == nil {
 			return true
 		} else if err == windows.ERROR_NOT_FOUND {
 			time.Sleep(400 * time.Millisecond)
 			continue
 		} else {
-			logfmt.Errorf("%s SetIPAddressesForFamily: %v", logPrefix, err)
+			logfmt.Errorf("%s SetIPAddressesForFamily(%s): %v", logPrefix, pfx, err)
 			return false
 		}
 	}
@@ -166,16 +169,30 @@ func setDNS(tunIfIndex uint32, dnsAddr string) {
 	}
 }
 
-func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAddr string) error {
-	if tunCIDR == "" {
-		tunCIDR = defaultTunCIDR
-	}
-
-	tunPfx, err := netip.ParsePrefix(strings.TrimSpace(tunCIDR))
+// setInterfaceMetric pins one family's interface metric; automatic is the
+// way back on cleanup.
+func setInterfaceMetric(luid winipcfg.LUID, family winipcfg.AddressFamily, metric uint32, automatic bool) {
+	row, err := luid.IPInterface(family)
 	if err != nil {
-		return fmt.Errorf("%s: bad tunCIDR %q: %v", logPrefix, tunCIDR, err)
+		logfmt.Errorf("%s: IPInterface(family=%d): %v", logPrefix, family, err)
+		return
 	}
+	row.UseAutomaticMetric = automatic
+	row.Metric = metric
+	if err := row.Set(); err != nil {
+		logfmt.Errorf("%s: set interface metric (family=%d, metric=%d, automatic=%v): %v", logPrefix, family, metric, automatic, err)
+	}
+}
 
+func addRouteIgnoringExisting(luid winipcfg.LUID, destination netip.Prefix, nextHop netip.Addr, what string) {
+	if err := luid.AddRoute(destination, nextHop, 1); err != nil {
+		if !strings.Contains(strings.ToLower(err.Error()), "exists") {
+			logfmt.Errorf("%s route: add %s %s via %s failed: %v", logPrefix, what, destination, nextHop, err)
+		}
+	}
+}
+
+func configureTunV3(ifaceName string, serverHostsOrIPv4 []string, dnsAddr string, plan tunPlan) error {
 	var (
 		luidTun  winipcfg.LUID
 		ok       bool
@@ -188,8 +205,14 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
-		if assigned = setAddressWithRetry(luidTun, tunPfx); !assigned {
-			logfmt.Warnf("%s: failed to assign %s to LUID=%v (retry %d/%d)", logPrefix, tunPfx, luidTun, i+1, 50)
+		assigned = true
+		for _, address := range plan.Addresses {
+			if assigned = setAddressWithRetry(luidTun, address); !assigned {
+				logfmt.Warnf("%s: failed to assign %s to LUID=%v (retry %d/%d)", logPrefix, address, luidTun, i+1, 50)
+				break
+			}
+		}
+		if !assigned {
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -198,38 +221,22 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 	if !ok || !assigned {
 		return fmt.Errorf("%s: cannot setup TUN address on iface like %q", logPrefix, ifaceName)
 	}
+	lastPlan = plan
 
-	// For a /32 TUN use an on-link next hop (0.0.0.0); else the interface address.
-	var nextHop netip.Addr
-	if tunPfx.Bits() == 32 {
-		nextHop = netip.MustParseAddr("0.0.0.0")
-	} else {
-		nextHop = tunPfx.Addr()
+	for _, route := range plan.TunRoutes {
+		addRouteIgnoringExisting(luidTun, route, onLinkNextHop(route), "tun")
 	}
-	for _, cidr := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
-		pfx := netip.MustParsePrefix(cidr)
-		if err := luidTun.AddRoute(pfx, nextHop, 1); err != nil {
-			l := strings.ToLower(err.Error())
-			if !strings.Contains(l, "exists") {
-				logfmt.Errorf("%s route: add %s via %s failed: %v", logPrefix, cidr, nextHop, err)
-			}
-		}
-	}
+	setInterfaceMetric(luidTun, familyIPv4, plan.InterfaceMetric, false)
+	setInterfaceMetric(luidTun, familyIPv6, plan.InterfaceMetric, false)
 
-	// Exclude LAN/CGN ranges via the physical gateway so they bypass the TUN.
-	if gw, ifIdx, gwErr := defaultGateway(); gwErr == nil {
-		if phyLuid, luidErr := winipcfg.LUIDFromIndex(ifIdx); luidErr == nil {
-			for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"} {
-				pfx := netip.MustParsePrefix(cidr)
-				if err := phyLuid.AddRoute(pfx, gw, 1); err != nil {
-					if !strings.Contains(strings.ToLower(err.Error()), "exists") {
-						logfmt.Errorf("%s route: add exclude %s via %s(if=%d) failed: %v", logPrefix, cidr, gw, ifIdx, err)
-					}
+	if len(plan.BypassRoutes) > 0 {
+		if gw, ifIdx, gwErr := defaultGateway(); gwErr == nil {
+			if phyLuid, luidErr := winipcfg.LUIDFromIndex(ifIdx); luidErr == nil {
+				for _, route := range plan.BypassRoutes {
+					addRouteIgnoringExisting(phyLuid, route, gw, "bypass")
 				}
+				lastPhyLUID = phyLuid
 			}
-			lastPhyLUID = phyLuid
-			lastPhyIfIndex = ifIdx
-			lastExclusionsSet = true
 		}
 	}
 
@@ -273,16 +280,9 @@ func configureTunV3(ifaceName, tunCIDR string, serverHostsOrIPv4 []string, dnsAd
 
 		host := netip.PrefixFrom(serverIPv4Addr, 32)
 		// Remove any stale on-link route first (safe no-op).
-		_ = luidTun.DeleteRoute(host, netip.MustParseAddr("0.0.0.0"))
+		_ = luidTun.DeleteRoute(host, netip.IPv4Unspecified())
 		if phyLuid2, luidErr := winipcfg.LUIDFromIndex(gwIfIdx); luidErr == nil {
-			if err := phyLuid2.AddRoute(host, gw, 1); err != nil {
-				e := strings.ToLower(err.Error())
-				if strings.Contains(e, "exists") {
-					log.Printf("%s: host route already exists %s via %s(if=%d)", logPrefix, host, gw, gwIfIdx)
-				} else {
-					logfmt.Errorf("%s route: add host %s via %s(if=%d) failed: %v", logPrefix, host, gw, gwIfIdx, err)
-				}
-			}
+			addRouteIgnoringExisting(phyLuid2, host, gw, "server")
 			lastServerIPv4s = append(lastServerIPv4s, serverIPv4Addr)
 		}
 	}
@@ -343,15 +343,14 @@ func cleanupTun(ifaceName string) {
 		return
 	}
 
-	// Delete split defaults with both next-hop variants: on-link (0.0.0.0) for
-	// /32 setups, via 198.18.0.1 for the xray case.
-	for _, cidr := range []string{"0.0.0.0/1", "128.0.0.0/1"} {
-		pfx := netip.MustParsePrefix(cidr)
-		_ = luidTun.DeleteRoute(pfx, netip.MustParseAddr("0.0.0.0"))
-		_ = luidTun.DeleteRoute(pfx, netip.MustParseAddr("198.18.0.1"))
+	for _, route := range lastPlan.TunRoutes {
+		_ = luidTun.DeleteRoute(route, onLinkNextHop(route))
 	}
+	setInterfaceMetric(luidTun, familyIPv4, 0, true)
+	setInterfaceMetric(luidTun, familyIPv6, 0, true)
 
 	_ = luidTun.FlushIPAddresses(familyIPv4)
+	_ = luidTun.FlushIPAddresses(familyIPv6)
 	_ = luidTun.SetDNS(familyIPv4, nil, nil)
 
 	if len(lastServerIPv4s) > 0 {
@@ -365,14 +364,13 @@ func cleanupTun(ifaceName string) {
 		lastServerIPv4s = nil
 	}
 
-	if lastExclusionsSet && lastPhyLUID != 0 {
+	if len(lastPlan.BypassRoutes) > 0 && lastPhyLUID != 0 {
 		if gw, _, err := defaultGateway(); err == nil {
-			for _, cidr := range []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"} {
-				_ = lastPhyLUID.DeleteRoute(netip.MustParsePrefix(cidr), gw)
+			for _, route := range lastPlan.BypassRoutes {
+				_ = lastPhyLUID.DeleteRoute(route, gw)
 			}
 		}
-		lastExclusionsSet = false
 		lastPhyLUID = 0
-		lastPhyIfIndex = 0
 	}
+	lastPlan = tunPlan{}
 }
