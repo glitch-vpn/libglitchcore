@@ -2,6 +2,7 @@ package mihomoconfig
 
 import (
 	"encoding/base64"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -143,8 +144,9 @@ func TestBuildConfig_NormalModeQueriesTravelWithTheirFlows(t *testing.T) {
 	}
 	wantDials(t, "nameserver", cfg.DNS.NameServer, general, "")
 	wantDials(t, "policy +.youtube.com", policyFor(t, cfg.DNS.NameServerPolicy, "+.youtube.com"), general, "three")
-	// And in proxy-all, with no direct resolvers, a direct name has nowhere
-	// else to go: no policy, every query through the target.
+	// And in proxy-all, with no direct resolvers, a direct name's query has
+	// nowhere else to go: no policy, every query through the target. A direct
+	// dial still resolves its name plain, through the general resolvers.
 	cfg, err = BuildConfig([]string{namedLinkThr}, Inbound{Bridge: true, DNS: dns}, Options{}, proxyAll)
 	if err != nil {
 		t.Fatal(err)
@@ -153,15 +155,58 @@ func TestBuildConfig_NormalModeQueriesTravelWithTheirFlows(t *testing.T) {
 	if len(cfg.DNS.NameServerPolicy) != 0 {
 		t.Fatalf("policies = %+v, want none", cfg.DNS.NameServerPolicy)
 	}
+	wantDials(t, "direct-nameserver", cfg.DNS.DirectNameServer, general, "")
 }
 
-// Fake-ip answers the app from the pool; the upstream queries left - the
-// filter's names, the target's address - stay plain, and mihomo's own filter
-// gives way to the caller's, empty included.
-func TestBuildConfig_FakeIPLeavesUpstreamPlain(t *testing.T) {
+// Fake-ip answers the app's A and AAAA from the pool, and what still goes
+// upstream - the filter's names, every other record type - travels as its
+// flow would, as with fake-ip off: through the target where the catch-all
+// proxies, with a tier's direct names taking the direct resolvers. mihomo's
+// own filter gives way to the caller's, empty included.
+func TestBuildConfig_FakeIPUpstreamQueriesTravelWithTheirFlows(t *testing.T) {
+	general := []string{"10.0.0.53:53"}
+	direct := []string{"77.88.8.8:53"}
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"10.0.0.53"}, DirectServers: []string{"77.88.8.8"}, FakeIPFilter: []string{"outside.test"}}
+	proxyAll := routing.Profile{Tiers: []routing.Tier{{Direct: []string{"domain:ru"}}}}
 	for name, in := range map[string]Inbound{
-		"tun":    {Tun: &TunInbound{FileDescriptor: 42, DNS: dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}}},
-		"bridge": {Bridge: true, DNS: dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}},
+		"tun":    {Tun: &TunInbound{FileDescriptor: 42, DNS: dns}},
+		"bridge": {Bridge: true, DNS: dns},
+	} {
+		t.Run(name, func(t *testing.T) {
+			raw, _, err := buildRaw([]string{namedLinkThr}, in, Options{}, proxyAll)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw.DNS.EnhancedMode != C.DNSFakeIP || len(raw.DNS.FakeIPFilter) != 1 || raw.DNS.FakeIPFilter[0] != "outside.test" {
+				t.Fatalf("mode %s filter %v, want fake-ip with the caller's filter", raw.DNS.EnhancedMode, raw.DNS.FakeIPFilter)
+			}
+			cfg, err := BuildConfig([]string{namedLinkThr}, in, Options{}, proxyAll)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantDials(t, "nameserver", cfg.DNS.NameServer, general, "three")
+			wantDials(t, "proxy-server-nameserver", cfg.DNS.ProxyServerNameserver, general, "")
+			wantDials(t, "default-nameserver", cfg.DNS.DefaultNameserver, []string{"10.0.0.53:53", "77.88.8.8:53"}, "")
+			wantDials(t, "direct-nameserver", cfg.DNS.DirectNameServer, direct, "")
+			wantDials(t, "policy +.ru", policyFor(t, cfg.DNS.NameServerPolicy, "+.ru"), direct, "")
+			if n := len(cfg.DNS.NameServerPolicy); n != 1 {
+				t.Fatalf("policies = %+v, want the direct tier's name only", cfg.DNS.NameServerPolicy)
+			}
+		})
+	}
+
+	directAll := routing.Profile{Mode: routing.ModeDirectAll, Tiers: []routing.Tier{{Proxy: []string{"domain:youtube.com"}}}}
+	cfg, err := BuildConfig([]string{namedLinkThr}, Inbound{Bridge: true, DNS: dns}, Options{}, directAll)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantDials(t, "nameserver", cfg.DNS.NameServer, direct, "")
+	wantDials(t, "policy +.youtube.com", policyFor(t, cfg.DNS.NameServerPolicy, "+.youtube.com"), general, "three")
+
+	// No filter sent: none applies, not mihomo's own.
+	for name, in := range map[string]Inbound{
+		"tun":    {Tun: &TunInbound{FileDescriptor: 42, DNS: dnsconfig.Config{Mode: dnsconfig.ModeFakeIP}}},
+		"bridge": {Bridge: true, DNS: dnsconfig.Config{Mode: dnsconfig.ModeFakeIP}},
 	} {
 		raw, _, err := buildRaw([]string{namedLinkThr}, in, Options{}, routing.Profile{})
 		if err != nil {
@@ -170,15 +215,67 @@ func TestBuildConfig_FakeIPLeavesUpstreamPlain(t *testing.T) {
 		if len(raw.DNS.FakeIPFilter) != 0 {
 			t.Fatalf("%s: fake-ip-filter = %v, want none", name, raw.DNS.FakeIPFilter)
 		}
-		if raw.DNS.NameServerPolicy != nil || len(raw.DNS.ProxyServerNameserver) != 0 {
-			t.Fatalf("%s: fake-ip mode carries a policy or a proxy-server resolver: %+v", name, raw.DNS)
-		}
 		cfg, err := BuildConfig([]string{namedLinkThr}, in, Options{}, routing.Profile{})
 		if err != nil {
 			t.Fatalf("%s: %v", name, err)
 		}
-		wantDials(t, name+" nameserver", cfg.DNS.NameServer, []string{"1.1.1.1:53"}, "")
-		wantDials(t, name+" default-nameserver", cfg.DNS.DefaultNameserver, []string{"1.1.1.1:53"}, "")
+		wantDials(t, name+" nameserver", cfg.DNS.NameServer, []string{"1.1.1.1:53"}, "three")
+		wantDials(t, name+" proxy-server-nameserver", cfg.DNS.ProxyServerNameserver, []string{"1.1.1.1:53"}, "")
+	}
+}
+
+// addressRule matches an address condition in a rule line, alone or as an
+// operand of a logic rule, up to its closing parenthesis or the line's end.
+var addressRule = regexp.MustCompile(`(?:GEOIP|IP-CIDR6?|IP-ASN|IP-SUFFIX),[^()]*`)
+
+// An address rule met by a flow that still carries its name would have mihomo
+// resolve the name before routing, through a resolver the name's own rule
+// has not chosen yet: every address rule takes no-resolve. The one exception
+// is the force-direct flows' sub-rule, whose flows DIRECT dials by name anyway.
+func TestBuildConfig_EveryAddressRuleKeepsItsName(t *testing.T) {
+	tiers := []routing.Tier{
+		{Block: []string{"geoip:ir", "192.0.2.0/24"}, Direct: []string{"geoip:ru", "10.0.0.0/8", "domain:ru"}, Proxy: []string{"geoip:us", "198.51.100.0/24"}},
+		{Routes: []routing.Route{{Match: []string{"geoip:de", "203.0.113.0/24"}, To: "rt"}}, Direct: []string{"full:bank.local"}},
+		{Block: []string{"geoip:private"}, Direct: []string{"geosite:cn"}},
+	}
+	targets := &routing.Targets{Version: 1, Servers: []routing.TargetServer{{ID: "rt", Link: namedLinkOne}}}
+	for _, mode := range []string{routing.ModeProxyAll, routing.ModeDirectAll} {
+		for _, dnsMode := range []string{dnsconfig.ModeFakeIP, dnsconfig.ModeNormal} {
+			prof := routing.Profile{Mode: mode, Tiers: tiers, Targets: targets, LocalNetworks: true, DisableIPv6: true}
+			dns := dnsconfig.Config{Mode: dnsMode, Servers: []string{"1.1.1.1"}}
+			for name, in := range map[string]Inbound{
+				"tun":    {Tun: &TunInbound{FileDescriptor: 42, DNS: dns}},
+				"bridge": {Bridge: true, DNS: dns, ForceProxy: true, ForceDirect: true},
+			} {
+				raw, _, err := buildRaw([]string{namedLinkThr}, in, Options{}, prof)
+				if err != nil {
+					t.Fatalf("%s %s %s: %v", mode, dnsMode, name, err)
+				}
+				lines := append([]string{}, raw.Rule...)
+				lines = append(lines, raw.SubRules[forceFlowsSubRule]...)
+				matched := 0
+				for _, line := range lines {
+					for _, m := range addressRule.FindAllString(line, -1) {
+						matched++
+						if !strings.Contains(m, "no-resolve") {
+							t.Fatalf("%s %s %s: %q resolves a name", mode, dnsMode, name, line)
+						}
+					}
+				}
+				// The tiers hold ten address entries, and the pool and IPv6
+				// kill-switch add one each: fewer means a rule went missing.
+				if matched < 12 {
+					t.Fatalf("%s %s %s: %d address rules in %v, want at least 12", mode, dnsMode, name, matched, lines)
+				}
+				for _, line := range raw.SubRules[directFlowsSubRule] {
+					for _, m := range addressRule.FindAllString(line, -1) {
+						if strings.Contains(m, "no-resolve") {
+							t.Fatalf("%s: force-direct block %q cannot meet a name it does not resolve", name, line)
+						}
+					}
+				}
+			}
+		}
 	}
 }
 

@@ -104,7 +104,7 @@ func TestMihomoBridge_SniffsFlowsAddressedByIP(t *testing.T) {
 			stale := net.ParseIP("198.19.250.250")
 			for _, host := range []net.IP{lan, pinned} {
 				for _, port := range []int{80, 443} {
-					listenDirect(t, host, port, direct)
+					listenDirect(t, host, port, direct, nil)
 				}
 			}
 
@@ -237,28 +237,37 @@ func drain(c <-chan string) {
 	}
 }
 
-func listenDirect(t *testing.T, host net.IP, port int, seen chan<- string) {
+// listenDirect reports each connection to host:port as "direct:<host>" on
+// seen, when given, and hands it to serve, or drains it when serve is nil.
+func listenDirect(t *testing.T, host net.IP, port int, seen chan<- string, serve func(net.Conn)) {
 	t.Helper()
 	l, err := net.Listen("tcp", net.JoinHostPort(host.String(), fmt.Sprint(port)))
 	if err != nil {
 		t.Skipf("listen on %s:%d: %v", host, port, err)
 	}
 	t.Cleanup(func() { _ = l.Close() })
+	if serve == nil {
+		serve = func(c net.Conn) {
+			buf := make([]byte, 512)
+			for {
+				if _, err := c.Read(buf); err != nil {
+					return
+				}
+			}
+		}
+	}
 	go func() {
 		for {
 			c, err := l.Accept()
 			if err != nil {
 				return
 			}
-			seen <- "direct:" + host.String()
+			if seen != nil {
+				seen <- "direct:" + host.String()
+			}
 			go func() {
-				buf := make([]byte, 512)
-				for {
-					if _, err := c.Read(buf); err != nil {
-						_ = c.Close()
-						return
-					}
-				}
+				defer c.Close()
+				serve(c)
 			}()
 		}
 	}()

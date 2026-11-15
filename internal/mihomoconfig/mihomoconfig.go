@@ -587,25 +587,29 @@ func balancerGroup(name string, members []string, strategy, probe string) (map[s
 }
 
 // applyAnsweredDNS is mihomo's resolver answering the apps' :53 an inbound
-// hands it: the native TUN's hijack, or the bridge's. Fake-ip answers from
-// the pool in fakeRange, and only the names kept off it go upstream, plain.
+// hands it: the native TUN's hijack, or the bridge's. Fake-ip answers A and
+// AAAA from the pool in fakeRange; the names kept off it by the filter, and
+// every other record type, go upstream as with fake-ip off.
 // mihomo parses tls://, https://, quic://, tcp:// and plain natively.
 func applyAnsweredDNS(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Profile, target, fakeRange string) {
 	raw.DNS.Enable = true
 	raw.DNS.FakeIPFilter = dns.NormalizedFilter()
 	direct := dns.NormalizedDirectServers()
-	if len(direct) > 0 {
-		raw.DNS.DirectNameServer = direct
+	// DIRECT dials a flow's name through direct-nameserver: a direct flow is
+	// seen on the way anyway, so its name may resolve plain, through the
+	// general resolvers where no direct ones are named.
+	raw.DNS.DirectNameServer = direct
+	if len(direct) == 0 {
+		raw.DNS.DirectNameServer = dns.NormalizedServers(dnsconfig.DefaultResolver)
 	}
 	raw.DNS.DefaultNameserver = bootstrapResolvers(dns.NormalizedServers(dnsconfig.DefaultResolver), direct)
-	if !dns.FakeIP() {
+	if dns.FakeIP() {
+		raw.DNS.EnhancedMode = C.DNSFakeIP
+		raw.DNS.FakeIPRange = fakeRange
+	} else {
 		raw.DNS.EnhancedMode = C.DNSNormal
-		routeQueries(raw, dns, prof, target)
-		return
 	}
-	raw.DNS.EnhancedMode = C.DNSFakeIP
-	raw.DNS.FakeIPRange = fakeRange
-	raw.DNS.NameServer = dns.NormalizedServers(dnsconfig.DefaultResolver)
+	routeQueries(raw, dns, prof, target)
 }
 
 // dns is the intent a session's resolver reads, whichever inbound carries it.
@@ -616,16 +620,16 @@ func (in Inbound) dns() dnsconfig.Config {
 	return in.DNS
 }
 
-// routeQueries places the resolvers of a session with fake-ip off, where no
-// pool answers the apps and every query goes upstream. A query travels as its
-// flow would: through the target where the catch-all proxies, plain where it
-// is direct, and a name a tier sends the other way takes the other resolvers
-// by policy. mihomo answers a name from its deepest suffix in the policy,
-// not the first listed, so a name under an earlier tier's broader suffix is
-// not listed: the earlier rule decides its query as it decides its flow. A
-// direct name with no direct resolvers named stays on the proxied path in
-// proxy-all. The target's own address resolves plain: that query cannot
-// travel through it.
+// routeQueries places the resolvers for the queries that go upstream: every
+// one with fake-ip off, the filter's names and the record types the pool does
+// not answer with it on. A query travels as its flow would: through the
+// target where the catch-all proxies, plain where it is direct, and a name a
+// tier sends the other way takes the other resolvers by policy. mihomo
+// answers a name from its deepest suffix in the policy, not the first listed,
+// so a name under an earlier tier's broader suffix is not listed: the earlier
+// rule decides its query as it decides its flow. A direct name with no direct
+// resolvers named stays on the proxied path in proxy-all. The target's own
+// address resolves plain: that query cannot travel through it.
 func routeQueries(raw *config.RawConfig, dns dnsconfig.Config, prof routing.Profile, target string) {
 	general := dns.NormalizedServers(dnsconfig.DefaultResolver)
 	through := make([]string, len(general))

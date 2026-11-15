@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/hub/executor"
 	mihomoLog "github.com/metacubex/mihomo/log"
 	D "github.com/miekg/dns"
@@ -20,6 +21,7 @@ import (
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
@@ -48,15 +50,84 @@ func startMihomoBridge(t *testing.T, x *CoreController) (app, force t2sproxy.Pro
 
 func startMihomoBridgeFor(t *testing.T, x *CoreController, prof routing.Profile, dns dnsconfig.Config) (app, force, direct t2sproxy.Proxy) {
 	t.Helper()
+	return startMihomoBridgeThrough(t, x, prof, dns, 0)
+}
+
+// startMihomoBridgeThrough stands a socks server on socksPort in for the
+// target, where one is given; the test link's own server is unreachable.
+func startMihomoBridgeThrough(t *testing.T, x *CoreController, prof routing.Profile, dns dnsconfig.Config, socksPort int) (app, force, direct t2sproxy.Proxy) {
+	t.Helper()
 	mihomoTestHome(t)
 	in, b := mihomoBridgeInbound(&dns, prof)
 	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink}, in, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
+	if socksPort > 0 {
+		target := mihomoconfig.Target([]string{bridgeTestVlessLink})
+		proxy, err := adapter.ParseProxy(map[string]any{"name": target, "type": "socks5", "server": "127.0.0.1", "port": socksPort})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cfg.Proxies[target] = proxy
+	}
 	executor.ApplyConfig(cfg, true)
 	t.Cleanup(mihomoTeardown)
 	return mihomoBridgeProxies(x, b, x.sessionGen.Load())
+}
+
+// socksRelay is a SOCKS5 server that carries each CONNECT to its destination.
+func socksRelay(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer c.Close()
+				b := make([]byte, 262)
+				if _, err := io.ReadFull(c, b[:2]); err != nil {
+					return
+				}
+				_, _ = io.ReadFull(c, b[:b[1]])
+				_, _ = c.Write([]byte{5, 0})
+				if _, err := io.ReadFull(c, b[:4]); err != nil {
+					return
+				}
+				var host string
+				switch b[3] {
+				case 1:
+					_, _ = io.ReadFull(c, b[:4])
+					host = net.IP(b[:4]).String()
+				case 3:
+					_, _ = io.ReadFull(c, b[:1])
+					n := int(b[0])
+					_, _ = io.ReadFull(c, b[:n])
+					host = string(b[:n])
+				default:
+					return
+				}
+				_, _ = io.ReadFull(c, b[:2])
+				port := int(b[0])<<8 | int(b[1])
+				upstream, err := net.Dial("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+				if err != nil {
+					return
+				}
+				defer upstream.Close()
+				_, _ = c.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+				go func() { _, _ = io.Copy(upstream, c) }()
+				_, _ = io.Copy(c, upstream)
+			}(c)
+		}
+	}()
+	return l.Addr().(*net.TCPAddr).Port
 }
 
 func TestMihomoBridge_CarriesTCPAndUDP(t *testing.T) {
@@ -194,17 +265,22 @@ func TestMihomoBridge_ProcessDirectFlowsMeetTheBlocks(t *testing.T) {
 }
 
 // A name no block names, but which resolves to an address a block holds, is
-// refused for a process-direct app too.
+// refused for a process-direct app too. The block's lookup takes the
+// session's resolver, which travels through the proxy in proxy-all, so the
+// proxy here relays.
 func TestMihomoBridge_ProcessDirectFlowsMeetAddressBlocksByName(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	prof := routing.Profile{
 		Mode:  routing.ModeProxyAll,
 		Tiers: []routing.Tier{{Block: []string{"127.0.0.5/32"}, Direct: []string{"process:app.exe"}}},
 	}
-	dns := dnsconfig.Config{
-		Servers: []string{answerDNS(t, map[string]string{"blocked-address.test.": "127.0.0.5", "open-address.test.": "127.0.0.6"})},
+	resolverPort, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
 	}
-	_, _, direct := startMihomoBridgeFor(t, &CoreController{}, prof, dns)
+	listenDirect(t, net.IPv4(127, 0, 0, 1), resolverPort, nil, answerOverTCP(map[string]net.IP{"blocked-address.test": net.IPv4(127, 0, 0, 5), "open-address.test": net.IPv4(127, 0, 0, 6)}))
+	dns := dnsconfig.Config{Servers: []string{"tcp://127.0.0.1:" + strconv.Itoa(resolverPort)}}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, prof, dns, socksRelay(t))
 	open, err := net.Listen("tcp", "127.0.0.6:0")
 	if err != nil {
 		t.Skipf("listen on 127.0.0.6: %v", err)

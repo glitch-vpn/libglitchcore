@@ -295,6 +295,41 @@ func TestBridgeFlowConn_DropsRepliesFromOtherSenders(t *testing.T) {
 	}
 }
 
+// answerOverTCP serves DNS over TCP on a direct listener, answering the A
+// questions in answers and every other with nothing.
+func answerOverTCP(answers map[string]net.IP) func(net.Conn) {
+	return func(c net.Conn) {
+		for {
+			var length [2]byte
+			if _, err := io.ReadFull(c, length[:]); err != nil {
+				return
+			}
+			buf := make([]byte, int(length[0])<<8|int(length[1]))
+			if _, err := io.ReadFull(c, buf); err != nil {
+				return
+			}
+			req := new(D.Msg)
+			if req.Unpack(buf) != nil || len(req.Question) == 0 {
+				return
+			}
+			reply := new(D.Msg)
+			reply.SetReply(req)
+			if q := req.Question[0]; q.Qtype == D.TypeA {
+				if ip, ok := answers[strings.TrimSuffix(q.Name, ".")]; ok {
+					reply.Answer = append(reply.Answer, &D.A{Hdr: D.RR_Header{Name: q.Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60}, A: ip.To4()})
+				}
+			}
+			b, err := reply.Pack()
+			if err != nil {
+				return
+			}
+			if _, err := c.Write(append([]byte{byte(len(b) >> 8), byte(len(b))}, b...)); err != nil {
+				return
+			}
+		}
+	}
+}
+
 // answerDNS serves the addresses by name over UDP on loopback, an empty answer
 // for anything else, and returns its address.
 func answerDNS(t *testing.T, answers map[string]string) string {
