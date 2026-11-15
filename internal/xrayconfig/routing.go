@@ -254,9 +254,9 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		// The direct outbound resolves a name again, and an address a block
 		// names must not be dialed because the name was not blocked.
 		forceDirect := direct
-		if addresses := blockAddresses(p.Tiers); len(addresses) > 0 {
+		if p.HasAddressBlock() {
 			forceDirect = target{tag: forceDirectOutboundTag}
-			ensureOutbound(cfg, forceDirect.tag, forceDirectOutbound(p, forceDirect.tag, addresses))
+			ensureOutbound(cfg, forceDirect.tag, forceDirectOutbound(p, forceDirect.tag, blockAddresses(p.Tiers)))
 		}
 		forceRule := fieldRule{InboundTag: forceInbound}
 		forceDirect.apply(&forceRule)
