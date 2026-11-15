@@ -82,7 +82,7 @@ func mihomoBridgeProxies(x *CoreController, b *bridgeSetup, mark int64) (app, fo
 		force = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceProxyInName}
 	}
 	if b.forceDirect {
-		direct = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceDirectInName}
+		direct = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceDirectInName, directBlocks: b.directBlocks}
 	}
 	return app, force, direct
 }

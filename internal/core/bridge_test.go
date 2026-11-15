@@ -61,9 +61,16 @@ func tcpEcho(t *testing.T) net.Addr {
 
 func udpEcho(t *testing.T) net.Addr {
 	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	return udpEchoAt(t, "127.0.0.1")
+}
+
+// udpEchoAt echoes UDP on a port of its own at host, or skips where host
+// cannot be listened on.
+func udpEchoAt(t *testing.T, host string) net.Addr {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", host+":0")
 	if err != nil {
-		t.Fatal(err)
+		t.Skipf("listen on %s: %v", host, err)
 	}
 	t.Cleanup(func() { _ = pc.Close() })
 	go func() {
@@ -158,7 +165,7 @@ func TestBridgeProxyScheme_ServesTheSessionProxy(t *testing.T) {
 type bridgeFlowProbeProxy struct{ t2sproxy.Proxy }
 
 func TestBridgeFlowConn_DeadlineMovedWhileReading(t *testing.T) {
-	flow := newBridgeFlowConn(netip.AddrPort{}, func([]byte) error { return nil }, nil)
+	flow := newBridgeFlowConn(netip.AddrPort{}, netip.AddrPort{}, func([]byte) error { return nil }, nil)
 	defer flow.Close()
 	_ = flow.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
 	read := make(chan error, 1)
@@ -186,7 +193,7 @@ func TestBridgeFlowConn_DeadlineMovedWhileReading(t *testing.T) {
 
 func TestBridgeFlowConn_ClosedFlowRefusesReplies(t *testing.T) {
 	released := false
-	flow := newBridgeFlowConn(netip.AddrPort{}, func([]byte) error { return nil }, func() { released = true })
+	flow := newBridgeFlowConn(netip.AddrPort{}, netip.AddrPort{}, func([]byte) error { return nil }, func() { released = true })
 	_ = flow.Close()
 	if !released {
 		t.Fatal("close did not release the engine side")
@@ -283,7 +290,7 @@ func requireNoThirdPartyReply(t *testing.T, p t2sproxy.Proxy) {
 
 func TestBridgeFlowConn_DropsRepliesFromOtherSenders(t *testing.T) {
 	dst := netip.MustParseAddrPort("192.0.2.7:53")
-	flow := newBridgeFlowConn(dst, func([]byte) error { return nil }, nil)
+	flow := newBridgeFlowConn(dst, dst, func([]byte) error { return nil }, nil)
 	defer flow.Close()
 	_ = flow.deliverFrom([]byte("spoof"), netip.MustParseAddrPort("192.0.2.8:53"))
 	_ = flow.deliverFrom([]byte("real"), netip.MustParseAddrPort("[::ffff:192.0.2.7]:53"))
@@ -296,8 +303,9 @@ func TestBridgeFlowConn_DropsRepliesFromOtherSenders(t *testing.T) {
 }
 
 // answerOverTCP serves DNS over TCP on a direct listener, answering the A
-// questions in answers and every other with nothing.
-func answerOverTCP(answers map[string]net.IP) func(net.Conn) {
+// questions in answers, with every address listed, and every other with
+// nothing.
+func answerOverTCP(answers map[string][]net.IP) func(net.Conn) {
 	return func(c net.Conn) {
 		for {
 			var length [2]byte
@@ -315,7 +323,7 @@ func answerOverTCP(answers map[string]net.IP) func(net.Conn) {
 			reply := new(D.Msg)
 			reply.SetReply(req)
 			if q := req.Question[0]; q.Qtype == D.TypeA {
-				if ip, ok := answers[strings.TrimSuffix(q.Name, ".")]; ok {
+				for _, ip := range answers[strings.TrimSuffix(q.Name, ".")] {
 					reply.Answer = append(reply.Answer, &D.A{Hdr: D.RR_Header{Name: q.Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 60}, A: ip.To4()})
 				}
 			}

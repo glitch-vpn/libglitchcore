@@ -33,7 +33,7 @@ func xrayFakeIPSession(t *testing.T, prof routing.Profile, filter []string) (app
 		t.Fatal(err)
 	}
 	fromDevice = make(chan string, 8)
-	listenDirect(t, net.IPv4(127, 0, 0, 2), directPort, fromDevice, answerOverTCP(map[string]net.IP{"vk.ru": net.IPv4(127, 0, 0, 2)}))
+	listenDirect(t, net.IPv4(127, 0, 0, 2), directPort, fromDevice, answerOverTCP(map[string][]net.IP{"vk.ru": {net.IPv4(127, 0, 0, 2)}}))
 	proxied = make(chan string, 8)
 	socksPort := socksRecorder(t, proxied)
 

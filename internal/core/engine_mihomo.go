@@ -18,6 +18,7 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/routing"
 	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 	"github.com/metacubex/mihomo/common/observable"
 	"github.com/metacubex/mihomo/component/geodata"
@@ -43,6 +44,16 @@ func (mihomoEngine) Start(x *CoreController, req EngineStartRequest) int32 {
 type bridgeSetup struct {
 	forceProxy  bool // process->proxy rules need flows that always tunnel
 	forceDirect bool // process->direct rules need flows that meet the blocks, then go direct
+	// directBlocks is the force-direct flows' sub-rule, held when a block is
+	// by address: the bridge then checks a flow's name and every address it
+	// resolves to against it, as mihomo could only check one.
+	directBlocks []C.Rule
+}
+
+func (b *bridgeSetup) adoptDirectBlocks(cfg *mihomoCfg.Config, prof routing.Profile) {
+	if b.forceDirect && prof.HasAddressBlock() {
+		b.directBlocks = cfg.SubRules[mihomoconfig.DirectFlowsSubRule]
+	}
 }
 
 func (mihomoEngine) Stop(x *CoreController) int32 { return x.HandleMihomoStop() }
@@ -374,6 +385,9 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 		return fmt.Errorf("[mihomo] config build: %w", err)
 	}
 
+	if bridge != nil {
+		bridge.adoptDirectBlocks(cfg, prof)
+	}
 	countMihomoDirect(cfg, &mihomoSessionTraffic)
 	mihomoSessionTraffic.startSession()
 

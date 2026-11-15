@@ -15,9 +15,11 @@ const bridgeFlowQueue = 128
 // bridgeFlowConn is one tun2socks UDP flow handed to an engine in process.
 // tun2socks pairs a flow with one destination, so every reply reads as coming
 // from dst, and one an engine reports from elsewhere is dropped here, as
-// tun2socks would.
+// tun2socks would. dialed is where the engine was told to send: dst, or the
+// address the bridge resolved dst's name to.
 type bridgeFlowConn struct {
 	dst     netip.AddrPort
+	dialed  netip.AddrPort
 	send    func([]byte) error
 	release func()
 
@@ -28,9 +30,10 @@ type bridgeFlowConn struct {
 }
 
 // send must not keep the slice it is given past its return.
-func newBridgeFlowConn(dst netip.AddrPort, send func([]byte) error, release func()) *bridgeFlowConn {
+func newBridgeFlowConn(dst, dialed netip.AddrPort, send func([]byte) error, release func()) *bridgeFlowConn {
 	return &bridgeFlowConn{
 		dst:          dst,
+		dialed:       dialed,
 		send:         send,
 		release:      release,
 		replies:      make(chan []byte, bridgeFlowQueue),
@@ -54,10 +57,11 @@ func (c *bridgeFlowConn) deliver(b []byte) error {
 	return nil
 }
 
-// deliverFrom drops a reply from a sender other than dst; an invalid from is
-// one the engine names by domain, which is dst by construction.
+// deliverFrom drops a reply from a sender other than the one dialed; an
+// invalid from is one the engine names by domain, which is dst by
+// construction.
 func (c *bridgeFlowConn) deliverFrom(b []byte, from netip.AddrPort) error {
-	if from.IsValid() && netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != c.dst {
+	if from.IsValid() && netip.AddrPortFrom(from.Addr().Unmap(), from.Port()) != c.dialed {
 		return nil
 	}
 	return c.deliver(b)

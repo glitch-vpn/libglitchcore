@@ -245,3 +245,20 @@ func TestValidateKeepsWhatEnginesCarry(t *testing.T) {
 		t.Fatalf("Validate = %v, want nil", err)
 	}
 }
+
+func TestProfile_HasAddressBlockOnlyForAnAddressBlock(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		tiers []Tier
+		want  bool
+	}{
+		{"no block", []Tier{{Direct: []string{"192.0.2.0/24", "geoip:ru"}}}, false},
+		{"block by name only", []Tier{{Block: []string{"domain:ads.test", "geosite:category-ads"}}}, false},
+		{"block by cidr in a later tier", []Tier{{Direct: []string{"process:app.exe"}}, {Block: []string{"192.0.2.0/24"}}}, true},
+		{"block by geoip", []Tier{{Block: []string{"geoip:ir"}}}, true},
+	} {
+		if got := (Profile{Tiers: tc.tiers}).HasAddressBlock(); got != tc.want {
+			t.Errorf("%s: HasAddressBlock = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

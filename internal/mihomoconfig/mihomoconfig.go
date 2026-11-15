@@ -84,8 +84,8 @@ const ForceProxyInName = "forceproxy"
 // ForceDirectInName is the inbound name the bridge's force-direct flows carry.
 const ForceDirectInName = "forcedirect"
 
-// directFlowsSubRule names the sub-rule that holds the force-direct flows' blocks.
-const directFlowsSubRule = "direct-flows"
+// DirectFlowsSubRule names the sub-rule that holds the force-direct flows' blocks.
+const DirectFlowsSubRule = "direct-flows"
 
 // forceFlowsSubRule names the sub-rule that holds the force-proxy flows' rules.
 const forceFlowsSubRule = "force-flows"
@@ -267,7 +267,7 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 		if raw.SubRules == nil {
 			raw.SubRules = map[string][]string{}
 		}
-		raw.SubRules[directFlowsSubRule] = subRule
+		raw.SubRules[DirectFlowsSubRule] = subRule
 		geoRules = append(append([]string{}, geoRules...), subRule...)
 	}
 	if in.ForceProxy && forceFlowsNeedSubRule(prof) {
@@ -356,7 +356,7 @@ func buildRules(p routing.Profile, target string, forceProxy, forceDirect bool, 
 	if forceDirect {
 		// DIRECT never lacks UDP, so no REJECT guard follows.
 		if p.HasBlock() {
-			rules = append(rules, "SUB-RULE,(IN-NAME,"+ForceDirectInName+"),"+directFlowsSubRule)
+			rules = append(rules, "SUB-RULE,(IN-NAME,"+ForceDirectInName+"),"+DirectFlowsSubRule)
 		} else {
 			rules = append(rules, "IN-NAME,"+ForceDirectInName+",DIRECT")
 		}
@@ -433,18 +433,16 @@ func forceFlowRules(p routing.Profile, target string) []string {
 }
 
 // directFlowRules is the sub-rule the force-direct flows enter: every tier's
-// block entries in tier order, with address rules resolving a name, then
-// DIRECT. Only those flows see it.
+// block entries in tier order, then DIRECT. Only those flows see it. The
+// address rules keep no-resolve: the bridge checks a flow's name and every
+// address it resolves to against these lines itself, and hands the flow over
+// resolved (mihomoBridgeProxy).
 func directFlowRules(p routing.Profile) []string {
 	var rules []string
 	for _, tier := range p.Tiers {
 		for _, step := range tier.Steps() {
 			if step.Target == routing.TargetBlock && len(step.Also) == 0 {
-				for _, line := range stepLines(step, "REJECT") {
-					// DIRECT dials the flow's name, so an address rule must
-					// resolve a name to meet the address it would be dialed at.
-					rules = append(rules, strings.TrimSuffix(line, ",no-resolve"))
-				}
+				rules = append(rules, stepLines(step, "REJECT")...)
 			}
 		}
 	}

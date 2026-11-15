@@ -71,6 +71,7 @@ func startMihomoBridgeThrough(t *testing.T, x *CoreController, prof routing.Prof
 		}
 		cfg.Proxies[target] = proxy
 	}
+	b.adoptDirectBlocks(cfg, prof)
 	executor.ApplyConfig(cfg, true)
 	t.Cleanup(mihomoTeardown)
 	return mihomoBridgeProxies(x, b, x.sessionGen.Load())
@@ -216,108 +217,6 @@ func TestMihomoBridge_ForceProxyFlowsTakeTheProxy(t *testing.T) {
 	}
 }
 
-// An app a rule sends direct by process still meets the blocks: its flow to a
-// blocked address is refused, and one to anywhere else is dialled direct.
-func TestMihomoBridge_ProcessDirectFlowsMeetTheBlocks(t *testing.T) {
-	skipWhereMihomoRaces(t)
-	prof := routing.Profile{
-		Mode:  routing.ModeProxyAll,
-		Tiers: []routing.Tier{{Block: []string{"127.0.0.2/32"}, Direct: []string{"process:app.exe"}}},
-	}
-	_, _, direct := startMihomoBridgeFor(t, &CoreController{}, prof, dnsconfig.Config{})
-	if direct == nil {
-		t.Fatal("no force-direct dialer for a process->direct rule")
-	}
-	l, err := net.Listen("tcp", "127.0.0.2:0")
-	if err != nil {
-		t.Skipf("listen on 127.0.0.2: %v", err)
-	}
-	t.Cleanup(func() { _ = l.Close() })
-	go func() {
-		for {
-			c, err := l.Accept()
-			if err != nil {
-				return
-			}
-			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
-		}
-	}()
-	echoed := func(dst net.Addr) bool {
-		conn, err := direct.DialContext(context.Background(), bridgeTestFlow(M.TCP, dst))
-		if err != nil {
-			return false
-		}
-		defer conn.Close()
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-		if _, err := conn.Write([]byte("x")); err != nil {
-			return false
-		}
-		buf := make([]byte, 1)
-		n, _ := conn.Read(buf)
-		return n == 1
-	}
-	if echoed(l.Addr()) {
-		t.Error("process-direct flow to a blocked address reached its server")
-	}
-	if !echoed(tcpEcho(t)) {
-		t.Error("process-direct flow to an unblocked address was not dialled direct")
-	}
-}
-
-// A name no block names, but which resolves to an address a block holds, is
-// refused for a process-direct app too. The block's lookup takes the
-// session's resolver, which travels through the proxy in proxy-all, so the
-// proxy here relays.
-func TestMihomoBridge_ProcessDirectFlowsMeetAddressBlocksByName(t *testing.T) {
-	skipWhereMihomoRaces(t)
-	prof := routing.Profile{
-		Mode:  routing.ModeProxyAll,
-		Tiers: []routing.Tier{{Block: []string{"127.0.0.5/32"}, Direct: []string{"process:app.exe"}}},
-	}
-	resolverPort, err := loopbackport.Pick()
-	if err != nil {
-		t.Fatal(err)
-	}
-	listenDirect(t, net.IPv4(127, 0, 0, 1), resolverPort, nil, answerOverTCP(map[string]net.IP{"blocked-address.test": net.IPv4(127, 0, 0, 5), "open-address.test": net.IPv4(127, 0, 0, 6)}))
-	dns := dnsconfig.Config{Servers: []string{"tcp://127.0.0.1:" + strconv.Itoa(resolverPort)}}
-	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, prof, dns, socksRelay(t))
-	open, err := net.Listen("tcp", "127.0.0.6:0")
-	if err != nil {
-		t.Skipf("listen on 127.0.0.6: %v", err)
-	}
-	port := open.Addr().(*net.TCPAddr).Port
-	blocked, err := net.Listen("tcp", net.JoinHostPort("127.0.0.5", strconv.Itoa(port)))
-	if err != nil {
-		t.Skipf("listen on 127.0.0.5: %v", err)
-	}
-	for _, l := range []net.Listener{open, blocked} {
-		t.Cleanup(func() { _ = l.Close() })
-		go func() {
-			for {
-				c, err := l.Accept()
-				if err != nil {
-					return
-				}
-				go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
-			}
-		}()
-	}
-	for name, want := range map[string]bool{"blocked-address.test": false, "open-address.test": true} {
-		fake := fakeIPFor(t, name)
-		conn, err := direct.DialContext(context.Background(), bridgeTestFlow(M.TCP, &net.TCPAddr{IP: fake, Port: port}))
-		if err != nil {
-			t.Fatalf("DialContext %s: %v", name, err)
-		}
-		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-		_, _ = conn.Write([]byte("x"))
-		n, _ := conn.Read(make([]byte, 1))
-		_ = conn.Close()
-		if (n == 1) != want {
-			t.Errorf("process-direct flow to %s reached its server = %v, want %v", name, n == 1, want)
-		}
-	}
-}
-
 func TestMihomoBridge_RefusesAfterItsSessionEnds(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	x := &CoreController{}
@@ -360,5 +259,251 @@ func TestBridgePipe_HalfCloseKeepsTheOtherWay(t *testing.T) {
 	_ = a.SetReadDeadline(time.Now().Add(50 * time.Millisecond))
 	if _, err := a.Read(make([]byte, 1)); !errors.Is(err, os.ErrDeadlineExceeded) {
 		t.Fatalf("read past the deadline = %v, want a timeout", err)
+	}
+}
+
+// answeringResolver serves DNS over TCP at host, answering the names given
+// and reporting each connection on seen, when given.
+func answeringResolver(t *testing.T, host net.IP, seen chan<- string, answers map[string][]net.IP) string {
+	t.Helper()
+	port, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenDirect(t, host, port, seen, answerOverTCP(answers))
+	return "tcp://" + net.JoinHostPort(host.String(), strconv.Itoa(port))
+}
+
+// oneAddress is answers with one A record per name.
+func oneAddress(answers map[string]net.IP) map[string][]net.IP {
+	out := make(map[string][]net.IP, len(answers))
+	for name, ip := range answers {
+		out[name] = []net.IP{ip}
+	}
+	return out
+}
+
+// echoAt echoes TCP at host on port, or on a port of its own when port is 0,
+// and returns the port; it skips where host cannot be listened on.
+func echoAt(t *testing.T, host string, port int) int {
+	t.Helper()
+	l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		t.Skipf("listen on %s: %v", host, err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(c, c); _ = c.Close() }()
+		}
+	}()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// directFlowReaches dials dst as a process-direct flow and says whether an
+// echo came back.
+func directFlowReaches(t *testing.T, direct t2sproxy.Proxy, dst net.Addr) bool {
+	t.Helper()
+	conn, err := direct.DialContext(context.Background(), bridgeTestFlow(M.TCP, dst))
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := conn.Write([]byte("x")); err != nil {
+		return false
+	}
+	n, _ := conn.Read(make([]byte, 1))
+	return n == 1
+}
+
+// directFlowReachesName is directFlowReaches at name's fake address.
+func directFlowReachesName(t *testing.T, direct t2sproxy.Proxy, name string, port int) bool {
+	t.Helper()
+	return directFlowReaches(t, direct, &net.TCPAddr{IP: fakeIPFor(t, name), Port: port})
+}
+
+var blockedAddressProfile = routing.Profile{
+	Mode:  routing.ModeProxyAll,
+	Tiers: []routing.Tier{{Block: []string{"127.0.0.5/32"}, Direct: []string{"process:app.exe"}}},
+}
+
+// An app a rule sends direct by process still meets the blocks: its flow to a
+// blocked address is refused, and one to anywhere else is dialed direct.
+func TestMihomoBridge_ProcessDirectFlowsMeetTheBlocks(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	prof := routing.Profile{
+		Mode:  routing.ModeProxyAll,
+		Tiers: []routing.Tier{{Block: []string{"127.0.0.2/32"}, Direct: []string{"process:app.exe"}}},
+	}
+	_, _, direct := startMihomoBridgeFor(t, &CoreController{}, prof, dnsconfig.Config{})
+	if direct == nil {
+		t.Fatal("no force-direct dialer for a process->direct rule")
+	}
+	if directFlowReaches(t, direct, &net.TCPAddr{IP: net.IPv4(127, 0, 0, 2), Port: echoAt(t, "127.0.0.2", 0)}) {
+		t.Error("process-direct flow to a blocked address reached its server")
+	}
+	if !directFlowReaches(t, direct, tcpEcho(t)) {
+		t.Error("process-direct flow to an unblocked address was not dialed direct")
+	}
+}
+
+// A name no block names, but which resolves to an address a block holds, is
+// refused for a process-direct app too. The block's lookup takes the direct
+// resolvers, the general one plain with none named, so the proxy sees none
+// of it.
+func TestMihomoBridge_ProcessDirectFlowsMeetAddressBlocksByName(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	dns := dnsconfig.Config{Servers: []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, oneAddress(map[string]net.IP{"blocked-address.test": net.IPv4(127, 0, 0, 5), "open-address.test": net.IPv4(127, 0, 0, 6)}))}}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRelay(t))
+	port := echoAt(t, "127.0.0.6", 0)
+	echoAt(t, "127.0.0.5", port)
+	for name, want := range map[string]bool{"blocked-address.test": false, "open-address.test": true} {
+		if got := directFlowReachesName(t, direct, name, port); got != want {
+			t.Errorf("process-direct flow to %s reached its server = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A proxy that accepts every connection and answers nothing starves the
+// session's resolver, which travels through it. The block of a process-direct
+// app holds all the same: its name is resolved as DIRECT would resolve it,
+// plain, and the flow is refused at once.
+func TestMihomoBridge_ProcessDirectAddressBlockHoldsWhenTheProxyNeverAnswersDNS(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	dns := dnsconfig.Config{Servers: []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, oneAddress(map[string]net.IP{"blocked-address.test": net.IPv4(127, 0, 0, 5)}))}}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRecorder(t, make(chan string, 64)))
+	port := echoAt(t, "127.0.0.5", 0)
+	started := time.Now()
+	if directFlowReachesName(t, direct, "blocked-address.test", port) {
+		t.Fatal("process-direct flow to a blocked address reached its server")
+	}
+	if elapsed := time.Since(started); elapsed > 3*time.Second {
+		t.Fatalf("the flow was refused after %v, want at once", elapsed)
+	}
+}
+
+// The block is checked against the address DIRECT dials: the direct
+// resolvers' answer, not the general ones', which travel through the proxy.
+func TestMihomoBridge_ProcessDirectAddressBlockMeetsTheDirectResolversAnswer(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	dns := dnsconfig.Config{
+		Servers:       []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, oneAddress(map[string]net.IP{"blocked-direct.test": net.IPv4(127, 0, 0, 6), "open-direct.test": net.IPv4(127, 0, 0, 5)}))},
+		DirectServers: []string{answeringResolver(t, net.IPv4(127, 0, 0, 2), nil, oneAddress(map[string]net.IP{"blocked-direct.test": net.IPv4(127, 0, 0, 5), "open-direct.test": net.IPv4(127, 0, 0, 6)}))},
+	}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRelay(t))
+	port := echoAt(t, "127.0.0.6", 0)
+	echoAt(t, "127.0.0.5", port)
+	if directFlowReachesName(t, direct, "blocked-direct.test", port) {
+		t.Error("a name the direct resolver answers with a blocked address reached its server")
+	}
+	if !directFlowReachesName(t, direct, "open-direct.test", port) {
+		t.Error("a name the direct resolver answers with an open address was not dialed direct")
+	}
+}
+
+// A name the direct resolvers cannot answer is refused at the dial, not
+// handed on to be resolved again.
+func TestMihomoBridge_ProcessDirectFlowToAnUnresolvableNameIsRefused(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	unreachable, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	dns := dnsconfig.Config{
+		Servers:       []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, oneAddress(map[string]net.IP{"silent.test": net.IPv4(127, 0, 0, 6)}))},
+		DirectServers: []string{"tcp://127.0.0.2:" + strconv.Itoa(unreachable)},
+	}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRelay(t))
+	fake := fakeIPFor(t, "silent.test")
+	if _, err := direct.DialContext(context.Background(), bridgeTestFlow(M.TCP, &net.TCPAddr{IP: fake, Port: 80})); err == nil {
+		t.Fatal("a process-direct flow to a name no direct resolver answers was accepted")
+	}
+	if _, err := direct.DialUDP(bridgeTestFlow(M.UDP, &net.UDPAddr{IP: fake, Port: 443})); err == nil {
+		t.Fatal("a process-direct UDP flow to a name no direct resolver answers was accepted")
+	}
+}
+
+// A process-direct UDP flow to a name an address block checks reads its
+// replies as coming from the address the app sent to.
+func TestMihomoBridge_ProcessDirectUDPFlowReadsItsReplies(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	dns := dnsconfig.Config{Servers: []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, oneAddress(map[string]net.IP{"open-address.test": net.IPv4(127, 0, 0, 6)}))}}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRelay(t))
+	echo := udpEchoAt(t, "127.0.0.6")
+	dst := &net.UDPAddr{IP: fakeIPFor(t, "open-address.test"), Port: echo.(*net.UDPAddr).Port}
+	pc, err := direct.DialUDP(bridgeTestFlow(M.UDP, dst))
+	if err != nil {
+		t.Fatalf("DialUDP: %v", err)
+	}
+	defer pc.Close()
+	if _, err := pc.WriteTo([]byte("ping"), dst); err != nil {
+		t.Fatal(err)
+	}
+	_ = pc.SetReadDeadline(time.Now().Add(5 * time.Second))
+	buf := make([]byte, 16)
+	n, from, err := pc.ReadFrom(buf)
+	if err != nil || string(buf[:n]) != "ping" {
+		t.Fatalf("ReadFrom = %q, %v, want the echo", buf[:n], err)
+	}
+	if from.String() != dst.String() {
+		t.Fatalf("reply from %s, want %s", from, dst)
+	}
+}
+
+// A name answered with several addresses is refused when any of them is
+// blocked: DIRECT dials a TCP flow at each in turn, and a UDP flow at one of
+// them, so a block checked against one address alone would be passed.
+func TestMihomoBridge_ProcessDirectFlowToANameWithABlockedAddressAmongSeveralIsRefused(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	answers := map[string][]net.IP{
+		"mixed.test": {net.IPv4(127, 0, 0, 5), net.IPv4(127, 0, 0, 6)},
+		"open.test":  {net.IPv4(127, 0, 0, 6), net.IPv4(127, 0, 0, 7)},
+	}
+	dns := dnsconfig.Config{Servers: []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, answers)}}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRelay(t))
+	port := echoAt(t, "127.0.0.6", 0)
+	echoAt(t, "127.0.0.5", port)
+	echoAt(t, "127.0.0.7", port)
+	for i := 0; i < 8; i++ {
+		if directFlowReachesName(t, direct, "mixed.test", port) {
+			t.Fatal("a name with a blocked address among its answers reached a server")
+		}
+	}
+	if !directFlowReachesName(t, direct, "open.test", port) {
+		t.Error("a name with open addresses only was not dialed direct")
+	}
+	fake := fakeIPFor(t, "mixed.test")
+	if _, err := direct.DialUDP(bridgeTestFlow(M.UDP, &net.UDPAddr{IP: fake, Port: port})); err == nil {
+		t.Error("a UDP flow to a name with a blocked address among its answers was accepted")
+	}
+}
+
+// A name a block names is refused before any lookup: the direct resolver
+// hears nothing of it.
+func TestMihomoBridge_ProcessDirectFlowToABlockedNameIsRefusedWithoutALookup(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	prof := routing.Profile{
+		Mode:  routing.ModeProxyAll,
+		Tiers: []routing.Tier{{Block: []string{"domain:named.test", "127.0.0.5/32"}, Direct: []string{"process:app.exe"}}},
+	}
+	asked := make(chan string, 8)
+	dns := dnsconfig.Config{
+		Servers:       []string{answeringResolver(t, net.IPv4(127, 0, 0, 1), nil, oneAddress(map[string]net.IP{"named.test": net.IPv4(127, 0, 0, 6)}))},
+		DirectServers: []string{answeringResolver(t, net.IPv4(127, 0, 0, 2), asked, oneAddress(map[string]net.IP{"named.test": net.IPv4(127, 0, 0, 6)}))},
+	}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, prof, dns, socksRelay(t))
+	port := echoAt(t, "127.0.0.6", 0)
+	if directFlowReachesName(t, direct, "named.test", port) {
+		t.Fatal("a blocked name reached its server")
+	}
+	select {
+	case <-asked:
+		t.Fatal("the direct resolver was asked about a name a block names")
+	case <-time.After(time.Second):
 	}
 }

@@ -77,9 +77,11 @@ set by the app process would not.
   none are named: a direct flow is seen on the way anyway - and a resolver
   given by name is found through the session's resolvers that are addresses
   (`default-nameserver`), not mihomo's own four. A direct app's names do
-  reach the proxy on both engines where a lookup precedes the route: xray's
-  router lookups under `ipifnonmatch`/`ipondemand` in `proxy-all`, and
-  mihomo's lookup for an address block a tier holds. A server's own hostname
+  reach the proxy on xray, whose router lookups under
+  `ipifnonmatch`/`ipondemand` in `proxy-all` precede the route; on mihomo the
+  bridge resolves them through `direct-nameserver` before an address block
+  checks them, so they stay direct, and a name a block names is refused
+  before any lookup. A server's own hostname
   is resolved by the system resolver, from the device, on both engines: it
   has to be reached before anything can travel through it.
 * **A WireGuard or AmneziaWG outbound resolves inside its tunnel** with the
@@ -137,8 +139,12 @@ A flow the dialer sends direct or through the VPN still goes to the engine,
 under an inbound of its own, where every tier's block meets it first. A direct
 app's own DNS queries are not intercepted, so it keeps its own resolver: a
 block by name meets its flows through content sniffing, and through queries it
-sends the system resolver, which answer with fake IPs; an address block meets a
-name once the direct outbound resolves it. Domain and IP matchers honour tier order normally.
+sends the system resolver, which answer with fake IPs. On mihomo an address
+block meets a name at every address DIRECT could dial it at: the bridge
+resolves the name through the direct resolvers before the engine sees the
+flow, checks each address against the blocks, and refuses the flow when one
+is blocked or the name cannot be answered. Domain and IP matchers honour tier
+order normally.
 
 ## Windows
 

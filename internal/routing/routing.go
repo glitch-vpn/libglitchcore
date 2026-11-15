@@ -127,6 +127,18 @@ func (p Profile) HasBlock() bool {
 	return false
 }
 
+// HasAddressBlock: a tier blocks an IP or geoip entry.
+func (p Profile) HasAddressBlock() bool {
+	for _, t := range p.Tiers {
+		for _, e := range t.Entries() {
+			if e.Target == TargetBlock && e.ByAddress() {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // Validate refuses what the engines would cut, re-target or drop: a comma that
 // splits a mihomo rule line, a parenthesis that splits a mihomo logic rule, a
 // geo code neither engine can look up, and a keyword that xray would read as

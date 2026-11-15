@@ -230,8 +230,8 @@ var addressRule = regexp.MustCompile(`(?:GEOIP|IP-CIDR6?|IP-ASN|IP-SUFFIX),[^()]
 
 // An address rule met by a flow that still carries its name would have mihomo
 // resolve the name before routing, through a resolver the name's own rule
-// has not chosen yet: every address rule takes no-resolve. The one exception
-// is the force-direct flows' sub-rule, whose flows DIRECT dials by name anyway.
+// has not chosen yet: every address rule takes no-resolve, the force-direct
+// flows' blocks too, since the bridge hands those flows over resolved.
 func TestBuildConfig_EveryAddressRuleKeepsItsName(t *testing.T) {
 	tiers := []routing.Tier{
 		{Block: []string{"geoip:ir", "192.0.2.0/24"}, Direct: []string{"geoip:ru", "10.0.0.0/8", "domain:ru"}, Proxy: []string{"geoip:us", "198.51.100.0/24"}},
@@ -253,6 +253,7 @@ func TestBuildConfig_EveryAddressRuleKeepsItsName(t *testing.T) {
 				}
 				lines := append([]string{}, raw.Rule...)
 				lines = append(lines, raw.SubRules[forceFlowsSubRule]...)
+				lines = append(lines, raw.SubRules[DirectFlowsSubRule]...)
 				matched := 0
 				for _, line := range lines {
 					for _, m := range addressRule.FindAllString(line, -1) {
@@ -266,13 +267,6 @@ func TestBuildConfig_EveryAddressRuleKeepsItsName(t *testing.T) {
 				// kill-switch add one each: fewer means a rule went missing.
 				if matched < 12 {
 					t.Fatalf("%s %s %s: %d address rules in %v, want at least 12", mode, dnsMode, name, matched, lines)
-				}
-				for _, line := range raw.SubRules[directFlowsSubRule] {
-					for _, m := range addressRule.FindAllString(line, -1) {
-						if strings.Contains(m, "no-resolve") {
-							t.Fatalf("%s: force-direct block %q cannot meet a name it does not resolve", name, line)
-						}
-					}
 				}
 			}
 		}

@@ -105,7 +105,7 @@ func (p *xrayBridgeProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 	if err != nil {
 		return nil, err
 	}
-	flow := newBridgeFlowConn(m.DestinationAddrPort(), func(b []byte) error {
+	flow := newBridgeFlowConn(m.DestinationAddrPort(), m.DestinationAddrPort(), func(b []byte) error {
 		datagram := buf.NewWithSize(int32(len(b)))
 		_, _ = datagram.Write(b)
 		return link.Writer.WriteMultiBuffer(buf.MultiBuffer{datagram})
