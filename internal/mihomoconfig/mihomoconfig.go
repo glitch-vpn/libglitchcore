@@ -895,6 +895,8 @@ func Target(links []string) string {
 // start; one named GLOBAL is replaced by mihomo's selector, which picks DIRECT.
 var reservedNames = []string{
 	"DIRECT", "REJECT", "REJECT-DROP", "COMPATIBLE", "PASS", "PASS-RULE", "GLOBAL",
+	// Where a nameserver names its proxy, RULES means "follow the rules".
+	"RULES",
 	GroupTag,
 }
 

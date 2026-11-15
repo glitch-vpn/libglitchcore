@@ -213,3 +213,19 @@ func TestBuildConfig_NormalModeBracketsABareIPv6Resolver(t *testing.T) {
 	}
 	wantDials(t, "nameserver", cfg.DNS.NameServer, []string{"[2001:4860:4860::8888]:53", "[2001:4860:4860::8844]:5353"}, "three")
 }
+
+// RULES names mihomo's follow-the-rules sentinel where a nameserver names
+// its proxy, so a remark of RULES does not become the proxy's name.
+func TestBuildConfig_RemarkRULESIsNotTheProxyName(t *testing.T) {
+	link := reservedNamesTestLink("1.2.3.4", "RULES")
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeNormal, Servers: []string{"1.1.1.1"}}
+	cfg, err := BuildConfig([]string{link}, Inbound{Bridge: true, DNS: dns}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := Target([]string{link})
+	if target == "RULES" {
+		t.Fatalf("proxy named %q", target)
+	}
+	wantDials(t, "nameserver", cfg.DNS.NameServer, []string{"1.1.1.1:53"}, target)
+}
