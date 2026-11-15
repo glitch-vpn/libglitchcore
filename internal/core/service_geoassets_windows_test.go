@@ -1,4 +1,4 @@
-//go:build service && windows && integration && !no_xray
+//go:build service && windows && integration && !no_xray && !no_mihomo
 
 package core
 
@@ -24,10 +24,40 @@ import (
 //
 //	go test -tags="service integration with_gvisor" ./internal/core/ -run TestServiceDispatch
 //
-// Before geoAssetsDir existed this test failed: the request carried no asset
-// location, the env pointed at the test binary's dir (no .dat files), and the
-// geo rules hard-failed cfg.Build() into EngineError.
+// A start over dispatch with geo rules runs on the caller's geo files, read
+// from the service's own folder, and writes nothing into the caller's.
 func TestServiceDispatch_EngineStart_GeoAssetsDir(t *testing.T) {
+	for _, engine := range []string{"xray", "mihomo"} {
+		t.Run(engine, func(t *testing.T) {
+			home := testServiceHome(t)
+			callerDir := t.TempDir()
+			writeServiceGeoFixtures(t, callerDir)
+			startOverDispatch(t, engine, callerDir)
+
+			// The caller's folder is read only: whatever the engine writes
+			// (mihomo's cache.db) lands in the service's own folder.
+			entries, err := os.ReadDir(callerDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(entries) != len(geoAssetFileNames) {
+				t.Fatalf("the caller's folder gained a file: %v", entries)
+			}
+			// mihomo opens cache.db once per process, in whatever home the
+			// first start had, so only the home itself is checked here.
+			if engine == "mihomo" {
+				if rel, err := filepath.Rel(home.root, mihomoHomeDir); err != nil || !filepath.IsLocal(rel) {
+					t.Fatalf("mihomo's home %q is outside the service's folder %q", mihomoHomeDir, home.root)
+				}
+			}
+		})
+	}
+}
+
+// startOverDispatch sends an engine_start through the service's dispatch and
+// waits for the engine to connect; the stop runs at cleanup.
+func startOverDispatch(t *testing.T, engine, callerDir string) {
+	t.Helper()
 	Initialize()
 
 	var mu sync.Mutex
@@ -39,9 +69,6 @@ func TestServiceDispatch_EngineStart_GeoAssetsDir(t *testing.T) {
 		t.Logf("event %d: %s", code, msg)
 	})
 	t.Cleanup(func() { setStatusSink(nil) })
-
-	dir := t.TempDir()
-	writeServiceGeoFixtures(t, dir)
 
 	t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
 	port, err := loopbackport.Pick()
@@ -57,7 +84,9 @@ func TestServiceDispatch_EngineStart_GeoAssetsDir(t *testing.T) {
 		DNS:    "1.1.1.1",
 		Opts: map[string]string{
 			"proxyPort":    fmt.Sprint(proxyPort),
-			"geoAssetsDir": dir,
+			"proxyUser":    "svc",
+			"proxyPass":    "secret",
+			"geoAssetsDir": callerDir,
 			"routingTiers": `[{"direct":["geosite:glitch-test","geoip:glitch-test"]}]`,
 			"disableIPv6":  "1",
 		},
@@ -65,17 +94,17 @@ func TestServiceDispatch_EngineStart_GeoAssetsDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	payload, _ := json.Marshal(map[string]any{"engineId": "xray", "request": string(req)})
+	payload, _ := json.Marshal(map[string]any{"engineId": engine, "request": string(req)})
 
 	resp := dispatchCommand(pipeCommand{Action: "engine_start", Payload: payload})
 	if !resp.OK {
 		t.Fatalf("engine_start over dispatch failed: %s", resp.Error)
 	}
 	t.Cleanup(func() {
-		stopPayload, _ := json.Marshal(map[string]string{"engineId": "xray"})
+		stopPayload, _ := json.Marshal(map[string]string{"engineId": engine})
 		dispatchCommand(pipeCommand{Action: "engine_stop", Payload: stopPayload})
 		deadline := time.Now().Add(10 * time.Second)
-		for globalController.engineIsRunning("xray") == glitchCoreResultSuccess && time.Now().Before(deadline) {
+		for globalController.engineIsRunning(engine) == glitchCoreResultSuccess && time.Now().Before(deadline) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		// The teardown goroutine keeps logging after the running flag drops,

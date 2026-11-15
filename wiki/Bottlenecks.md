@@ -44,7 +44,9 @@ set by the app process would not.
 * **A missing file fails the connect.** With geo rules present and no usable
   files, xray cannot build its config and mihomo reports the missing file.
   Loud, not silent.
-* mihomo may write cache files into the directory you supply.
+* mihomo may write cache files into the directory you supply, except under
+  the Windows service, which copies the geo files into a directory of its own
+  and writes there (see [Getting Started](Getting-Started#windows-without-uac-prompts)).
 
 ## DNS
 

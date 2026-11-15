@@ -175,3 +175,11 @@ Without the service, the caller has to run elevated. Proxy mode needs neither.
 The service serves the user at the console; see
 [Bottlenecks](Bottlenecks#windows). It keeps its pipe names under
 `HKLM\SOFTWARE\glitch_vpn_core`, which an uninstaller may remove.
+
+The service runs the engines out of `%ProgramData%\GlitchVpnCore`, a folder
+it creates for LocalSystem and the Administrators alone and refuses when
+somebody else made it first. `geoAssetsDir` is only read there: the service
+copies `geoip.dat` and `geosite.dat` into a folder of each start's own, where
+mihomo also keeps its home, and refuses a folder that lacks either file, is
+off a local drive (`X:\...`), is reached through a junction or a symlink, or
+holds a file over 256 MiB.

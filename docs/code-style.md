@@ -288,6 +288,15 @@ functions carry nothing.
   `serviceXxx()` wrapper in `ipc_windows_client.go`, no-op stub in
   `ipc_stub.go`.
 - Events need nothing: every `emitStatus` pair traverses the pipe as-is.
+- The service gates an `engine_start` before the engine sees it, in
+  `dispatchCommand` alone: a refusal answers with one of the reply constants,
+  and a request that runs is rewritten to the service's own folder
+  (`stageGeoAssets`). §5 still holds for the engines: they read `engineOpts`,
+  never the map the service rewrote.
+- A path a caller names is opened through `openWithoutFollowing`, which
+  refuses a reparse point anywhere on the way on the handle it opened. No
+  look-then-open check of a caller's path: the look follows what the open
+  would, and tells the caller what lies behind it.
 - A client reaches the service only through `dialService`, which takes the
   pipe name the service published, dials at identification level (the service
   reads the caller's token from it), and refuses a pipe that LocalSystem or the

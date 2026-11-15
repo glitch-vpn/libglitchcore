@@ -182,6 +182,18 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 		}
 	})
 
+	// A service without a folder of its own answers every start with a
+	// refusal, and still serves the rest.
+	if root, err := serviceHomeRoot(); err != nil {
+		logfmt.Errorf("[service] cannot locate the data folder: %v", err)
+	} else if owners, err := serviceHomeOwners(); err != nil {
+		logfmt.Errorf("[service] cannot name the data folder's owners: %v", err)
+	} else if home, err := prepareServiceHome(root, serviceHomeSDDL, owners); err != nil {
+		logfmt.Errorf("[service] cannot take the data folder: %v", err)
+	} else {
+		serviceDataHome = home
+	}
+
 	// One read only: retries wait for the Running status, which the service
 	// manager expects soon.
 	if user, err := readActiveUser(); err == nil {
@@ -678,6 +690,9 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		var req EngineStartRequest
 		if err := json.Unmarshal([]byte(payload.Request), &req); err != nil {
 			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid request: %v", err)}
+		}
+		if refusal := stageGeoAssets(&req); refusal != "" {
+			return pipeResponse{OK: false, Error: refusal}
 		}
 		applyTun2SocksConfig(payload.MTU, payload.UDPTimeoutSec)
 		// In the service build useServiceIPC is false, so engineStart runs
