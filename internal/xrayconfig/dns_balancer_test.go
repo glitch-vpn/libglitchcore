@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,7 +13,6 @@ import (
 	D "github.com/miekg/dns"
 	xnet "github.com/xtls/xray-core/common/net"
 	xrayCore "github.com/xtls/xray-core/core"
-	xrayConf "github.com/xtls/xray-core/infra/conf"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
@@ -151,26 +151,21 @@ func TestApplyDNS_RoutingLookupsFollowTheBalancerPastADeadFirstServer(t *testing
 	}
 }
 
-func lastRuleJSON(cfg *xrayConf.Config) string {
-	rules := cfg.RouterConfig.RuleList
-	return string(bytes.TrimSpace(rules[len(rules)-1]))
-}
-
-func TestApplyDNS_BalancerRuleSitsAfterTheTiers(t *testing.T) {
+// The resolvers' queries take the balancer where there is one, and the
+// first server otherwise, by a rule ahead of the tiers.
+func TestApplyDNS_ResolverQueriesFollowTheBalancer(t *testing.T) {
 	links := []string{dnsTestLink, "vless://11111111-1111-1111-1111-111111111111@192.0.2.2:443?type=tcp&security=none"}
-	const followRule = `{"type":"field","balancerTag":"vpn","inboundTag":["dns-internal"]}`
 	cases := []struct {
-		name    string
-		links   []string
-		dns     dnsconfig.Config
-		prof    routing.Profile
-		want    bool
-		wantTag string
+		name  string
+		links []string
+		dns   dnsconfig.Config
+		prof  routing.Profile
+		want  string
 	}{
-		{"normal", links, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, true, dnsInternalTag},
-		{"fake-ip", links, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, true, dnsInternalTag},
-		{"fake-ip with a direct outbound", links, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Direct: []string{"domain:example.com"}}}}, true, dnsInternalTag},
-		{"single server", links[:1], dnsconfig.Config{Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, false, dnsInternalTag},
+		{"normal", links, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, `{"type":"field","balancerTag":"vpn","inboundTag":["dns-internal"]}`},
+		{"fake-ip", links, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, `{"type":"field","balancerTag":"vpn","inboundTag":["dns-internal"]}`},
+		{"fake-ip with a direct outbound", links, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Direct: []string{"domain:example.com"}}}}, `{"type":"field","balancerTag":"vpn","inboundTag":["dns-internal"]}`},
+		{"single server", links[:1], dnsconfig.Config{Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, `{"type":"field","outboundTag":"proxy","inboundTag":["dns-internal"]}`},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -178,20 +173,17 @@ func TestApplyDNS_BalancerRuleSitsAfterTheTiers(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			before := len(res.Config.RouterConfig.RuleList)
 			ApplyDNS(res.Config, c.dns, c.prof)
-			if c.want {
-				if got := lastRuleJSON(res.Config); got != followRule {
-					t.Fatalf("last rule = %s, want %s", got, followRule)
-				}
-			} else {
-				for _, r := range res.Config.RouterConfig.RuleList {
-					if bytes.Contains(r, []byte(`"balancerTag":"vpn","inboundTag":["dns-internal"]`)) {
-						t.Fatalf("unexpected balancer rule for the internal lookups: %s", r)
-					}
-				}
+			var added []string
+			for _, r := range res.Config.RouterConfig.RuleList[:len(res.Config.RouterConfig.RuleList)-before] {
+				added = append(added, string(bytes.TrimSpace(r)))
 			}
-			if got := res.Config.DNSConfig.Tag; got != c.wantTag {
-				t.Fatalf("DNS tag = %q, want %q", got, c.wantTag)
+			if !slices.Contains(added, c.want) {
+				t.Fatalf("rules ahead of the tiers = %v, want one %s", added, c.want)
+			}
+			if got := res.Config.DNSConfig.Tag; got != dnsInternalTag {
+				t.Fatalf("DNS tag = %q, want %q", got, dnsInternalTag)
 			}
 		})
 	}

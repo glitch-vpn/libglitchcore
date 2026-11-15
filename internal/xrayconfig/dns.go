@@ -55,26 +55,27 @@ func queryStrategy(dns dnsconfig.Config) string {
 
 func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
 	general := plainNameServers(dns.NormalizedServers(""))
+	direct := directNameServers(dns)
+	// No fakedns here to fall through, so the split is expressed with
+	// per-server domain scopes. A proxy-scoped copy of the general list goes
+	// first: scopes are flat while routing is tiered, so a name an earlier
+	// tier proxies (vk.ru under a later domain:ru direct rule) must not be
+	// pinned to the direct resolver. The unscoped general list stays last, so
+	// an unreachable direct resolver degrades to it instead of making the
+	// name unresolvable.
 	nsList := general
-	if direct := directNameServers(dns); len(direct) > 0 {
-		// No fakedns here to fall through, so the split is expressed with
-		// per-server domain scopes. A proxy-scoped copy of the general list
-		// goes first: scopes are flat while routing is tiered, so a name an
-		// earlier tier proxies (vk.ru under a later domain:ru direct rule)
-		// must not be pinned to the direct resolver. The unscoped general list
-		// stays last, so an unreachable direct resolver degrades to it instead
-		// of making the name unresolvable.
+	switch {
+	case prof.ResolvedMode() == ModeDirectAll:
+		// Catch-all is direct: the direct resolvers answer by default.
 		proxyScoped := scopedCopies(general, tierDomains(prof, routing.TargetProxy))
-		switch {
-		case prof.ResolvedMode() == ModeDirectAll:
-			// Catch-all is direct: the direct resolvers answer by default.
-			nsList = append(append(proxyScoped, direct...), general...)
-		default:
-			if domains := tierDomains(prof, routing.TargetDirect); len(domains) > 0 {
-				nsList = append(append(proxyScoped, scopedCopies(direct, domains)...), general...)
-			} else {
-				logfmt.Warnf("[Xray][DNS] directServers ignored in normal mode: no direct domain rules to scope them to")
-			}
+		nsList = append(append(proxyScoped, direct...), general...)
+	case len(direct) == 0:
+	default:
+		if domains := tierDomains(prof, routing.TargetDirect); len(domains) > 0 {
+			proxyScoped := scopedCopies(general, tierDomains(prof, routing.TargetProxy))
+			nsList = append(append(proxyScoped, scopedCopies(direct, domains)...), general...)
+		} else {
+			logfmt.Warnf("[Xray][DNS] directServers ignored in normal mode: no direct domain rules to scope them to")
 		}
 	}
 	hosts := hostsWrapper(dns.NormalizedHosts())
@@ -91,27 +92,49 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfi
 		return
 	}
 	interceptAppQueries(cfg)
-	routeDirectResolvers(cfg)
-	followBalancer(cfg)
+	routeModuleQueries(cfg)
 }
 
 func directNameServers(dns dnsconfig.Config) []*xrayConf.NameServerConfig {
-	direct := plainNameServers(dns.NormalizedDirectServers())
-	for _, ns := range direct {
-		ns.Tag = dnsDirectTag
-	}
-	return direct
+	return taggedCopies(plainNameServers(dns.NormalizedDirectServers()), dnsDirectTag)
 }
 
-// routeDirectResolvers sends the direct resolvers' queries out of the direct
-// outbound, ahead of the tiers. Without that outbound nothing is direct, and
-// their queries are dialed as the default outbound dials.
-func routeDirectResolvers(cfg *xrayConf.Config) {
-	if !hasOutbound(cfg, directTag) || !slices.ContainsFunc(cfg.DNSConfig.Servers, func(ns *xrayConf.NameServerConfig) bool { return ns.Tag == dnsDirectTag }) {
-		return
+func taggedCopies(list []*xrayConf.NameServerConfig, tag string) []*xrayConf.NameServerConfig {
+	out := make([]*xrayConf.NameServerConfig, 0, len(list))
+	for _, ns := range list {
+		tagged := *ns
+		tagged.Tag = tag
+		out = append(out, &tagged)
 	}
-	rule := fieldRule{InboundTag: []string{dnsDirectTag}, OutboundTag: directTag}
-	cfg.RouterConfig.RuleList = append([]json.RawMessage{rule.raw()}, cfg.RouterConfig.RuleList...)
+	return out
+}
+
+// routeModuleQueries sends the resolvers' queries where their tags say, ahead
+// of the tiers: a tier holding a resolver's address would otherwise route the
+// query by it. The direct resolvers' go out of the direct outbound; the others
+// through the proxy - the balancer, or the first server - except to a
+// resolver on the local networks, which only the direct outbound reaches.
+// Without a direct outbound nothing is direct, and every query goes through
+// the proxy.
+func routeModuleQueries(cfg *xrayConf.Config) {
+	var rules []json.RawMessage
+	if hasOutbound(cfg, directTag) {
+		if slices.ContainsFunc(cfg.DNSConfig.Servers, func(ns *xrayConf.NameServerConfig) bool { return ns.Tag == dnsDirectTag }) {
+			rules = append(rules, fieldRule{InboundTag: []string{dnsDirectTag}, OutboundTag: directTag}.raw())
+		}
+		rules = append(rules, fieldRule{InboundTag: []string{dnsInternalTag}, IP: routing.LocalNetworkCIDRs, OutboundTag: directTag}.raw())
+	}
+	through := fieldRule{InboundTag: []string{dnsInternalTag}}
+	switch {
+	case slices.ContainsFunc(cfg.RouterConfig.Balancers, func(b *xrayConf.BalancingRule) bool { return b.Tag == balancerTag }):
+		through.BalancerTag = balancerTag
+	case len(cfg.OutboundConfigs) > 0:
+		through.OutboundTag = cfg.OutboundConfigs[0].Tag
+	}
+	if through.BalancerTag != "" || through.OutboundTag != "" {
+		rules = append(rules, through.raw())
+	}
+	cfg.RouterConfig.RuleList = append(rules, cfg.RouterConfig.RuleList...)
 }
 
 // routerResolves: the router's lookups ask the same resolvers freedom asks to
@@ -122,9 +145,9 @@ func routerResolves(prof RoutingProfile) bool {
 }
 
 // interceptAppQueries answers the apps' queries from the module through a
-// "dns" outbound. Empty settings intercept A and AAAA and pass the rest to
-// the original destination. The rule is scoped to the app traffic tags so it
-// does not also take the module's own queries.
+// "dns" outbound. Empty settings intercept A and AAAA and answer every other
+// record type empty. The rule is scoped to the app traffic tags so it does
+// not also take the module's own queries.
 func interceptAppQueries(cfg *xrayConf.Config) {
 	dnsSettings := json.RawMessage(`{}`)
 	ensureOutbound(cfg, dnsOutboundTag, xrayConf.OutboundDetourConfig{
@@ -186,12 +209,7 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 		}
 		servers = append(servers, real...)
 	} else {
-		servers = append(servers, directNameServers(dns)...)
-		for _, ns := range real {
-			behind := *ns
-			behind.Tag = dnsDirectTag
-			servers = append(servers, &behind)
-		}
+		servers = append(append(servers, directNameServers(dns)...), taggedCopies(real, dnsDirectTag)...)
 	}
 	cfg.DNSConfig = &xrayConf.DNSConfig{
 		Servers:       servers,
@@ -200,23 +218,7 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 		Tag:           dnsInternalTag,
 	}
 	interceptAppQueries(cfg)
-	routeDirectResolvers(cfg)
-	followBalancer(cfg)
-}
-
-// followBalancer sends the lookups xray makes for its own routing, and the
-// module's upstream queries, through the balancer. Untagged they take the
-// default outbound, the first server, so one dead server stalls every name no
-// domain rule matches. The rule sits last: tiers, kill-switches and local
-// networks keep their places. A single server has no balancer and is left alone.
-func followBalancer(cfg *xrayConf.Config) {
-	if cfg.RouterConfig == nil || cfg.DNSConfig == nil ||
-		!slices.ContainsFunc(cfg.RouterConfig.Balancers, func(b *xrayConf.BalancingRule) bool { return b.Tag == balancerTag }) {
-		return
-	}
-	cfg.DNSConfig.Tag = dnsInternalTag
-	rule := fieldRule{InboundTag: []string{dnsInternalTag}, BalancerTag: balancerTag}
-	cfg.RouterConfig.RuleList = append(cfg.RouterConfig.RuleList, rule.raw())
+	routeModuleQueries(cfg)
 }
 
 // scopedCopies restricts copies of the servers to domains; SkipFallback keeps

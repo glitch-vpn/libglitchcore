@@ -104,23 +104,7 @@ func TestApplyDNS_FakeIPWiring(t *testing.T) {
 		t.Fatal("no dns outbound")
 	}
 
-	if len(cfg.RouterConfig.RuleList) != beforeRules+1 {
-		t.Fatalf("rule count = %d, want %d", len(cfg.RouterConfig.RuleList), beforeRules+1)
-	}
-	var first struct {
-		Port        string   `json:"port"`
-		InboundTag  []string `json:"inboundTag"`
-		OutboundTag string   `json:"outboundTag"`
-	}
-	if uErr := json.Unmarshal(cfg.RouterConfig.RuleList[0], &first); uErr != nil {
-		t.Fatalf("first rule unmarshal: %v", uErr)
-	}
-	if first.Port != "53" || first.OutboundTag != dnsOutboundTag {
-		t.Fatalf("first rule = %+v, want port 53 -> %s", first, dnsOutboundTag)
-	}
-	if len(first.InboundTag) == 0 || first.InboundTag[0] != AppTrafficTag {
-		t.Fatalf("first rule inboundTag = %v, want app inbounds", first.InboundTag)
-	}
+	wantModuleQueryRules(t, cfg, beforeRules)
 	if cfg.DNSConfig.Tag != dnsInternalTag {
 		t.Fatalf("DNSConfig.Tag = %q, want %q", cfg.DNSConfig.Tag, dnsInternalTag)
 	}
