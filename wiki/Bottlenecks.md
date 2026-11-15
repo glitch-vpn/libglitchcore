@@ -52,22 +52,29 @@ set by the app process would not.
 
 * **xray has no DoT.** `tls://` resolvers are skipped with a log line; use
   `https://`, `quic://` or a plain address.
-* **`directServers` reach differs by mode.** In fake-ip both engines cover
-  every direct dial. In normal mode an app's query goes upstream the way its
-  flow will go - through the proxy where the catch-all proxies, direct where it
-  is direct - and the split for the names a tier sends the other way is
-  expressed per name (xray: per-server domain scopes; mihomo: a nameserver
-  policy over `domain:`, `full:` and `geosite:` entries), so a direct list of
-  only `geoip:`/CIDR/`process:` entries leaves nothing to scope and the
-  resolvers are ignored (xray logs it). In `direct-all` the direct resolvers
-  become the default and the general list is scoped to the explicit proxy
-  rules. On xray the module's queries are told apart by the resolver's
-  address alone: the direct resolvers are dialed direct, every other through
-  the proxy, so a direct resolver that is also a general one stays on the
-  proxied path, and in `direct-all` with no direct resolvers every query
-  travels through the proxy. On mihomo a resolver given by name is found
-  through the session's resolvers that are addresses (`default-nameserver`),
-  not mihomo's own four.
+* **A query travels as its flow would.** Through the proxy where the
+  catch-all proxies, direct where it is direct, and a tier's direct names take
+  `directServers`. With fake-ip off an app's query goes upstream that way, and
+  the split for the names a tier sends the other way is expressed per name
+  (xray: per-server domain scopes; mihomo: a nameserver policy over `domain:`,
+  `full:` and `geosite:` entries), so a direct list of only
+  `geoip:`/CIDR/`process:` entries leaves nothing to scope and the resolvers
+  are ignored (xray logs it). In `direct-all` the direct resolvers become the
+  default and the general list is scoped to the explicit proxy rules. With
+  fake-ip on, mihomo answers A and AAAA from the pool and sends the rest
+  upstream the same way: the filter's names, and every other record type. xray
+  resolves the filter's names through the proxy; its module otherwise looks a
+  name up only to dial it direct (`asis`, or `direct-all`), so the direct
+  resolvers answer those lookups, the general ones behind them, and both leave
+  direct. Each of xray's resolvers sends its queries under an inbound tag of
+  its own, so a direct resolver that is also a general one is told
+  apart. On mihomo a direct dial resolves its name through `direct-nameserver`
+  - the direct resolvers, or the general ones plain when none are named: a
+  direct flow is seen on the way anyway - and a resolver given by name is
+  found through the session's resolvers that are addresses
+  (`default-nameserver`), not mihomo's own four.
+  A server's own hostname is resolved by the system resolver, from the device,
+  on both engines: it has to be reached before anything can travel through it.
 * **A WireGuard or AmneziaWG outbound resolves inside its tunnel** with the
   session's resolvers as its own. That outbound takes no bootstrap resolvers,
   so a resolver given by name (`https://dns.google/dns-query`) has its name
@@ -90,10 +97,12 @@ set by the app process would not.
 
 `asis` (the default) never resolves for routing. `ipifnonmatch` and
 `ipondemand` make xray's router resolve domain-form requests so IP rules can
-match them — and in fake-ip mode those internal lookups are routed to the
-direct outbound whenever one exists. The browsing domain list then leaves the
-machine in the clear, which is what fake-ip otherwise prevents. Enable it only
-when IP-rule matching for domain traffic is worth that.
+match them. In `proxy-all` those lookups travel through the proxy, as the
+names they are for will unless an address rule takes them, and `directServers`
+are left out (logged), so a direct tier's name is resolved through the proxy
+too when freedom dials it. In `direct-all` the direct resolvers answer them,
+direct, and a proxied name a tier lists after an address rule is looked up
+direct under `ipondemand`.
 
 `ipifnonmatch` resolves a name that no domain rule matched; `ipondemand`
 resolves it at the first IP rule it meets. Under either of them:
