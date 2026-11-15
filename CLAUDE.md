@@ -148,7 +148,9 @@ break it.
    ./internal/smoke/`. A new feature gets a subtest here — the loopback suite
    proves link → config → engine → events end-to-end with no network. The
    first run after relinking can time out (Defender scans the fresh binary);
-   rerun before debugging.
+   rerun before debugging. The GitHub Windows runner's TEMP is an 8.3 short
+   path (`C:\Users\RUNNER~1\...`), so a path compared as text with one Windows
+   resolved (`GetFinalPathNameByHandle`) passes locally and fails in CI.
 3. Root cgo package: mingw gcc (`C:\ProgramData\mingw64\mingw64\bin`) +
    Flutter's Dart headers, `go vet -tags "with_gvisor"` and
    `-tags "service with_gvisor"`.

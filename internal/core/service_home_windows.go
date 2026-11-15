@@ -93,7 +93,7 @@ func prepareServiceHome(root, sddl string, owners []*windows.SID) (serviceHome, 
 // openOwnFolder opens a folder the service writes under, and refuses one
 // that is a reparse point or owned by anybody but owners.
 func openOwnFolder(path string, owners []*windows.SID, access uint32) (windows.Handle, error) {
-	handle, err := openWithoutFollowing(path, windows.READ_CONTROL|access, windows.FILE_FLAG_BACKUP_SEMANTICS)
+	handle, err := openWithoutFollowing(path, windows.READ_CONTROL|access, true)
 	if err != nil {
 		return windows.InvalidHandle, err
 	}
@@ -147,66 +147,102 @@ func isLocalDrivePath(path string) bool {
 	return letter >= 'a' && letter <= 'z'
 }
 
-// openWithoutFollowing opens path itself: a reparse point anywhere on the way
-// is refused, whether at the leaf (opened as itself and seen in its
-// attributes) or in a folder above (the handle's final path then differs from
-// the one asked for). The check is on the handle, so nothing swapped in
-// between a look and the open is followed.
-func openWithoutFollowing(path string, access uint32, flags uint32) (windows.Handle, error) {
+// openWithoutFollowing opens path itself, refusing a reparse point anywhere on
+// the way. It walks from the volume's root one name at a time, each opened as
+// itself relative to the handle of the folder above, so the check holds for
+// the objects read whatever names spell them, short or long, and a junction
+// planted behind an opened folder is never reached.
+func openWithoutFollowing(path string, access uint32, directory bool) (windows.Handle, error) {
 	if !isLocalDrivePath(path) {
 		return windows.InvalidHandle, fmt.Errorf("%s is not on a local drive", path)
 	}
-	name, err := windows.UTF16PtrFromString(path)
+	clean := filepath.Clean(path)
+	volume, rest := clean[:len(`X:\`)], clean[len(`X:\`):]
+	var names []string
+	if rest != "" {
+		names = strings.Split(rest, `\`)
+	}
+	walkAccess := uint32(windows.FILE_READ_ATTRIBUTES | windows.SYNCHRONIZE)
+	rootAccess := walkAccess
+	if len(names) == 0 {
+		rootAccess |= access
+	}
+	handle, err := openComponent(0, `\??\`+volume, rootAccess, true)
+	if err != nil {
+		return windows.InvalidHandle, err
+	}
+	for i, name := range names {
+		leaf := i == len(names)-1
+		if err := refuseReparsePoint(handle, path, "reached through a reparse point"); err != nil {
+			windows.CloseHandle(handle)
+			return windows.InvalidHandle, err
+		}
+		childAccess, childDirectory := walkAccess, true
+		if leaf {
+			childAccess, childDirectory = walkAccess|access, directory
+		}
+		child, err := openComponent(handle, name, childAccess, childDirectory)
+		windows.CloseHandle(handle)
+		if err != nil {
+			return windows.InvalidHandle, err
+		}
+		handle = child
+	}
+	if err := refuseReparsePoint(handle, path, "a reparse point"); err != nil {
+		windows.CloseHandle(handle)
+		return windows.InvalidHandle, err
+	}
+	return handle, nil
+}
+
+// openComponent opens name, relative to folder unless folder is zero, as
+// itself rather than what it points to.
+func openComponent(folder windows.Handle, name string, access uint32, directory bool) (windows.Handle, error) {
+	objectName, err := windows.NewNTUnicodeString(name)
 	if err != nil {
 		return windows.InvalidHandle, err
 	}
 	// Identification level: a pipe server at the leaf cannot act as the
 	// service.
-	handle, err := windows.CreateFile(name, access,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil,
-		windows.OPEN_EXISTING,
-		flags|windows.FILE_FLAG_OPEN_REPARSE_POINT|windows.SECURITY_SQOS_PRESENT|windows.SECURITY_IDENTIFICATION, 0)
+	qualityOfService := windows.SECURITY_QUALITY_OF_SERVICE{
+		Length:             uint32(unsafe.Sizeof(windows.SECURITY_QUALITY_OF_SERVICE{})),
+		ImpersonationLevel: windows.SecurityIdentification,
+	}
+	attributes := windows.OBJECT_ATTRIBUTES{
+		Length:        uint32(unsafe.Sizeof(windows.OBJECT_ATTRIBUTES{})),
+		RootDirectory: folder,
+		ObjectName:    objectName,
+		Attributes:    windows.OBJ_CASE_INSENSITIVE,
+		SecurityQoS:   &qualityOfService,
+	}
+	options := uint32(windows.FILE_OPEN_REPARSE_POINT | windows.FILE_SYNCHRONOUS_IO_NONALERT | windows.FILE_NON_DIRECTORY_FILE)
+	if directory {
+		options = windows.FILE_OPEN_REPARSE_POINT | windows.FILE_SYNCHRONOUS_IO_NONALERT | windows.FILE_DIRECTORY_FILE
+	}
+	var handle windows.Handle
+	var status windows.IO_STATUS_BLOCK
+	err = windows.NtCreateFile(&handle, access, &attributes, &status, nil, 0,
+		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
+		windows.FILE_OPEN, options, 0, 0)
 	if err != nil {
-		return windows.InvalidHandle, err
-	}
-	var info windows.ByHandleFileInformation
-	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
-		windows.CloseHandle(handle)
-		return windows.InvalidHandle, err
-	}
-	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		windows.CloseHandle(handle)
-		return windows.InvalidHandle, fmt.Errorf("%s is a reparse point", path)
-	}
-	final, err := finalPathOf(handle)
-	if err != nil {
-		windows.CloseHandle(handle)
-		return windows.InvalidHandle, err
-	}
-	if !strings.EqualFold(final, filepath.Clean(path)) {
-		windows.CloseHandle(handle)
-		return windows.InvalidHandle, fmt.Errorf("%s is reached through a reparse point", path)
+		var ntStatus windows.NTStatus
+		if errors.As(err, &ntStatus) {
+			err = ntStatus.Errno()
+		}
+		return windows.InvalidHandle, &os.PathError{Op: "open", Path: name, Err: err}
 	}
 	return handle, nil
 }
 
-func finalPathOf(handle windows.Handle) (string, error) {
-	buffer := make([]uint16, windows.MAX_LONG_PATH)
-	n, err := windows.GetFinalPathNameByHandle(handle, &buffer[0], uint32(len(buffer)), 0)
-	if err != nil {
-		return "", err
+func refuseReparsePoint(handle windows.Handle, path, what string) error {
+	var info windows.ByHandleFileInformation
+	if err := windows.GetFileInformationByHandle(handle, &info); err != nil {
+		return err
 	}
-	if n >= uint32(len(buffer)) {
-		return "", errors.New("final path too long")
+	if info.FileAttributes&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return fmt.Errorf("%s is %s", path, what)
 	}
-	final := windows.UTF16ToString(buffer[:n])
-	switch {
-	case strings.HasPrefix(final, `\\?\UNC\`):
-		final = `\\` + final[len(`\\?\UNC\`):]
-	case strings.HasPrefix(final, `\\?\`):
-		final = final[len(`\\?\`):]
-	}
-	return final, nil
+	return nil
 }
 
 // stageSession makes the folder the next start runs in, under root, holding
@@ -265,7 +301,7 @@ func removeEarlierSessions(sessions string) {
 }
 
 func copyWithoutFollowing(src, dst string) error {
-	handle, err := openWithoutFollowing(src, windows.GENERIC_READ, 0)
+	handle, err := openWithoutFollowing(src, windows.GENERIC_READ, false)
 	if err != nil {
 		return err
 	}

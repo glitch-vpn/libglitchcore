@@ -323,3 +323,49 @@ func TestServiceHome_StageRefusesAPathOffALocalDrive(t *testing.T) {
 		}
 	}
 }
+
+func shortPathOf(t *testing.T, path string) string {
+	t.Helper()
+	long, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]uint16, windows.MAX_LONG_PATH)
+	n, err := windows.GetShortPathName(long, &buffer[0], uint32(len(buffer)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return windows.UTF16ToString(buffer[:n])
+}
+
+// The GitHub runner's TEMP is itself spelled with short names.
+func TestServiceHome_TakesAPathSpelledWithShortNames(t *testing.T) {
+	base := filepath.Join(t.TempDir(), "a folder with a long name")
+	if err := os.Mkdir(base, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	short := shortPathOf(t, base)
+	if strings.EqualFold(short, base) {
+		t.Skipf("this volume gives %s no short name", base)
+	}
+	home, err := prepareServiceHome(filepath.Join(short, "root"), ownSDDL(t), []*windows.SID{currentUserSID(t)})
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	if _, err := prepareServiceHome(home.root, ownSDDL(t), home.owners); err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	caller := filepath.Join(short, "geo")
+	if err := os.Mkdir(caller, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	writePlaceholderGeoFiles(t, caller)
+	if _, err := home.stageSession(caller); err != nil {
+		t.Fatalf("stage: %v", err)
+	}
+	link := filepath.Join(base, "a junction with a long name")
+	makeJunction(t, link, caller)
+	if _, err := home.stageSession(shortPathOf(t, link)); err == nil || !strings.Contains(err.Error(), "reparse point") {
+		t.Fatalf("a junction spelled by its short name must be refused, got %v", err)
+	}
+}
