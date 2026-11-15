@@ -137,6 +137,7 @@ func buildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 		if err != nil {
 			return nil, err
 		}
+		bindServerDial(ob, server, routing.DirectInterface)
 		cfg.OutboundConfigs = []xrayConf.OutboundDetourConfig{*ob}
 		res.OutboundTags = []string{OutboundTag}
 		res.Servers = []string{server}
@@ -166,6 +167,7 @@ func buildConfig(links []string, opts BalancerOptions, routing RoutingProfile, x
 		if berr != nil {
 			return nil, fmt.Errorf("link %d: %w", i, berr)
 		}
+		bindServerDial(ob, server, routing.DirectInterface)
 		cfg.OutboundConfigs = append(cfg.OutboundConfigs, *ob)
 		res.OutboundTags = append(res.OutboundTags, tag)
 		res.Servers = append(res.Servers, server)

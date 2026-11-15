@@ -81,12 +81,15 @@ func (res *BuildResult) addNamed(cfg *xrayConf.Config, p RoutingProfile, opts Ba
 		if direct {
 			resolve = preResolveIPv4
 		}
-		ob, _, dialIP, err := outboundFromLink(link, tag, resolve)
+		ob, server, dialIP, err := outboundFromLink(link, tag, resolve)
 		if err != nil {
 			return nil, fmt.Errorf("target %q: %w", id, err)
 		}
-		if direct && dialIP != "" {
-			res.DialIPv4s = append(res.DialIPv4s, dialIP)
+		if direct {
+			bindServerDial(ob, server, p.DirectInterface)
+			if dialIP != "" {
+				res.DialIPv4s = append(res.DialIPv4s, dialIP)
+			}
 		}
 		return ob, nil
 	}
