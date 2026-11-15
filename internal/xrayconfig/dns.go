@@ -3,7 +3,6 @@ package xrayconfig
 import (
 	"encoding/json"
 	"net"
-	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -21,6 +20,9 @@ const (
 	// Untagged, the module's own upstream queries hit the app :53 rule and get
 	// fake IPs, so the direct path dials the fake pool (blackhole).
 	dnsInternalTag = "dns-internal"
+	// The direct resolvers' queries carry a tag of their own: nothing but the
+	// server a query goes to tells a direct resolver's from the others'.
+	dnsDirectTag = "dns-direct"
 
 	// v4 pool: upper /16 of xray's default 198.18.0.0/15, clear of the Windows
 	// TUN's own 198.18.0.1. The v6 pool is mandatory even on a v4-only TUN -
@@ -32,8 +34,8 @@ const (
 )
 
 // ApplyDNS reads the routing profile only to place DirectServers (normal mode
-// scopes them by domain rules; fake-ip needs no rules); it never emits routing
-// rules from it.
+// scopes them by domain rules; fake-ip orders them by what the module looks
+// up); it never emits routing rules from it.
 func ApplyDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
 	if dns.FakeIP() {
 		applyFakeDNS(cfg, dns, prof)
@@ -54,7 +56,7 @@ func queryStrategy(dns dnsconfig.Config) string {
 func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
 	general := plainNameServers(dns.NormalizedServers(""))
 	nsList := general
-	if direct := plainNameServers(dns.NormalizedDirectServers()); len(direct) > 0 {
+	if direct := directNameServers(dns); len(direct) > 0 {
 		// No fakedns here to fall through, so the split is expressed with
 		// per-server domain scopes. A proxy-scoped copy of the general list
 		// goes first: scopes are flat while routing is tiered, so a name an
@@ -89,68 +91,34 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfi
 		return
 	}
 	interceptAppQueries(cfg)
-
-	// The module's queries to the direct resolvers go direct, every other
-	// through the proxy: a query is told apart by the address it goes to,
-	// nothing else, so the direct resolvers are the ones a tier's direct names
-	// (direct-all: every unlisted name) are scoped to, and a direct resolver
-	// that is also a general one is left on the proxied path rather than carry
-	// every query direct.
-	if hasOutbound(cfg, directTag) {
-		cfg.RouterConfig.RuleList = append(directResolverRules(dns), cfg.RouterConfig.RuleList...)
-	}
+	routeDirectResolvers(cfg)
 	followBalancer(cfg)
 }
 
-// routeModuleQueriesDirect sends every query the module makes out of the
-// direct outbound.
-func routeModuleQueriesDirect(cfg *xrayConf.Config) {
-	internal := fieldRule{InboundTag: []string{dnsInternalTag}, OutboundTag: directTag}
-	cfg.RouterConfig.RuleList = append([]json.RawMessage{internal.raw()}, cfg.RouterConfig.RuleList...)
+func directNameServers(dns dnsconfig.Config) []*xrayConf.NameServerConfig {
+	direct := plainNameServers(dns.NormalizedDirectServers())
+	for _, ns := range direct {
+		ns.Tag = dnsDirectTag
+	}
+	return direct
 }
 
-// directResolverRules send the module's queries to the direct resolvers'
-// addresses direct. Resolvers are the same by host, port aside.
-func directResolverRules(dns dnsconfig.Config) []json.RawMessage {
-	general := map[string]bool{}
-	for _, s := range dns.NormalizedServers("") {
-		general[resolverHost(s)] = true
+// routeDirectResolvers sends the direct resolvers' queries out of the direct
+// outbound, ahead of the tiers. Without that outbound nothing is direct, and
+// their queries are dialed as the default outbound dials.
+func routeDirectResolvers(cfg *xrayConf.Config) {
+	if !hasOutbound(cfg, directTag) || !slices.ContainsFunc(cfg.DNSConfig.Servers, func(ns *xrayConf.NameServerConfig) bool { return ns.Tag == dnsDirectTag }) {
+		return
 	}
-	var ips, names []string
-	for _, s := range dns.NormalizedDirectServers() {
-		host := resolverHost(s)
-		switch {
-		case host == "" || general[host]:
-		case net.ParseIP(host) != nil:
-			ips = append(ips, host)
-		default:
-			names = append(names, "full:"+host)
-		}
-	}
-	var rules []json.RawMessage
-	if len(ips) > 0 {
-		rules = append(rules, fieldRule{InboundTag: []string{dnsInternalTag}, IP: ips, OutboundTag: directTag}.raw())
-	}
-	if len(names) > 0 {
-		rules = append(rules, fieldRule{InboundTag: []string{dnsInternalTag}, Domain: names, OutboundTag: directTag}.raw())
-	}
-	return rules
+	rule := fieldRule{InboundTag: []string{dnsDirectTag}, OutboundTag: directTag}
+	cfg.RouterConfig.RuleList = append([]json.RawMessage{rule.raw()}, cfg.RouterConfig.RuleList...)
 }
 
-// resolverHost is the address a resolver is dialed at: the host of a URL,
-// or a plain entry without its port.
-func resolverHost(server string) string {
-	if dnsconfig.Scheme(server) != "" {
-		u, err := url.Parse(server)
-		if err != nil {
-			return ""
-		}
-		return u.Hostname()
-	}
-	if host, _, err := net.SplitHostPort(server); err == nil {
-		return host
-	}
-	return server
+// routerResolves: the router's lookups ask the same resolvers freedom asks to
+// dial a direct name.
+func routerResolves(prof RoutingProfile) bool {
+	strategy, _ := NormalizeDomainStrategy(prof.DomainStrategy)
+	return strategy == strategyIPIfNonMatch || strategy == strategyIPOnDemand
 }
 
 // interceptAppQueries answers the apps' queries from the module through a
@@ -206,12 +174,25 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 	servers = append(servers, &xrayConf.NameServerConfig{
 		Address: &xrayConf.Address{Address: xrayNet.ParseAddress("fakedns")},
 	})
-	// Direct resolvers sit *behind* fakedns so the app still gets fake IPs;
-	// the module's own lookups skip fakedns (FakeEnable=false) and land here,
-	// and those lookups are what freedom performs when it dials a direct-routed
-	// name. Same reach as mihomo's direct-nameserver: no domain rules needed.
-	servers = append(servers, plainNameServers(dns.NormalizedDirectServers())...)
-	servers = append(servers, real...)
+	// The module's own lookups skip fakedns (FakeEnable=false) and land on the
+	// resolvers behind it whichever name they are for: a per-name scope would
+	// take the name off the pool for the app too. So they leave direct where
+	// the module looks up only to dial direct, and through the proxy where a
+	// resolving router looks up proxied names, with the direct resolvers left
+	// out (wiki/Bottlenecks.md, DNS).
+	if routerResolves(prof) && prof.ResolvedMode() != ModeDirectAll {
+		if len(dns.NormalizedDirectServers()) > 0 {
+			logfmt.Warnf("[Xray][DNS] directServers ignored under %s: the router's lookups would carry proxied names direct", prof.DomainStrategy)
+		}
+		servers = append(servers, real...)
+	} else {
+		servers = append(servers, directNameServers(dns)...)
+		for _, ns := range real {
+			behind := *ns
+			behind.Tag = dnsDirectTag
+			servers = append(servers, &behind)
+		}
+	}
 	cfg.DNSConfig = &xrayConf.DNSConfig{
 		Servers:       servers,
 		Hosts:         hostsWrapper(dns.NormalizedHosts()),
@@ -219,14 +200,8 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 		Tag:           dnsInternalTag,
 	}
 	interceptAppQueries(cfg)
-
-	// Internal queries go direct when that outbound exists; pure proxy-all has
-	// none, so they fall to the default and resolve through the tunnel.
-	if hasOutbound(cfg, directTag) {
-		routeModuleQueriesDirect(cfg)
-	} else {
-		followBalancer(cfg)
-	}
+	routeDirectResolvers(cfg)
+	followBalancer(cfg)
 }
 
 // followBalancer sends the lookups xray makes for its own routing, and the

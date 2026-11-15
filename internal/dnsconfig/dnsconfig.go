@@ -28,12 +28,14 @@ type Config struct {
 	// domain:/geosite:/regexp:/keyword: prefixes).
 	Hosts map[string][]string `json:"hosts,omitempty"`
 	// Resolvers for direct-routed names. mihomo maps them to
-	// direct-nameserver; xray has no such switch, so they are placed behind
-	// fakedns, where the module's own lookups land - the ones freedom makes
-	// when it dials a direct-routed name. Normal (non-fake-ip) mode has no
-	// fakedns to fall through, so there both engines scope them by the
-	// profile's direct domain rules instead (direct-all: they become the
-	// default and the general list is scoped to the proxy rules).
+	// direct-nameserver and a nameserver policy over the direct tiers' names.
+	// xray scopes them to those names with fake-ip off, and with it on places
+	// them first behind fakedns, where the module's own lookups land - the
+	// ones freedom makes when it dials a direct name (direct-all: every
+	// unlisted one); under a resolving domain strategy in proxy-all it leaves
+	// them out, as the router's lookups serve proxied names. In direct-all
+	// they become the default and the general list is scoped to the proxy
+	// rules.
 	DirectServers []string `json:"directServers,omitempty"`
 	// From opts["disableIPv6"], not dnsConfig JSON; routing side is Profile.DisableIPv6.
 	DisableIPv6 bool `json:"-"`

@@ -126,41 +126,6 @@ func TestApplyDNS_FakeIPWiring(t *testing.T) {
 	}
 }
 
-func TestApplyDNS_FakeIPInternalQueriesGoDirect(t *testing.T) {
-	res, err := BuildConfig([]string{dnsTestLink}, BalancerOptions{}, RoutingProfile{Mode: "direct-all"}, "warning")
-	if err != nil {
-		t.Fatalf("BuildConfig: %v", err)
-	}
-	cfg := res.Config
-	if !hasOutbound(cfg, directTag) {
-		t.Fatal("direct-all profile did not create the direct outbound")
-	}
-
-	ApplyDNS(cfg, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, RoutingProfile{})
-
-	if cfg.DNSConfig.Tag != dnsInternalTag {
-		t.Fatalf("DNSConfig.Tag = %q, want %q", cfg.DNSConfig.Tag, dnsInternalTag)
-	}
-	type ruleView struct {
-		Port        string   `json:"port"`
-		InboundTag  []string `json:"inboundTag"`
-		OutboundTag string   `json:"outboundTag"`
-	}
-	var first, second ruleView
-	if uErr := json.Unmarshal(cfg.RouterConfig.RuleList[0], &first); uErr != nil {
-		t.Fatalf("first rule unmarshal: %v", uErr)
-	}
-	if uErr := json.Unmarshal(cfg.RouterConfig.RuleList[1], &second); uErr != nil {
-		t.Fatalf("second rule unmarshal: %v", uErr)
-	}
-	if len(first.InboundTag) != 1 || first.InboundTag[0] != dnsInternalTag || first.OutboundTag != directTag {
-		t.Fatalf("first rule = %+v, want inbound %s -> %s", first, dnsInternalTag, directTag)
-	}
-	if second.Port != "53" || second.OutboundTag != dnsOutboundTag {
-		t.Fatalf("second rule = %+v, want port 53 -> %s", second, dnsOutboundTag)
-	}
-}
-
 func TestApplyDNS_FakeIPBuilds(t *testing.T) {
 	res, err := BuildConfig([]string{dnsTestLink}, BalancerOptions{}, RoutingProfile{}, "warning")
 	if err != nil {
