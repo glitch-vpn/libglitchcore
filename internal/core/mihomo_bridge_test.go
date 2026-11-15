@@ -420,8 +420,12 @@ func TestMihomoBridge_ProcessDirectFlowToAnUnresolvableNameIsRefused(t *testing.
 	}
 	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dns, socksRelay(t))
 	fake := fakeIPFor(t, "silent.test")
-	if _, err := direct.DialContext(context.Background(), bridgeTestFlow(M.TCP, &net.TCPAddr{IP: fake, Port: 80})); err == nil {
+	_, err = direct.DialContext(context.Background(), bridgeTestFlow(M.TCP, &net.TCPAddr{IP: fake, Port: 80}))
+	if err == nil {
 		t.Fatal("a process-direct flow to a name no direct resolver answers was accepted")
+	}
+	if strings.Contains(err.Error(), "silent.test") || strings.Contains(err.Error(), fake.String()) {
+		t.Fatalf("the refusal names the destination: %v", err)
 	}
 	if _, err := direct.DialUDP(bridgeTestFlow(M.UDP, &net.UDPAddr{IP: fake, Port: 443})); err == nil {
 		t.Fatal("a process-direct UDP flow to a name no direct resolver answers was accepted")
@@ -478,8 +482,11 @@ func TestMihomoBridge_ProcessDirectFlowToANameWithABlockedAddressAmongSeveralIsR
 		t.Error("a name with open addresses only was not dialed direct")
 	}
 	fake := fakeIPFor(t, "mixed.test")
-	if _, err := direct.DialUDP(bridgeTestFlow(M.UDP, &net.UDPAddr{IP: fake, Port: port})); err == nil {
+	_, err := direct.DialUDP(bridgeTestFlow(M.UDP, &net.UDPAddr{IP: fake, Port: port}))
+	if err == nil {
 		t.Error("a UDP flow to a name with a blocked address among its answers was accepted")
+	} else if strings.Contains(err.Error(), "mixed.test") || strings.Contains(err.Error(), "127.0.0.5") {
+		t.Errorf("the refusal names the destination: %v", err)
 	}
 }
 

@@ -4,6 +4,7 @@ package core
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/netip"
@@ -21,6 +22,15 @@ import (
 )
 
 var _ t2sproxy.Proxy = (*mihomoBridgeProxy)(nil)
+
+// A refused flow's error reaches the log: none of these names what the app
+// was reaching for.
+var (
+	errDirectNameBlocked    = errors.New("direct app: name blocked")
+	errDirectAddressBlocked = errors.New("direct app: address blocked")
+	errDirectNameUnresolved = errors.New("direct app: name unresolved")
+	errFakeRecordMissing    = errors.New("fake DNS record missing")
+)
 
 // mihomoBridgeProxy hands tun2socks's flows to mihomo's tunnel in process, as
 // a TUN inbound would, and the apps' :53 to mihomo's resolver. Once its
@@ -49,7 +59,7 @@ func (p *mihomoBridgeProxy) destination(ctx context.Context, dst netip.Addr) (ho
 	host, ok := resolver.FindHostByIP(dst)
 	if !ok {
 		if resolver.IsFakeIP(dst) {
-			return "", netip.Addr{}, fmt.Errorf("fake DNS record %s missing", dst)
+			return "", netip.Addr{}, errFakeRecordMissing
 		}
 		return "", dst, nil
 	}
@@ -76,11 +86,9 @@ func (p *mihomoBridgeProxy) directAddresses(ctx context.Context, host string) ([
 		resolved = true
 		var err error
 		addresses, err = resolver.LookupIPWithResolver(ctx, host, resolver.DirectHostResolver)
-		if err != nil {
-			return fmt.Errorf("resolve %s direct: %w", host, err)
-		}
-		if len(addresses) == 0 {
-			return fmt.Errorf("resolve %s direct: %w", host, resolver.ErrIPNotFound)
+		if err != nil || len(addresses) == 0 {
+			// The resolver's own error may quote the name.
+			return errDirectNameUnresolved
 		}
 		return nil
 	}
@@ -97,13 +105,13 @@ func (p *mihomoBridgeProxy) directAddresses(ctx context.Context, host string) ([
 			for _, address := range addresses {
 				metadata.DstIP = address
 				if matched, _ := rule.Match(metadata, C.RuleMatchHelper{}); matched {
-					return nil, fmt.Errorf("blocked %s at %s", host, address)
+					return nil, errDirectAddressBlocked
 				}
 			}
 			metadata.DstIP = netip.Addr{}
 		default:
 			if matched, _ := rule.Match(metadata, C.RuleMatchHelper{}); matched {
-				return nil, fmt.Errorf("blocked %s", host)
+				return nil, errDirectNameBlocked
 			}
 		}
 	}

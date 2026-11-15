@@ -5,7 +5,6 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log"
 	"net"
 	"path/filepath"
@@ -26,6 +25,9 @@ var _ t2sproxy.Proxy = (*processSplitProxy)(nil)
 // A direct flow with no force-direct dialer is refused rather than sent
 // through the engine's tiers, where a proxy rule could tunnel it.
 var errNoForceDirect = errors.New("process split: no force-direct dialer")
+
+// A refused flow's error reaches the log, so it does not name the destination.
+var errProcessBlocked = errors.New("process split: blocked")
 
 // The owning process is resolved by source port before the flow reaches the
 // engine; unmatched flows fall through to base. A flow the rules send direct
@@ -84,7 +86,7 @@ func (p *processSplitProxy) DialContext(ctx context.Context, m *M.Metadata) (net
 		}
 		return p.forceDirect.DialContext(ctx, m)
 	case routing.TargetBlock:
-		return nil, fmt.Errorf("process split: blocked %s", m.DestinationAddress())
+		return nil, errProcessBlocked
 	case routing.TargetProxy:
 		return p.proxyFor().DialContext(ctx, m)
 	default:
@@ -100,7 +102,7 @@ func (p *processSplitProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 		}
 		return p.forceDirect.DialUDP(m)
 	case routing.TargetBlock:
-		return nil, fmt.Errorf("process split: blocked %s", m.DestinationAddress())
+		return nil, errProcessBlocked
 	case routing.TargetProxy:
 		return p.proxyFor().DialUDP(m)
 	default:

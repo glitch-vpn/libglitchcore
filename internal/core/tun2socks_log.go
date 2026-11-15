@@ -3,6 +3,8 @@
 package core
 
 import (
+	"regexp"
+
 	tun2socksLog "github.com/xjasonlyu/tun2socks/v2/log"
 	"go.uber.org/zap"
 	"go.uber.org/zap/zapcore"
@@ -12,6 +14,8 @@ import (
 
 // capTun2socksLogLevel holds tun2socks at warnings and worse: its info lines
 // name every flow's full source and destination, which xray's own lines mask.
+// Its warnings name a flow's destination too, on a dial it could not make:
+// maskFlowAddresses takes those out on the way to the sink.
 func capTun2socksLogLevel(level string) string {
 	switch level {
 	case "info", "debug", "trace":
@@ -49,8 +53,16 @@ func (c tun2socksSinkCore) Check(e zapcore.Entry, ce *zapcore.CheckedEntry) *zap
 }
 
 func (c tun2socksSinkCore) Write(e zapcore.Entry, _ []zapcore.Field) error {
-	emitLog(tun2socksEntryLevel(e.Level), "tun2socks", e.Message)
+	emitLog(tun2socksEntryLevel(e.Level), "tun2socks", maskFlowAddresses(e.Message))
 	return nil
+}
+
+var flowAddress = regexp.MustCompile(`(?:\d{1,3}\.){3}\d{1,3}:\d+|\[[0-9A-Fa-f:.]+\]:\d+`)
+
+// maskFlowAddresses replaces every socket address in a tun2socks line: the
+// shareable log names no flow's destination.
+func maskFlowAddresses(line string) string {
+	return flowAddress.ReplaceAllLiteralString(line, "<addr>")
 }
 
 func (tun2socksSinkCore) Sync() error { return nil }
