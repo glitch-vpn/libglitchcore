@@ -53,11 +53,21 @@ set by the app process would not.
 * **xray has no DoT.** `tls://` resolvers are skipped with a log line; use
   `https://`, `quic://` or a plain address.
 * **`directServers` reach differs by mode.** In fake-ip both engines cover
-  every direct dial. In xray's normal mode the split is expressed with
-  per-server domain scopes, so a direct list of only `geoip:`/CIDR/`process:`
-  entries leaves nothing to scope and the resolvers are ignored (logged). In
-  `direct-all` the direct resolvers become the default and the general list is
-  scoped to the explicit proxy rules.
+  every direct dial. In normal mode an app's query goes upstream the way its
+  flow will go - through the proxy where the catch-all proxies, direct where it
+  is direct - and the split for the names a tier sends the other way is
+  expressed per name (xray: per-server domain scopes; mihomo: a nameserver
+  policy over `domain:`, `full:` and `geosite:` entries), so a direct list of
+  only `geoip:`/CIDR/`process:` entries leaves nothing to scope and the
+  resolvers are ignored (xray logs it). In `direct-all` the direct resolvers
+  become the default and the general list is scoped to the explicit proxy
+  rules. On xray the module's queries are told apart by the resolver's
+  address alone: the direct resolvers are dialed direct, every other through
+  the proxy, so a direct resolver that is also a general one stays on the
+  proxied path, and in `direct-all` with no direct resolvers every query
+  travels through the proxy. On mihomo a resolver given by name is found
+  through the session's resolvers that are addresses (`default-nameserver`),
+  not mihomo's own four.
 * **A hosts entry opts its name out of fake-ip.** Static hosts are consulted
   before any nameserver, so the app gets the real address and domain-plane
   routing for that name depends on sniffing.

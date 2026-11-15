@@ -27,15 +27,20 @@ func applyTo(t *testing.T, p RoutingProfile, proxyTag string, isBalancer bool) (
 		OutboundConfigs: []xrayConf.OutboundDetourConfig{{Protocol: "freedom", Tag: proxyTag}},
 	}
 	applyRouting(p, cfg, proxyTag, isBalancer, nil)
+	return cfg, decodeRules(t, cfg.RouterConfig.RuleList)
+}
+
+func decodeRules(t *testing.T, rules []json.RawMessage) []ruleView {
+	t.Helper()
 	var views []ruleView
-	for _, raw := range cfg.RouterConfig.RuleList {
+	for _, raw := range rules {
 		var v ruleView
 		if err := json.Unmarshal(raw, &v); err != nil {
 			t.Fatalf("rule not JSON: %v (%s)", err, raw)
 		}
 		views = append(views, v)
 	}
-	return cfg, views
+	return views
 }
 
 func TestApply_ProxyAllDefault(t *testing.T) {

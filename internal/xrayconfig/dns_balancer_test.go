@@ -170,7 +170,7 @@ func TestApplyDNS_BalancerRuleSitsAfterTheTiers(t *testing.T) {
 		{"normal", links, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, true, dnsInternalTag},
 		{"fake-ip", links, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, true, dnsInternalTag},
 		{"fake-ip with a direct outbound", links, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Direct: []string{"domain:example.com"}}}}, false, dnsInternalTag},
-		{"single server", links[:1], dnsconfig.Config{Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, false, ""},
+		{"single server", links[:1], dnsconfig.Config{Servers: []string{"1.1.1.1"}}, routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Block: []string{"192.0.2.0/24"}}}}, false, dnsInternalTag},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

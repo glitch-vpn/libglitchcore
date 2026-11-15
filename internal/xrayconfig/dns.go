@@ -3,6 +3,7 @@ package xrayconfig
 import (
 	"encoding/json"
 	"net"
+	"net/url"
 	"slices"
 	"strconv"
 	"strings"
@@ -83,8 +84,91 @@ func applyPlainDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfi
 		}
 		return
 	}
-	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: nsList, Hosts: hosts, QueryStrategy: queryStrategy(dns)}
+	cfg.DNSConfig = &xrayConf.DNSConfig{Servers: nsList, Hosts: hosts, QueryStrategy: queryStrategy(dns), Tag: dnsInternalTag}
+	if len(nsList) == 0 {
+		return
+	}
+	interceptAppQueries(cfg)
+
+	// The module's queries to the direct resolvers go direct, every other
+	// through the proxy: a query is told apart by the address it goes to,
+	// nothing else, so the direct resolvers are the ones a tier's direct names
+	// (direct-all: every unlisted name) are scoped to, and a direct resolver
+	// that is also a general one is left on the proxied path rather than carry
+	// every query direct.
+	if hasOutbound(cfg, directTag) {
+		cfg.RouterConfig.RuleList = append(directResolverRules(dns), cfg.RouterConfig.RuleList...)
+	}
 	followBalancer(cfg)
+}
+
+// routeModuleQueriesDirect sends every query the module makes out of the
+// direct outbound.
+func routeModuleQueriesDirect(cfg *xrayConf.Config) {
+	internal := fieldRule{InboundTag: []string{dnsInternalTag}, OutboundTag: directTag}
+	cfg.RouterConfig.RuleList = append([]json.RawMessage{internal.raw()}, cfg.RouterConfig.RuleList...)
+}
+
+// directResolverRules send the module's queries to the direct resolvers'
+// addresses direct. Resolvers are the same by host, port aside.
+func directResolverRules(dns dnsconfig.Config) []json.RawMessage {
+	general := map[string]bool{}
+	for _, s := range dns.NormalizedServers("") {
+		general[resolverHost(s)] = true
+	}
+	var ips, names []string
+	for _, s := range dns.NormalizedDirectServers() {
+		host := resolverHost(s)
+		switch {
+		case host == "" || general[host]:
+		case net.ParseIP(host) != nil:
+			ips = append(ips, host)
+		default:
+			names = append(names, "full:"+host)
+		}
+	}
+	var rules []json.RawMessage
+	if len(ips) > 0 {
+		rules = append(rules, fieldRule{InboundTag: []string{dnsInternalTag}, IP: ips, OutboundTag: directTag}.raw())
+	}
+	if len(names) > 0 {
+		rules = append(rules, fieldRule{InboundTag: []string{dnsInternalTag}, Domain: names, OutboundTag: directTag}.raw())
+	}
+	return rules
+}
+
+// resolverHost is the address a resolver is dialed at: the host of a URL,
+// or a plain entry without its port.
+func resolverHost(server string) string {
+	if dnsconfig.Scheme(server) != "" {
+		u, err := url.Parse(server)
+		if err != nil {
+			return ""
+		}
+		return u.Hostname()
+	}
+	if host, _, err := net.SplitHostPort(server); err == nil {
+		return host
+	}
+	return server
+}
+
+// interceptAppQueries answers the apps' queries from the module through a
+// "dns" outbound. Empty settings intercept A and AAAA and pass the rest to
+// the original destination. The rule is scoped to the app traffic tags so it
+// does not also take the module's own queries.
+func interceptAppQueries(cfg *xrayConf.Config) {
+	dnsSettings := json.RawMessage(`{}`)
+	ensureOutbound(cfg, dnsOutboundTag, xrayConf.OutboundDetourConfig{
+		Protocol: "dns",
+		Tag:      dnsOutboundTag,
+		Settings: &dnsSettings,
+	})
+	dnsRule := fieldRule{Port: "53", InboundTag: []string{AppTrafficTag, ForceProxyTag}, OutboundTag: dnsOutboundTag}
+	if cfg.RouterConfig == nil {
+		cfg.RouterConfig = &xrayConf.RouterConfig{}
+	}
+	cfg.RouterConfig.RuleList = append([]json.RawMessage{dnsRule.raw()}, cfg.RouterConfig.RuleList...)
 }
 
 func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfile) {
@@ -105,7 +189,7 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 
 	// Real resolvers for freedom's direct path (FakeEnable=false, so it skips
 	// the fake pool - no resolve loop) and the filter exclusions.
-	real := plainNameServers(dns.NormalizedServers("1.1.1.1"))
+	real := plainNameServers(dns.NormalizedServers(dnsconfig.DefaultResolver))
 
 	// Excluded domains resolve for real (kept off fake-ip): a real server matched
 	// only to those domains, placed ahead of the fakedns server. SkipFallback is
@@ -134,32 +218,13 @@ func applyFakeDNS(cfg *xrayConf.Config, dns dnsconfig.Config, prof RoutingProfil
 		QueryStrategy: queryStrategy(dns),
 		Tag:           dnsInternalTag,
 	}
+	interceptAppQueries(cfg)
 
-	// A "dns" outbound answers intercepted queries via the built-in DNS module
-	// (which yields fake IPs). Empty settings -> intercept A/AAAA, pass the rest to
-	// the original destination.
-	dnsSettings := json.RawMessage(`{}`)
-	ensureOutbound(cfg, dnsOutboundTag, xrayConf.OutboundDetourConfig{
-		Protocol: "dns",
-		Tag:      dnsOutboundTag,
-		Settings: &dnsSettings,
-	})
-
-	// Scoped to the app traffic tags so it doesn't also grab the module's own
-	// queries.
-	dnsRule := fieldRule{Port: "53", InboundTag: []string{AppTrafficTag, ForceProxyTag}, OutboundTag: dnsOutboundTag}
-	rules := []json.RawMessage{dnsRule.raw()}
 	// Internal queries go direct when that outbound exists; pure proxy-all has
 	// none, so they fall to the default and resolve through the tunnel.
 	if hasOutbound(cfg, directTag) {
-		internalRule := fieldRule{InboundTag: []string{dnsInternalTag}, OutboundTag: directTag}
-		rules = []json.RawMessage{internalRule.raw(), dnsRule.raw()}
-	}
-	if cfg.RouterConfig == nil {
-		cfg.RouterConfig = &xrayConf.RouterConfig{}
-	}
-	cfg.RouterConfig.RuleList = append(rules, cfg.RouterConfig.RuleList...)
-	if !hasOutbound(cfg, directTag) {
+		routeModuleQueriesDirect(cfg)
+	} else {
 		followBalancer(cfg)
 	}
 }
