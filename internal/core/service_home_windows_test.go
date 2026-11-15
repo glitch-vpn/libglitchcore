@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -25,10 +26,28 @@ func makeJunction(t *testing.T, link, target string) {
 	}
 }
 
-func currentUserSID(t *testing.T) *windows.SID {
+// tokenOwner is TOKEN_OWNER, which x/sys/windows does not declare.
+type tokenOwner struct {
+	Owner *windows.SID
+}
+
+// createdObjectOwner is the owner a folder the test creates gets: the token's
+// default owner, which is the user unelevated and the Administrators group
+// elevated, as on the GitHub runner.
+func createdObjectOwner(t *testing.T) *windows.SID {
 	t.Helper()
-	user, _ := currentProcessUser(t)
-	return user
+	token := windows.GetCurrentProcessToken()
+	var size uint32
+	windows.GetTokenInformation(token, windows.TokenOwner, nil, 0, &size)
+	buffer := make([]byte, size)
+	if err := windows.GetTokenInformation(token, windows.TokenOwner, &buffer[0], size, &size); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := (*tokenOwner)(unsafe.Pointer(&buffer[0])).Owner.Copy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner
 }
 
 // writePlaceholderGeoFiles writes the two names the copy reads, with bytes no
@@ -42,11 +61,11 @@ func writePlaceholderGeoFiles(t *testing.T, dir string) {
 	}
 }
 
-// ownSDDL admits the test's user alone, as the service's descriptor admits
-// LocalSystem and the Administrators: what the service's would lock an
-// unelevated test out of.
+// ownSDDL admits the test's created-object owner alone, as the service's
+// descriptor admits LocalSystem and the Administrators: what the service's
+// would lock an unelevated test out of.
 func ownSDDL(t *testing.T) string {
-	return fmt.Sprintf("D:P(A;OICI;FA;;;%s)", currentUserSID(t))
+	return fmt.Sprintf("D:P(A;OICI;FA;;;%s)", createdObjectOwner(t))
 }
 
 // testServiceHome gives the service a root the test owns, as the installed
@@ -60,7 +79,7 @@ func testServiceHome(t *testing.T) serviceHome {
 	}
 	t.Cleanup(func() { os.RemoveAll(base) })
 	root := filepath.Join(base, "root")
-	home, err := prepareServiceHome(root, ownSDDL(t), []*windows.SID{currentUserSID(t)})
+	home, err := prepareServiceHome(root, ownSDDL(t), []*windows.SID{createdObjectOwner(t)})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,7 +91,7 @@ func testServiceHome(t *testing.T) serviceHome {
 
 func TestServiceHome_PrepareCreatesOrAdoptsOwnRoot(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "root")
-	me := currentUserSID(t)
+	me := createdObjectOwner(t)
 	if _, err := prepareServiceHome(root, ownSDDL(t), nil); err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -96,7 +115,7 @@ func TestServiceHome_PrepareRefusesAJunctionAsRoot(t *testing.T) {
 	}
 	link := filepath.Join(base, "root")
 	makeJunction(t, link, target)
-	if _, err := prepareServiceHome(link, ownSDDL(t), []*windows.SID{currentUserSID(t)}); err == nil || !strings.Contains(err.Error(), "reparse point") {
+	if _, err := prepareServiceHome(link, ownSDDL(t), []*windows.SID{createdObjectOwner(t)}); err == nil || !strings.Contains(err.Error(), "reparse point") {
 		t.Fatalf("a junction as root must be refused, got %v", err)
 	}
 }
@@ -355,7 +374,7 @@ func TestServiceHome_TakesAPathSpelledWithShortNames(t *testing.T) {
 	if strings.EqualFold(short, base) {
 		t.Skipf("this volume gives %s no short name", base)
 	}
-	home, err := prepareServiceHome(filepath.Join(short, "root"), ownSDDL(t), []*windows.SID{currentUserSID(t)})
+	home, err := prepareServiceHome(filepath.Join(short, "root"), ownSDDL(t), []*windows.SID{createdObjectOwner(t)})
 	if err != nil {
 		t.Fatalf("prepare: %v", err)
 	}
@@ -374,5 +393,26 @@ func TestServiceHome_TakesAPathSpelledWithShortNames(t *testing.T) {
 	makeJunction(t, link, caller)
 	if _, err := home.stageSession(shortPathOf(t, link)); err == nil || !strings.Contains(err.Error(), "reparse point") {
 		t.Fatalf("a junction spelled by its short name must be refused, got %v", err)
+	}
+}
+
+// The tests expect what a created folder really gets as its owner, which
+// differs between an unelevated run and the elevated GitHub runner.
+func TestServiceHome_CreatedObjectOwnerIsWhatAFolderGets(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "owned")
+	if err := os.Mkdir(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	security, err := windows.GetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT, windows.OWNER_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _, err := security.Owner()
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := createdObjectOwner(t)
+	if !got.Equals(want) {
+		t.Fatalf("a created folder is owned by %s, the token's default owner is %s", got, want)
 	}
 }

@@ -143,14 +143,17 @@ break it.
 ### Verification of a change (definition of done)
 
 1. `CGO_ENABLED=0 go test -tags=with_gvisor ./internal/...` plus the CI tag
-   matrix (`no_mihomo` / `no_xray`).
+   matrix (`no_mihomo` / `no_xray`). A test must also hold on the GitHub
+   Windows runner, which differs from a local run twice: its TEMP is an 8.3
+   short path (`C:\Users\RUNNER~1\...`), so a path compared as text with one
+   Windows resolved (`GetFinalPathNameByHandle`) passes locally and fails in
+   CI; and it runs elevated, so what it creates is owned by the Administrators
+   group (the token's default owner), not the user.
 2. Smoke: `CGO_ENABLED=0 go test -tags="integration with_gvisor"
    ./internal/smoke/`. A new feature gets a subtest here — the loopback suite
    proves link → config → engine → events end-to-end with no network. The
    first run after relinking can time out (Defender scans the fresh binary);
-   rerun before debugging. The GitHub Windows runner's TEMP is an 8.3 short
-   path (`C:\Users\RUNNER~1\...`), so a path compared as text with one Windows
-   resolved (`GetFinalPathNameByHandle`) passes locally and fails in CI.
+   rerun before debugging.
 3. Root cgo package: mingw gcc (`C:\ProgramData\mingw64\mingw64\bin`) +
    Flutter's Dart headers, `go vet -tags "with_gvisor"` and
    `-tags "service with_gvisor"`.
