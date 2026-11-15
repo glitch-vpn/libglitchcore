@@ -47,18 +47,25 @@ type mihomoBridgeProxy struct {
 	// name, then every address the direct resolvers answer, and a flow one of
 	// them refuses, or one they cannot answer, is refused here.
 	directBlocks []C.Rule
+	// hostMapper and directResolver are mihomo's, taken once its session was
+	// applied: stopping the session replaces both while flows still arrive,
+	// and a read of the package's variables could meet that write.
+	hostMapper     resolver.Enhancer
+	directResolver resolver.Resolver
 }
 
-// destination is what mihomo is handed for a flow to dst: dst, or, with the
-// blocks checked here and dst standing for a name, the name and the address
-// the flow is dialed at.
+// destination is what the flow is dialed at: dst, or, with the blocks checked
+// here and dst standing for a name, the name and the address that passed them.
 func (p *mihomoBridgeProxy) destination(ctx context.Context, dst netip.Addr) (host string, ip netip.Addr, err error) {
 	if p.directBlocks == nil {
 		return "", dst, nil
 	}
-	host, ok := resolver.FindHostByIP(dst)
+	if p.hostMapper == nil {
+		return "", dst, nil
+	}
+	host, ok := p.hostMapper.FindHostByIP(dst)
 	if !ok {
-		if resolver.IsFakeIP(dst) {
+		if p.hostMapper.IsFakeIP(dst) {
 			return "", netip.Addr{}, errFakeRecordMissing
 		}
 		return "", dst, nil
@@ -85,8 +92,10 @@ func (p *mihomoBridgeProxy) directAddresses(ctx context.Context, host string) ([
 		}
 		resolved = true
 		var err error
-		addresses, err = resolver.LookupIPWithResolver(ctx, host, resolver.DirectHostResolver)
-		if err != nil || len(addresses) == 0 {
+		if p.directResolver != nil {
+			addresses, err = resolver.LookupIPWithResolver(ctx, host, p.directResolver)
+		}
+		if p.directResolver == nil || err != nil || len(addresses) == 0 {
 			// The resolver's own error may quote the name.
 			return errDirectNameUnresolved
 		}
@@ -130,7 +139,7 @@ func (p *mihomoBridgeProxy) DialContext(ctx context.Context, m *M.Metadata) (net
 		go func() { _ = resolver.RelayDnsConn(context.Background(), engine, resolver.DefaultDnsReadTimeout) }()
 		return local, nil
 	}
-	host, dstIP, err := p.destination(ctx, m.DstIP)
+	_, dstIP, err := p.destination(ctx, m.DstIP)
 	if err != nil {
 		return nil, err
 	}
@@ -145,14 +154,8 @@ func (p *mihomoBridgeProxy) DialContext(ctx context.Context, m *M.Metadata) (net
 		InName:  p.inName,
 		SrcIP:   m.SrcIP,
 		SrcPort: m.SrcPort,
-		Host:    host,
 		DstIP:   dstIP,
 		DstPort: m.DstPort,
-	}
-	if host != "" {
-		// What mihomo sets for a name its resolver mapped: DIRECT then dials
-		// a UDP flow at the address checked, not at one it resolves again.
-		metadata.DNSMode = C.DNSMapping
 	}
 	go mihomoTunnel.Tunnel.HandleTCPConn(engine, metadata)
 	return local, nil

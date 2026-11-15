@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/metacubex/mihomo/component/resolver"
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
@@ -82,7 +83,8 @@ func mihomoBridgeProxies(x *CoreController, b *bridgeSetup, mark int64) (app, fo
 		force = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceProxyInName}
 	}
 	if b.forceDirect {
-		direct = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceDirectInName, directBlocks: b.directBlocks}
+		direct = &mihomoBridgeProxy{x: x, mark: mark, inName: mihomoconfig.ForceDirectInName, directBlocks: b.directBlocks,
+			hostMapper: resolver.DefaultHostMapper, directResolver: resolver.DirectHostResolver}
 	}
 	return app, force, direct
 }

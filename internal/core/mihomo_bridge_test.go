@@ -10,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -512,5 +513,134 @@ func TestMihomoBridge_ProcessDirectFlowToABlockedNameIsRefusedWithoutALookup(t *
 	case <-asked:
 		t.Fatal("the direct resolver was asked about a name a block names")
 	case <-time.After(time.Second):
+	}
+}
+
+// scriptedResolver serves DNS over TCP at host, handing each question to
+// answer for its records and how long to hold the reply.
+func scriptedResolver(t *testing.T, host net.IP, answer func(name string, qtype uint16) ([]D.RR, time.Duration)) string {
+	t.Helper()
+	port, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenDirect(t, host, port, nil, func(c net.Conn) {
+		for {
+			var length [2]byte
+			if _, err := io.ReadFull(c, length[:]); err != nil {
+				return
+			}
+			buf := make([]byte, int(length[0])<<8|int(length[1]))
+			if _, err := io.ReadFull(c, buf); err != nil {
+				return
+			}
+			req := new(D.Msg)
+			if req.Unpack(buf) != nil || len(req.Question) == 0 {
+				return
+			}
+			q := req.Question[0]
+			records, hold := answer(strings.TrimSuffix(q.Name, "."), q.Qtype)
+			reply := new(D.Msg)
+			reply.SetReply(req)
+			reply.Answer = records
+			b, err := reply.Pack()
+			if err != nil {
+				return
+			}
+			go func() {
+				time.Sleep(hold)
+				_, _ = c.Write(append([]byte{byte(len(b) >> 8), byte(len(b))}, b...))
+			}()
+		}
+	})
+	return "tcp://" + net.JoinHostPort(host.String(), strconv.Itoa(port))
+}
+
+// connectionsAt listens at host on port and counts what connects.
+func connectionsAt(t *testing.T, host string, port int) *atomic.Int32 {
+	t.Helper()
+	l, err := net.Listen("tcp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		t.Skipf("listen on %s: %v", host, err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	var count atomic.Int32
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			count.Add(1)
+			_ = c.Close()
+		}
+	}()
+	return &count
+}
+
+// A name whose answer changes at every lookup is looked up once: the flow is
+// dialed at the address the blocks were checked against, not at one a second
+// lookup finds.
+func TestMihomoBridge_ProcessDirectTCPFlowDialsTheCheckedAddressWhenTheAnswerChanges(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	var lookups atomic.Int32
+	answers := []net.IP{net.IPv4(127, 0, 0, 6), net.IPv4(127, 0, 0, 5)}
+	server := scriptedResolver(t, net.IPv4(127, 0, 0, 1), func(name string, qtype uint16) ([]D.RR, time.Duration) {
+		if name != "rotating.test" || qtype != D.TypeA {
+			return nil, 0
+		}
+		ip := answers[int(lookups.Add(1)-1)%len(answers)]
+		return []D.RR{&D.A{Hdr: D.RR_Header{Name: name + ".", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 0}, A: ip.To4()}}, 0
+	})
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, blockedAddressProfile, dnsconfig.Config{Servers: []string{server}}, socksRelay(t))
+	port := echoAt(t, "127.0.0.6", 0)
+	blocked := connectionsAt(t, "127.0.0.5", port)
+	fake := fakeIPFor(t, "rotating.test")
+	lookups.Store(0)
+	if !directFlowReaches(t, direct, &net.TCPAddr{IP: fake, Port: port}) {
+		t.Error("the flow was not dialed at the address that passed the blocks")
+	}
+	if n := blocked.Load(); n != 0 {
+		t.Errorf("the blocked address took %d connections", n)
+	}
+	if n := lookups.Load(); n != 1 {
+		t.Errorf("the name was looked up %d times, want once", n)
+	}
+}
+
+// An address the second record type answers late is not left out of the
+// check by the wait the first one allowed: with nothing listening at the
+// address that was checked, the flow does not fall through to one that was
+// not.
+func TestMihomoBridge_ProcessDirectTCPFlowNeverDialsAnAddressItDidNotCheck(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	server := scriptedResolver(t, net.IPv4(127, 0, 0, 1), func(name string, qtype uint16) ([]D.RR, time.Duration) {
+		header := D.RR_Header{Name: name + ".", Class: D.ClassINET, Ttl: 0}
+		switch {
+		case name != "late-v6.test":
+			return nil, 0
+		case qtype == D.TypeA:
+			header.Rrtype = D.TypeA
+			return []D.RR{&D.A{Hdr: header, A: net.IPv4(127, 0, 0, 6).To4()}}, 0
+		case qtype == D.TypeAAAA:
+			header.Rrtype = D.TypeAAAA
+			return []D.RR{&D.AAAA{Hdr: header, AAAA: net.IPv6loopback}}, 400 * time.Millisecond
+		}
+		return nil, 0
+	})
+	prof := routing.Profile{
+		Mode:  routing.ModeProxyAll,
+		Tiers: []routing.Tier{{Block: []string{"::1/128"}, Direct: []string{"process:app.exe"}}},
+	}
+	_, _, direct := startMihomoBridgeThrough(t, &CoreController{}, prof, dnsconfig.Config{Servers: []string{server}}, socksRelay(t))
+	port, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	blocked := connectionsAt(t, "::1", port)
+	fake := fakeIPFor(t, "late-v6.test")
+	directFlowReaches(t, direct, &net.TCPAddr{IP: fake, Port: port})
+	if n := blocked.Load(); n != 0 {
+		t.Errorf("the blocked address took %d connections", n)
 	}
 }
