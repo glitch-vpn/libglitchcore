@@ -438,12 +438,27 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 // refuses once the session that started at mark has ended: mihomo's tunnel
 // outlives the session with only DIRECT left, and an echo retried then would
 // leave from the user's own address.
+//
+// A pinned proxy is dialled directly rather than through the tunnel's handler,
+// which retries a failed dial ten times with a growing pause: a probe against
+// an exit that refuses at once would reach it ten times for one answer.
 func (x *CoreController) mihomoTunnelDial(proxy string, mark int64) tunnelDialFunc {
-	return func(_ context.Context, _, addr string) (net.Conn, error) {
+	return func(ctx context.Context, _, addr string) (net.Conn, error) {
 		if x.sessionGen.Load() != mark {
 			return nil, errSessionEnded
 		}
-		return inner.HandleTcp(mihomoTunnel.Tunnel, addr, proxy)
+		if proxy == "" {
+			return inner.HandleTcp(mihomoTunnel.Tunnel, addr, proxy)
+		}
+		pinned, ok := mihomoTunnel.Proxies()[proxy]
+		if !ok {
+			return nil, fmt.Errorf("proxy %s not found", proxy)
+		}
+		metadata := &C.Metadata{NetWork: C.TCP, Type: C.INNER, DNSMode: C.DNSNormal, Process: C.MihomoName}
+		if err := metadata.SetRemoteAddress(addr); err != nil {
+			return nil, err
+		}
+		return pinned.DialContext(ctx, metadata)
 	}
 }
 
