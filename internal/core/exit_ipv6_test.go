@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"log"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/netip"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -62,8 +64,11 @@ func TestEchoFinishedV6(t *testing.T) {
 		{"answered", echoV6Carried, true, false, false, exitIPv6Pending, exitIPv6Carried},
 		{"answered with the link not yet up", echoV6Carried, false, false, false, exitIPv6Pending, exitIPv6Carried},
 		{"failed on the way, IPv4 got through, link up", echoV6Unreachable, true, false, false, exitIPv6Pending, exitIPv6Absent},
-		{"failed on the way, IPv4 got through, link not up", echoV6Unreachable, false, false, false, exitIPv6Pending, exitIPv6Unknown},
+		{"failed on the way, IPv4 got through, link not up", echoV6Unreachable, false, false, false, exitIPv6Pending, exitIPv6Pending},
 		{"both failed on the way, link up", echoV6Inconclusive, true, false, false, exitIPv6Pending, exitIPv6Unknown},
+		{"both failed on the way, link not up", echoV6Inconclusive, false, false, false, exitIPv6Pending, exitIPv6Pending},
+		{"name never resolved, link up", echoV6Unresolved, true, false, false, exitIPv6Pending, exitIPv6Unknown},
+		{"name never resolved, link not up", echoV6Unresolved, false, false, false, exitIPv6Pending, exitIPv6Pending},
 		{"both failed on the way, after the wait ended", echoV6Inconclusive, true, false, false, exitIPv6Unknown, exitIPv6Unknown},
 		{"answered after the wait ended", echoV6Carried, true, false, false, exitIPv6Unknown, exitIPv6Carried},
 		{"servers picked per connection", echoV6Unreachable, true, true, false, exitIPv6Pending, exitIPv6Pending},
@@ -160,6 +165,9 @@ type exitSession struct {
 	v4Err error
 	// beforeV6Fails, when set, holds the nth IPv6 echo dial before it fails.
 	beforeV6Fails func(call int32)
+	// v6Err, when set, is what every IPv6 echo dial fails with; v6ErrFirst, what
+	// the first one does.
+	v6Err, v6ErrFirst error
 }
 
 func newExitSession(t *testing.T, v4Delay time.Duration, selection *serverinfo.Selection) *exitSession {
@@ -178,6 +186,12 @@ func newExitSession(t *testing.T, v4Delay time.Duration, selection *serverinfo.S
 				call := s.v6Dials.Add(1)
 				if s.beforeV6Fails != nil {
 					s.beforeV6Fails(call)
+				}
+				if s.v6Err != nil {
+					return nil, s.v6Err
+				}
+				if s.v6ErrFirst != nil && call == 1 {
+					return nil, s.v6ErrFirst
 				}
 				return nil, errors.New("dial tcp [2607:f8b0::1]:443: connect: network is unreachable")
 			}
@@ -313,16 +327,24 @@ func mustJSON(t *testing.T, sel *serverinfo.Selection) string {
 }
 
 // While the link is not up the exit's IPv6 echo that fails says nothing, and
-// the session must not go on dropping IPv6 SYNs for it.
-func TestEchoRound_AnIPv6FailureWhileTheLinkIsNotUpEndsThePending(t *testing.T) {
+// the answer is left to the round the link's recovery starts: until then IPv6
+// is not admitted.
+func TestEchoRound_AnIPv6FailureWhileTheLinkIsNotUpLeavesThePending(t *testing.T) {
 	s := newExitSession(t, 0, selectionOn("", 1, 0))
 	s.x.linkState.Store(int32(liveness.StateUnknown))
 	s.x.triggerIPResolve("server-change")
 	waitFor(t, "the IPEvent", func() bool { return len(s.events()) == 1 })
-	waitFor(t, "the end of the wait", func() bool { return s.x.exitIPv6.Load() == exitIPv6Unknown })
-	if v := s.x.admitTCPFlow(netip.MustParseAddrPort("[2607:f8b0::1]:443")); v != tcpAdmit {
-		t.Fatalf("verdict = %d, want admit", v)
+	time.Sleep(100 * time.Millisecond)
+	if got := s.x.exitIPv6.Load(); got != exitIPv6Pending {
+		t.Fatalf("state = %d, want pending", got)
 	}
+	if v := s.x.admitTCPFlow(netip.MustParseAddrPort("[2607:f8b0::1]:443")); v != tcpDrop {
+		t.Fatalf("verdict = %d, want drop", v)
+	}
+
+	s.x.linkState.Store(int32(liveness.StateUp))
+	s.x.triggerIPResolve("link-up")
+	waitFor(t, "the answer", func() bool { return s.x.exitIPv6.Load() == exitIPv6Absent })
 }
 
 // Both families reset: the tunnel carries nothing, which says nothing about
@@ -353,9 +375,9 @@ func TestEchoRound_NoIPv6IsRecordedOnceTheIPv4EchoGotThrough(t *testing.T) {
 
 // A link that never reports up leaves no echo to run; the wait has its own end.
 func TestExitIPv6_PendingEndsAtItsDeadline(t *testing.T) {
-	prev := exitIPv6PendingTimeout
-	exitIPv6PendingTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { exitIPv6PendingTimeout = prev })
+	prev := exitIPv6LinkWait
+	exitIPv6LinkWait = 50 * time.Millisecond
+	t.Cleanup(func() { exitIPv6LinkWait = prev })
 
 	s := newExitSession(t, 0, selectionOn("", 1, 0))
 	if got := s.x.exitIPv6.Load(); got != exitIPv6Pending {
@@ -373,9 +395,9 @@ func TestExitIPv6_PendingEndsAtItsDeadline(t *testing.T) {
 // A deadline armed for an exit that has since answered, or been replaced, must
 // not undo the answer.
 func TestExitIPv6_TheDeadlineOfAnEarlierWaitLeavesALaterStateAlone(t *testing.T) {
-	prev := exitIPv6PendingTimeout
-	exitIPv6PendingTimeout = 100 * time.Millisecond
-	t.Cleanup(func() { exitIPv6PendingTimeout = prev })
+	prev := exitIPv6LinkWait
+	exitIPv6LinkWait = 100 * time.Millisecond
+	t.Cleanup(func() { exitIPv6LinkWait = prev })
 
 	s := newExitSession(t, 0, selectionOn("", 1, 0))
 	s.x.triggerIPResolve("link-up")
@@ -386,8 +408,9 @@ func TestExitIPv6_TheDeadlineOfAnEarlierWaitLeavesALaterStateAlone(t *testing.T)
 	}
 }
 
-// The wait ends when the link is lost, since no echo will come through it.
-func TestExitIPv6_PendingEndsWhenTheLinkIsLost(t *testing.T) {
+// A link that is down has no echo to come through it, and IPv4 does not work
+// either, so IPv6 stays unadmitted: only the wait's own bound ends it.
+func TestExitIPv6_PendingSurvivesTheLinkBeingLost(t *testing.T) {
 	prev := quickLivenessInterval
 	quickLivenessInterval = 10 * time.Millisecond
 	t.Cleanup(func() { quickLivenessInterval = prev })
@@ -402,8 +425,125 @@ func TestExitIPv6_PendingEndsWhenTheLinkIsLost(t *testing.T) {
 	})
 	t.Cleanup(s.x.stopLiveness)
 	waitFor(t, "the link to be reported down", func() bool { return s.x.linkState.Load() == int32(liveness.StateDown) })
-	if got := s.x.exitIPv6.Load(); got != exitIPv6Unknown {
-		t.Fatalf("state after the link was lost = %d, want unknown", got)
+	if got := s.x.exitIPv6.Load(); got != exitIPv6Pending {
+		t.Fatalf("state after the link was lost = %d, want pending", got)
+	}
+}
+
+// The first echo waits for the link, and a tunnel with a slow handshake brings
+// it up long after the start: the wait is not measured from the start.
+func TestExitIPv6_TheLinkComingUpAfterTheEchoWindowStillFindsItPending(t *testing.T) {
+	prev := exitIPv6PendingTimeout
+	exitIPv6PendingTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { exitIPv6PendingTimeout = prev })
+
+	s := newExitSession(t, 0, selectionOn("", 1, 0))
+	s.x.linkState.Store(int32(liveness.StateUnknown))
+	time.Sleep(3 * exitIPv6PendingTimeout)
+	if got := s.x.exitIPv6.Load(); got != exitIPv6Pending {
+		t.Fatalf("state after a start-to-link gap longer than the echo window = %d, want pending", got)
+	}
+	if v := s.x.admitTCPFlow(netip.MustParseAddrPort("[2607:f8b0::1]:443")); v != tcpDrop {
+		t.Fatalf("verdict = %d, want drop", v)
+	}
+
+	s.x.linkState.Store(int32(liveness.StateUp))
+	s.x.triggerIPResolve("link-up")
+	waitFor(t, "the answer", func() bool { return s.x.exitIPv6.Load() == exitIPv6Absent })
+}
+
+// Once the echo can run, it has one window to answer in; a round that starts
+// before the link is up does not start that clock.
+func TestExitIPv6_TheWaitEndsOneWindowAfterTheEchoFirstRuns(t *testing.T) {
+	prev := exitIPv6PendingTimeout
+	exitIPv6PendingTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { exitIPv6PendingTimeout = prev })
+
+	s := newExitSession(t, 0, selectionOn("", 1, 0))
+	s.x.linkState.Store(int32(liveness.StateUnknown))
+	s.x.echoRoundStarting(s.x.ipGen.Load())
+	time.Sleep(3 * exitIPv6PendingTimeout)
+	if got := s.x.exitIPv6.Load(); got != exitIPv6Pending {
+		t.Fatalf("state after a round that began before the link = %d, want pending", got)
+	}
+
+	s.x.linkState.Store(int32(liveness.StateUp))
+	s.x.echoRoundStarting(s.x.ipGen.Load())
+	waitFor(t, "the end of the wait", func() bool { return s.x.exitIPv6.Load() == exitIPv6Unknown })
+}
+
+// An echo whose host does not resolve has sent nothing, so it says nothing of
+// the exit: IPv6 is held back while the lookup is asked again, and the answer
+// that follows is the exit's.
+func TestEchoRound_AHostThatDoesNotResolveIsAskedAgainAndHeldPending(t *testing.T) {
+	prev := echoResolveRetryDelay
+	echoResolveRetryDelay = 20 * time.Millisecond
+	t.Cleanup(func() { echoResolveRetryDelay = prev })
+
+	srv6 := echoServer(t, "2607:f8b0::1")
+	x := &CoreController{}
+	events := collectEvents(t, IPEvent)
+	var v6Dials atomic.Int32
+	release := make(chan struct{})
+	x.linkState.Store(int32(liveness.StateUp))
+	x.configureIPResolve(ipResolveConfig{
+		enabled: true, urlV4: echoServer(t, "203.0.113.7").URL, urlV6: "http://api6.example",
+		dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr != "api6.example:80" {
+				return directTestDial(ctx, network, addr)
+			}
+			if v6Dials.Add(1) < 3 {
+				return nil, &net.DNSError{Err: "no such host", Name: "api6.example", IsNotFound: true}
+			}
+			<-release
+			return directTestDial(ctx, network, srv6.Listener.Addr().String())
+		},
+	})
+	t.Cleanup(x.stopIPResolve)
+
+	x.triggerIPResolve("link-up")
+	waitFor(t, "the third lookup", func() bool { return v6Dials.Load() == 3 })
+	if got := x.exitIPv6.Load(); got != exitIPv6Pending {
+		t.Fatalf("state while the lookup is asked again = %d, want pending", got)
+	}
+	if v := x.admitTCPFlow(netip.MustParseAddrPort("[2607:f8b0::1]:443")); v != tcpDrop {
+		t.Fatalf("verdict = %d, want drop", v)
+	}
+	close(release)
+	waitFor(t, "the answer", func() bool { return x.exitIPv6.Load() == exitIPv6Carried })
+	waitFor(t, "the IPEvent", func() bool { return len(events()) >= 1 })
+}
+
+// A host that never resolves within the round ends the wait without a guess:
+// the exit is not marked as one without IPv6, and the lookups stay few.
+func TestEchoRound_AHostThatNeverResolvesLeavesTheExitUnknown(t *testing.T) {
+	prevDelay, prevBudget := echoResolveRetryDelay, echoRoundBudget
+	echoResolveRetryDelay, echoRoundBudget = 10*time.Millisecond, 400*time.Millisecond
+	t.Cleanup(func() { echoResolveRetryDelay, echoRoundBudget = prevDelay, prevBudget })
+
+	s := newExitSession(t, 0, selectionOn("", 1, 0))
+	s.v6Err = &net.DNSError{Err: "no such host", Name: "api6.example", IsNotFound: true}
+	s.x.triggerIPResolve("link-up")
+	waitFor(t, "the end of the wait", func() bool { return s.x.exitIPv6.Load() == exitIPv6Unknown })
+	if n := s.v6Dials.Load(); n < 2 || n > 8 {
+		t.Fatalf("lookups = %d, want a few retries", n)
+	}
+	waitFor(t, "the IPEvent", func() bool { return len(s.events()) == 1 })
+}
+
+// An echo that fails to resolve at first and then reaches an exit without IPv6
+// is told apart from one that never resolved: this one is "absent".
+func TestEchoRound_ATransportFailureAfterAResolutionFailureIsAbsent(t *testing.T) {
+	prev := echoResolveRetryDelay
+	echoResolveRetryDelay = 10 * time.Millisecond
+	t.Cleanup(func() { echoResolveRetryDelay = prev })
+
+	s := newExitSession(t, 0, selectionOn("", 1, 0))
+	s.v6ErrFirst = &net.DNSError{Err: "no such host", Name: "api6.example", IsNotFound: true}
+	s.x.triggerIPResolve("link-up")
+	waitFor(t, "the answer", func() bool { return s.x.exitIPv6.Load() == exitIPv6Absent })
+	if n := s.v6Dials.Load(); n != 2 {
+		t.Fatalf("dials = %d, want the failed lookup and one dial", n)
 	}
 }
 
@@ -526,5 +666,175 @@ func checkStackJudgesByExit(t *testing.T, open func(t *testing.T, x *CoreControl
 	pending.send() // the client's retransmission
 	if flags, answered := pending.answer(time.Second); !answered || flags&tcpFlagSYN == 0 || flags&tcpFlagACK == 0 {
 		t.Errorf("the retransmitted SYN once the exit has IPv6: flags %#x (answered %v), want SYN+ACK", flags, answered)
+	}
+}
+
+// A round begun before the link was up can end after it with both echoes failed,
+// and the round the link's coming up queued behind it must not run with IPv6
+// admitted: it is pending again for that round.
+func TestExitIPv6_TheLinkUpRoundQueuedBehindAnEarlyOneHoldsIPv6Pending(t *testing.T) {
+	srv4 := echoServer(t, "203.0.113.7")
+	x := &CoreController{}
+	_ = collectEvents(t, IPEvent)
+	release, release2 := make(chan struct{}), make(chan struct{})
+	var v4Calls, v6Calls atomic.Int32
+	x.linkState.Store(int32(liveness.StateUnknown))
+	x.configureIPResolve(ipResolveConfig{
+		enabled: true, urlV4: srv4.URL, urlV6: "https://api6.example",
+		dial: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			if addr == "api6.example:443" {
+				if v6Calls.Add(1) == 1 {
+					<-release
+					return nil, errors.New("dial tcp: i/o timeout")
+				}
+				return nil, errors.New("dial tcp [2607:f8b0::1]:443: connect: network is unreachable")
+			}
+			if v4Calls.Add(1) == 1 {
+				<-release
+				return nil, errors.New("dial tcp: i/o timeout")
+			}
+			<-release2
+			return directTestDial(ctx, network, addr)
+		},
+	})
+	t.Cleanup(x.stopIPResolve)
+	t.Cleanup(func() { close(release2) })
+	v6 := netip.MustParseAddrPort("[2607:f8b0::1]:443")
+
+	x.triggerIPResolve("server-change")
+	waitFor(t, "the early round", func() bool { return v4Calls.Load() == 1 && v6Calls.Load() == 1 })
+	x.linkState.Store(int32(liveness.StateUp))
+	x.triggerIPResolve("link-up")
+	close(release)
+	waitFor(t, "the link-up round", func() bool { return v4Calls.Load() == 2 && v6Calls.Load() == 2 })
+	time.Sleep(50 * time.Millisecond)
+	if got := x.exitIPv6.Load(); got != exitIPv6Pending {
+		t.Fatalf("state while the link-up round runs = %d, want pending", got)
+	}
+	if v := x.admitTCPFlow(v6); v != tcpDrop {
+		t.Fatalf("verdict while the link-up round runs = %d, want drop", v)
+	}
+}
+
+// A wait that ran out left the exit unknown; the next round that can ask IPv6
+// holds it pending again until its own answer.
+func TestExitIPv6_ARoundAfterAWaitThatRanOutHoldsIPv6PendingAgain(t *testing.T) {
+	s := newExitSession(t, 0, selectionOn("", 1, 0))
+	release := make(chan struct{})
+	s.beforeV6Fails = func(int32) { <-release }
+	t.Cleanup(func() { close(release) })
+	s.x.storeExitIPv6Locked(exitIPv6Unknown)
+	s.x.triggerIPResolve("link-up")
+	waitFor(t, "the IPv6 echo", func() bool { return s.v6Dials.Load() == 1 })
+	if got := s.x.exitIPv6.Load(); got != exitIPv6Pending {
+		t.Fatalf("state while the round runs = %d, want pending", got)
+	}
+}
+
+// The wait a round gets is measured from the round's start, through the path an
+// engine takes: a round whose echo never answers still ends the wait.
+func TestExitIPv6_ARunningRoundBoundsTheWaitFromItsStart(t *testing.T) {
+	prevWindow, prevBudget := exitIPv6PendingTimeout, echoRoundBudget
+	exitIPv6PendingTimeout, echoRoundBudget = 100*time.Millisecond, time.Minute
+	t.Cleanup(func() { exitIPv6PendingTimeout, echoRoundBudget = prevWindow, prevBudget })
+
+	s := newExitSession(t, 0, selectionOn("", 1, 0))
+	release := make(chan struct{})
+	s.beforeV6Fails = func(int32) { <-release }
+	t.Cleanup(func() { close(release) })
+	s.x.triggerIPResolve("link-up")
+	waitFor(t, "the IPv6 echo", func() bool { return s.v6Dials.Load() == 1 })
+	time.Sleep(3 * exitIPv6PendingTimeout)
+	if got := s.x.exitIPv6.Load(); got != exitIPv6Unknown {
+		t.Fatalf("state a window after the round began = %d, want unknown", got)
+	}
+}
+
+// writerFunc lets a test watch the standard logger.
+type writerFunc func([]byte)
+
+func (w writerFunc) Write(p []byte) (int, error) { w(p); return len(p), nil }
+
+// The link-up round reads the link state, so the loop stores it before it starts
+// that round.
+func TestStartLiveness_TheLinkIsUpWhenTheLinkUpRoundIsStarted(t *testing.T) {
+	x := &CoreController{}
+	stateAtStart := make(chan int32, 1)
+	prev := log.Writer()
+	log.SetOutput(writerFunc(func(p []byte) {
+		if strings.Contains(string(p), "external IP fetch scheduled (link-up)") {
+			select {
+			case stateAtStart <- x.linkState.Load():
+			default:
+			}
+		}
+	}))
+	t.Cleanup(func() { log.SetOutput(prev) })
+	x.ipResolve.Store(ipResolveConfig{enabled: true, skipV6: true, urlV4: echoServer(t, "203.0.113.7").URL, dial: directTestDial})
+	x.startLiveness(livenessParams{
+		engine: "test", interval: time.Hour,
+		probe: func(context.Context) (time.Duration, error) { return time.Millisecond, nil },
+	})
+	t.Cleanup(x.stopLiveness)
+	select {
+	case got := <-stateAtStart:
+		if got != int32(liveness.StateUp) {
+			t.Fatalf("link state when the round was started = %d, want up", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("no link-up round")
+	}
+}
+
+// A reconnect's first round must not queue behind the round of the session that
+// ended.
+func TestStopIPResolve_TheNextSessionsFirstRoundDoesNotQueueBehindTheOldOne(t *testing.T) {
+	x := &CoreController{}
+	x.linkState.Store(int32(liveness.StateUp))
+	block := make(chan struct{})
+	t.Cleanup(func() { close(block) })
+	var oldDials, newDials atomic.Int32
+	x.configureIPResolve(ipResolveConfig{enabled: true, skipV6: true, urlV4: "http://old.example",
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			oldDials.Add(1)
+			<-block
+			return nil, errors.New("old session")
+		}})
+	x.triggerIPResolve("link-up")
+	waitFor(t, "the old round", func() bool { return oldDials.Load() == 1 })
+
+	x.stopIPResolve()
+	x.configureIPResolve(ipResolveConfig{enabled: true, skipV6: true, urlV4: "http://new.example",
+		dial: func(context.Context, string, string) (net.Conn, error) {
+			newDials.Add(1)
+			return nil, errors.New("new session")
+		}})
+	t.Cleanup(x.stopIPResolve)
+	x.triggerIPResolve("link-up")
+	waitFor(t, "the new session's round", func() bool { return newDials.Load() == 1 })
+}
+
+// An echo that is asking its lookup again ends when the session does.
+func TestFetchIPEchoRetrying_EndsWithTheSession(t *testing.T) {
+	prev := echoResolveRetryDelay
+	echoResolveRetryDelay = time.Hour
+	t.Cleanup(func() { echoResolveRetryDelay = prev })
+	session, end := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, err := fetchIPEchoRetrying(session, "https://api6.example", func(context.Context, string, string) (net.Conn, error) {
+			return nil, &net.DNSError{Err: "no such host", Name: "api6.example", IsNotFound: true}
+		}, true)
+		done <- err
+	}()
+	time.Sleep(50 * time.Millisecond)
+	end()
+	select {
+	case err := <-done:
+		if !isResolutionFailure(err) {
+			t.Fatalf("err = %v, want the resolution failure", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the echo outlived its session")
 	}
 }

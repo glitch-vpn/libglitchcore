@@ -77,6 +77,7 @@ func (x *CoreController) startLiveness(p livenessParams) {
 			case <-timer.C:
 			}
 
+			linkRecovered := false
 			ctx, cancel := context.WithTimeout(probes, livenessProbeTimeout)
 			elapsed, err := p.probe(ctx)
 			cancel()
@@ -89,18 +90,21 @@ func (x *CoreController) startLiveness(p livenessParams) {
 				}
 				if _, changed := tr.ObserveFailure(); changed {
 					logfmt.Warnf("[liveness] %s: internet through tunnel is DOWN: %v", p.engine, err)
-					x.endPendingExitIPv6()
 				}
 			} else {
 				x.linkProbeMs.Store(elapsed.Milliseconds())
 				if _, changed := tr.ObserveSuccess(); changed {
 					log.Printf("[liveness] %s: internet through tunnel is up (%dms)", p.engine, elapsed.Milliseconds())
-					// The exit IP may (re)appear or change on recovery.
-					x.triggerIPResolve("link-up")
+					linkRecovered = true
 				}
 			}
 			if s := tr.State(); s != liveness.StateUnknown {
 				x.linkState.Store(int32(s))
+			}
+			if linkRecovered {
+				// The exit IP may (re)appear or change on recovery; the round
+				// reads the link state stored above.
+				x.triggerIPResolve("link-up")
 			}
 
 			next := p.interval

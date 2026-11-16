@@ -22,8 +22,11 @@ import (
 const (
 	defaultIPv4EchoURL = "https://api.ipify.org"
 	defaultIPv6EchoURL = "https://api6.ipify.org"
-	ipFetchTimeout     = 12 * time.Second
 )
+
+// echoRoundBudget is how long one echo round may take, a failed lookup's
+// retries included.
+var echoRoundBudget = 12 * time.Second
 
 type tunnelDialFunc func(ctx context.Context, network, addr string) (net.Conn, error)
 
@@ -33,10 +36,20 @@ type ipResolveConfig struct {
 	urlV4   string
 	urlV6   string
 	skipV6  bool // disableIPv6 requested - don't even try
+	// ctx ends with the session; an echo in flight ends with it. Nil is a
+	// context that never ends.
+	ctx context.Context
 	// localNetworksDirect: the private ranges leave the tunnel, so an IPv6 flow
 	// to a unique local address never meets the exit.
 	localNetworksDirect bool
 	dial                tunnelDialFunc
+}
+
+func (c ipResolveConfig) context() context.Context {
+	if c.ctx == nil {
+		return context.Background()
+	}
+	return c.ctx
 }
 
 // IPEvent payload. A missing address always comes with its error ("disabled" or
@@ -60,6 +73,10 @@ func (x *CoreController) configureIPResolve(cfg ipResolveConfig) {
 	x.ipFetchMu.Lock()
 	x.ipGen.Add(1)
 	x.ipStateJSON.Store("")
+	if x.ipResolveCancel != nil {
+		x.ipResolveCancel()
+	}
+	cfg.ctx, x.ipResolveCancel = context.WithCancel(context.Background())
 	x.ipResolve.Store(cfg)
 	x.settleExitIPv6Locked(cfg)
 	x.ipFetchMu.Unlock()
@@ -69,6 +86,14 @@ func (x *CoreController) stopIPResolve() {
 	setSingTunAdmission(nil)
 	x.ipFetchMu.Lock()
 	x.ipGen.Add(1)
+	if x.ipResolveCancel != nil {
+		x.ipResolveCancel()
+		x.ipResolveCancel = nil
+	}
+	// The round in flight ends on its own; the next session's first round does
+	// not queue behind it.
+	x.ipFetchLoop++
+	x.ipFetchBusy, x.ipFetchAgain = false, false
 	x.ipResolve.Store(ipResolveConfig{})
 	x.ipStateJSON.Store("")
 	x.exitPerConnection.Store(false)
@@ -112,6 +137,8 @@ func (x *CoreController) triggerIPResolve(reason string) {
 		return
 	}
 	x.ipFetchBusy = true
+	x.ipFetchLoop++
+	loop := x.ipFetchLoop
 	x.ipFetchMu.Unlock()
 	log.Printf("[ipresolve] external IP fetch scheduled (%s)", reason)
 
@@ -120,9 +147,14 @@ func (x *CoreController) triggerIPResolve(reason string) {
 			cfg, _ := x.ipResolve.Load().(ipResolveConfig)
 			gen := x.ipGen.Load()
 			if cfg.enabled {
+				x.echoRoundStarting(gen)
 				x.setExternalIPState(gen, fetchExternalIPs(cfg, x.knownIPv6State(), func(outcome echoV6Outcome) { x.echoFinishedV6(gen, outcome) }))
 			}
 			x.ipFetchMu.Lock()
+			if x.ipFetchLoop != loop {
+				x.ipFetchMu.Unlock()
+				return
+			}
 			if !x.ipFetchAgain {
 				x.ipFetchBusy = false
 				x.ipFetchMu.Unlock()
@@ -149,7 +181,7 @@ func fetchExternalIPs(cfg ipResolveConfig, answeredV6 *externalIPState, v6Finish
 	go func() {
 		defer wg.Done()
 		defer close(v4Ended)
-		ip, err := fetchIPEchoOnce(cfg.urlV4, cfg.dial, false)
+		ip, err := fetchIPEchoRetrying(cfg.context(), cfg.urlV4, cfg.dial, false)
 		if err != nil {
 			st.IPv4Error = logfmt.Scrub(err.Error())
 		} else {
@@ -165,7 +197,7 @@ func fetchExternalIPs(cfg ipResolveConfig, answeredV6 *externalIPState, v6Finish
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			ip, err := fetchIPEchoOnce(cfg.urlV6, cfg.dial, true)
+			ip, err := fetchIPEchoRetrying(cfg.context(), cfg.urlV6, cfg.dial, true)
 			if err != nil {
 				st.IPv6Error = logfmt.Scrub(err.Error())
 			} else {
@@ -176,6 +208,10 @@ func fetchExternalIPs(cfg ipResolveConfig, answeredV6 *externalIPState, v6Finish
 			}
 			if reachedHost(err) {
 				v6Finished(echoV6Carried)
+				return
+			}
+			if isResolutionFailure(err) {
+				v6Finished(echoV6Unresolved)
 				return
 			}
 			<-v4Ended
@@ -201,13 +237,62 @@ type echoAnsweredError struct{ error }
 
 func (e *echoAnsweredError) Unwrap() error { return e.error }
 
-// One attempt: an exit without IPv6 answers it with a failure, and that failure
-// is the answer. The engine's own dial may still try each address the name
-// resolves to.
-func fetchIPEchoOnce(echoURL string, dial tunnelDialFunc, wantV6 bool) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), ipFetchTimeout)
+// echoResolveRetryDelay is the wait before an echo's first retry after its host
+// failed to resolve; each retry waits twice as long as the one before.
+var echoResolveRetryDelay = time.Second
+
+// resolutionFailureKinds are the engines' own errors for a name that gave no
+// address, each registered by the file that links the engine.
+var resolutionFailureKinds []func(error) bool
+
+// isResolutionFailure reports whether an echo failed before it had an address
+// to dial, so that nothing says whether the exit carries the family.
+func isResolutionFailure(err error) bool {
+	if errors.As(err, new(*net.DNSError)) {
+		return true
+	}
+	for _, kind := range resolutionFailureKinds {
+		if kind(err) {
+			return true
+		}
+	}
+	return false
+}
+
+// fetchIPEchoRetrying asks one echo host. An exit without IPv6 answers with a
+// failure, and that failure is the answer: the engine's dial tries each address
+// the name resolves to, once. A name that gave no address, though, is no answer:
+// no request left. mihomo's resolver returns an empty list without an error when
+// the A lookup fails and the AAAA one is not in within 100 ms, which the dial
+// reports as "no ip address", so a slow or briefly failing lookup shows up this
+// way. The lookup is asked again after echoResolveRetryDelay, doubling, until
+// the round's echoRoundBudget is spent or the session ends.
+func fetchIPEchoRetrying(session context.Context, echoURL string, dial tunnelDialFunc, wantV6 bool) (string, error) {
+	ctx, cancel := context.WithTimeout(session, echoRoundBudget)
 	defer cancel()
-	return fetchIPEcho(ctx, echoURL, dial, wantV6)
+	delay := echoResolveRetryDelay
+	var unresolved error
+	for {
+		ip, err := fetchIPEcho(ctx, echoURL, dial, wantV6)
+		if err == nil {
+			return ip, nil
+		}
+		if !isResolutionFailure(err) {
+			// A lookup that outlasted the round, or the session, is still no answer
+			// from the exit.
+			if unresolved != nil && ctx.Err() != nil {
+				return "", unresolved
+			}
+			return ip, err
+		}
+		unresolved = err
+		select {
+		case <-ctx.Done():
+			return "", err
+		case <-time.After(delay):
+		}
+		delay *= 2
+	}
 }
 
 // The answer's family is validated so a mis-set echo URL can't report an

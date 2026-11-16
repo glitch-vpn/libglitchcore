@@ -16,16 +16,29 @@ const (
 	// no IPv6 flow is judged.
 	exitIPv6Unknown int32 = iota
 	// exitIPv6Pending: the echo is yet to answer. It ends within
-	// exitIPv6PendingTimeout whatever happens.
+	// exitIPv6LinkWait of the exit being chosen, or exitIPv6PendingTimeout of
+	// the echo first running, whatever happens.
 	exitIPv6Pending
 	exitIPv6Carried
 	exitIPv6Absent
 )
 
-// exitIPv6PendingTimeout bounds how long a session drops IPv6 SYNs while its
-// echo has not answered. Past it the exit is unknown, which admits, and a late
-// echo still records its answer.
-var exitIPv6PendingTimeout = ipFetchTimeout
+// How long a session drops IPv6 SYNs while its echo has not answered. Past
+// either bound the exit is unknown, which admits, and a late echo still records
+// its answer.
+//
+// The echo runs once the link is up, which on a tunnel with a slow handshake is
+// long after the start, so the clock that matters starts when the echo can run:
+// exitIPv6PendingTimeout is one echo round, retries included. A link that never
+// comes up has no echo to wait for, and exitIPv6LinkWait ends the wait from the
+// exit being chosen.
+var (
+	exitIPv6PendingTimeout = echoRoundBudget
+	// exitIPv6LinkWait also bounds a tunnel that carries traffic while the probe
+	// never succeeds, for instance a probe address the exit cannot reach: no
+	// link-up comes, so no echo runs, and IPv6 is dropped for this long.
+	exitIPv6LinkWait = time.Minute
+)
 
 // echoV6Outcome is how a round's IPv6 echo ended.
 type echoV6Outcome uint8
@@ -39,6 +52,9 @@ const (
 	// echoV6Inconclusive: both echoes failed on the way, which says nothing about
 	// a family.
 	echoV6Inconclusive
+	// echoV6Unresolved: the IPv6 echo's host did not resolve within the round, so
+	// no request reached it.
+	echoV6Unresolved
 )
 
 // tcpVerdict is what admitTCPFlow says to a TCP SYN; each TUN stack's fork has
@@ -87,15 +103,21 @@ func (x *CoreController) settleExitIPv6Locked(cfg ipResolveConfig) {
 // one. The caller holds ipFetchMu.
 func (x *CoreController) storeExitIPv6Locked(state int32) {
 	x.exitIPv6.Store(state)
+	x.armExitIPv6DeadlineLocked(state == exitIPv6Pending, exitIPv6LinkWait)
+}
+
+// armExitIPv6DeadlineLocked replaces the deadline of a pending state, or just
+// stops it when the state is no longer pending. The caller holds ipFetchMu.
+func (x *CoreController) armExitIPv6DeadlineLocked(pending bool, after time.Duration) {
 	if x.exitIPv6Deadline != nil {
 		x.exitIPv6Deadline.Stop()
 		x.exitIPv6Deadline = nil
 	}
-	if state != exitIPv6Pending {
+	if !pending {
 		return
 	}
 	gen := x.ipGen.Load()
-	x.exitIPv6Deadline = time.AfterFunc(exitIPv6PendingTimeout, func() {
+	x.exitIPv6Deadline = time.AfterFunc(after, func() {
 		x.ipFetchMu.Lock()
 		defer x.ipFetchMu.Unlock()
 		if x.ipGen.Load() == gen && x.exitIPv6.Load() == exitIPv6Pending {
@@ -104,13 +126,25 @@ func (x *CoreController) storeExitIPv6Locked(state int32) {
 	})
 }
 
-// endPendingExitIPv6 gives up waiting for the echo: the exit is unknown, which
-// admits IPv6 flows, until a later echo says.
-func (x *CoreController) endPendingExitIPv6() {
+// echoRoundStarting is called as a round of the generation gen begins. A round
+// that runs with the link up and is yet to ask IPv6 can answer, so the exit is
+// pending for it, with one round to end in, whatever the state a round that ran
+// too early or a wait that ran out left. A round begun before the link is up is
+// a guess made before its time and leaves the state alone, to be renewed when the
+// link comes up.
+func (x *CoreController) echoRoundStarting(gen int64) {
 	x.ipFetchMu.Lock()
 	defer x.ipFetchMu.Unlock()
-	if x.exitIPv6.Load() == exitIPv6Pending {
-		x.storeExitIPv6Locked(exitIPv6Unknown)
+	if x.ipGen.Load() != gen || x.linkState.Load() != int32(liveness.StateUp) || x.exitPerConnection.Load() {
+		return
+	}
+	if cfg, _ := x.ipResolve.Load().(ipResolveConfig); !cfg.enabled || cfg.skipV6 {
+		return
+	}
+	switch x.exitIPv6.Load() {
+	case exitIPv6Unknown, exitIPv6Pending:
+		x.exitIPv6.Store(exitIPv6Pending)
+		x.armExitIPv6DeadlineLocked(true, exitIPv6PendingTimeout)
 	}
 }
 
@@ -145,7 +179,9 @@ func (x *CoreController) noteExitSelection(prev string, sel *serverinfo.Selectio
 // the host said, shows an exit that carries IPv6. One that failed on the way
 // shows one that does not, but only while the tunnel is up and the round's IPv4
 // echo got through: a tunnel that carries nothing says nothing about a family.
-// A round that cannot tell ends the wait, so the exit is unknown.
+// A round that cannot tell, with the link up, ends the wait, so the exit is
+// unknown; with the link not up it says nothing, and the wait goes on to its
+// bound for the round the link's recovery starts.
 func (x *CoreController) echoFinishedV6(gen int64, outcome echoV6Outcome) {
 	x.ipFetchMu.Lock()
 	defer x.ipFetchMu.Unlock()
@@ -157,7 +193,7 @@ func (x *CoreController) echoFinishedV6(gen int64, outcome echoV6Outcome) {
 		x.storeExitIPv6Locked(exitIPv6Carried)
 	case outcome == echoV6Unreachable && x.linkState.Load() == int32(liveness.StateUp):
 		x.storeExitIPv6Locked(exitIPv6Absent)
-	case x.exitIPv6.Load() == exitIPv6Pending:
+	case x.exitIPv6.Load() == exitIPv6Pending && x.linkState.Load() == int32(liveness.StateUp):
 		x.storeExitIPv6Locked(exitIPv6Unknown)
 	}
 }

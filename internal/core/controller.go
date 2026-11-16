@@ -1,6 +1,7 @@
 package core
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -109,8 +110,13 @@ type CoreController struct {
 	ipFetchMu    sync.Mutex
 	ipFetchBusy  bool
 	ipFetchAgain bool
-	selWatchQuit chan struct{}
-	selWatchDone chan struct{}
+	// ipFetchLoop names the goroutine that runs the echo rounds; a stop makes the
+	// one in flight stale. ipResolveCancel ends the session's context. Both are
+	// guarded by ipFetchMu.
+	ipFetchLoop     int64
+	ipResolveCancel context.CancelFunc
+	selWatchQuit    chan struct{}
+	selWatchDone    chan struct{}
 
 	xrayState
 	bridgeState
