@@ -113,12 +113,12 @@ ffi:
 	echo "[INFO] engines: $$ENGINE_SET (extra tags:$$NO_TAGS)"
 	FFI=/app/build_output/ffi
 	rm -rf /app/build_output/*
-	# --- Android (arm64 + amd64) ---
-	for spec in "arm64:arm64-v8a:aarch64-linux-android21-clang" "amd64:x86_64:x86_64-linux-android21-clang"; do
+	# --- Android (arm64, armv7, amd64) ---
+	for spec in "arm64:arm64-v8a:aarch64-linux-android21-clang" "arm:armeabi-v7a:armv7a-linux-androideabi21-clang" "amd64:x86_64:x86_64-linux-android21-clang"; do
 	  arch=$${spec%%:*}; rest=$${spec#*:}; jni=$${rest%%:*}; cc=$${rest##*:}
 	  echo "[INFO] android/$$arch -> $$jni"
 	  out="$$FFI/android/$$jni"; mkdir -p "$$out"
-	  GOOS=android GOARCH=$$arch CGO_ENABLED=1 \
+	  GOOS=android GOARCH=$$arch GOARM=7 CGO_ENABLED=1 \
 	    CC="$$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$$cc" \
 	    CGO_CFLAGS="-I$$DART_SDK/include" CGO_LDFLAGS="-landroid -llog" \
 	    go build -buildvcs=false -tags="with_gvisor $$CMFA $$NO_TAGS" -buildmode=c-shared -ldflags="$$ANDROID_LDFLAGS" -o "$$out/libglitchcore.so" ./

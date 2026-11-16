@@ -20,7 +20,7 @@ drop mihomo outbounds no share link reaches. Sizes were taken from a local
 mingw build of each row, not the Docker release build, and other targets were
 not measured for this composition.
 
-Android ships one `.so` per ABI, so an APK carrying arm64 + x86_64 pays twice
+Android ships one `.so` per ABI, so an APK carrying arm64 + armeabi-v7a + x86_64 pays three times
 unless you split by ABI. The numbers are unstripped of Go's runtime metadata
 beyond `-s -w`; upstream engine size dominates.
 

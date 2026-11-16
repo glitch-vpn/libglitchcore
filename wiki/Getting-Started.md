@@ -7,6 +7,7 @@ Releases carry prebuilt artifacts per platform:
 ```
 ffi/
   android/arm64-v8a/libglitchcore.so
+  android/armeabi-v7a/libglitchcore.so
   android/x86_64/libglitchcore.so
   linux/libglitchcore.so
   windows/libglitchcore.dll

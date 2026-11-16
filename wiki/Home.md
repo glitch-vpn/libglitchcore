@@ -11,7 +11,7 @@ Two engines are compiled in and one runs at a time:
 | Xray | VLESS, VMess, Trojan, Shadowsocks (Reality, XTLS, uTLS), SOCKS5, HTTP(S) proxies |
 | mihomo | Hysteria2, TUIC, AnyTLS, WireGuard and AmneziaWG (AWG 1.0, 2.0 and 3.x), SOCKS5 proxies |
 
-Targets: Android (arm64, x86_64), Windows (amd64), Linux (amd64). The API is a
+Targets: Android (arm64, armeabi-v7a, x86_64), Windows (amd64), Linux (amd64). The API is a
 plain C ABI, so it binds from Dart, Kotlin/Java, Swift, C#, Python or anything
 else with an FFI; the [Flutter plugin](https://github.com/glitch-vpn/glitch_vpn_core_plugin)
 is one consumer, not the only shape.

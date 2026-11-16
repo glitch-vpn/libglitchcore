@@ -10,7 +10,7 @@ Two engines are compiled in and one runs at a time: **Xray** (VLESS, VMess,
 Trojan, Shadowsocks with Reality/XTLS/uTLS, SOCKS5 and HTTP proxies) and
 **mihomo** (Hysteria2, TUIC, AnyTLS, WireGuard and AmneziaWG with AWG 1.0, 2.0
 and 3.x, SOCKS5 proxies).
-Targets are Android (arm64, x86_64), Windows (amd64) and Linux (amd64), behind
+Targets are Android (arm64, armeabi-v7a, x86_64), Windows (amd64) and Linux (amd64), behind
 a plain C ABI — so it binds from Dart, Kotlin, Swift, C# or anything else with
 an FFI. Ship only the engines you need: an xray-only build is 38 MB against
 92 MB for both (69 MB with the release tags). See
