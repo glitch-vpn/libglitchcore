@@ -169,8 +169,8 @@ func probeOnce(ctx context.Context, probeURL string, dial func(ctx context.Conte
 // itself and may pick an IPv6 address: until the exit's IPv6 is known to carry,
 // a name is dialled at an IPv4 address from resolveIPv4, so a path the IPv6
 // verdict has refused or not yet judged never decides the link. resolveIPv4
-// asks inside the tunnel and never from the device. An address literal is the
-// caller's own choice and goes as it is.
+// asks through the exit, as the outbound's own lookups do. An address literal
+// is the caller's own choice and goes as it is.
 func (x *CoreController) ipv4UntilExitCarriesIPv6(dial tunnelDialFunc, resolveIPv4 func(ctx context.Context, host string) (netip.Addr, error)) tunnelDialFunc {
 	return func(ctx context.Context, network, addr string) (net.Conn, error) {
 		host, port, err := net.SplitHostPort(addr)

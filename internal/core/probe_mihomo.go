@@ -29,8 +29,10 @@ func (x *CoreController) mihomoProbeDial(links []string, inbound mihomoconfig.In
 
 // mihomoProbeResolver finds a name's IPv4 address as the WireGuard outbound
 // finds it for its own flows: with the session's resolvers, each dialled through
-// the pinned target. A query never leaves from the device, whatever the routing
-// tiers or the engine's own resolver say.
+// the pinned target, whatever the routing tiers or the engine's own resolver
+// say. As for the outbound's own lookups, a resolver given by name is found from
+// the device, and `system://` and `dhcp://` resolvers ask from the device
+// (resolveInsideTunnel in mihomoconfig).
 func mihomoProbeResolver(target string, servers []string) func(ctx context.Context, host string) (netip.Addr, error) {
 	var mu sync.Mutex
 	var resolver *dns.Resolver
