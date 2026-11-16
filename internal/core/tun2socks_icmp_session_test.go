@@ -20,7 +20,7 @@ var engineICMPHandler adapter.NetworkHandler
 // handler set once at init answers the second session's echoes again.
 func TestPrepareBridgeEngine_DropsEchoesInEverySession(t *testing.T) {
 	for session := 1; session <= 2; session++ {
-		prepareBridgeEngine(&engine.Key{})
+		prepareBridgeEngine(&engine.Key{}, nil)
 		if _, ok := engineICMPHandler.(echoRequestDropper); !ok {
 			t.Fatalf("session %d: ICMP handler = %T, want the echo dropper", session, engineICMPHandler)
 		}

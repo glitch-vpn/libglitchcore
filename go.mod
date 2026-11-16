@@ -6,7 +6,10 @@ require (
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/amnezia-vpn/amneziawg-go/v3 v3.1.20260828
 	github.com/metacubex/amneziawg-go v0.0.0-20260908071407-0c1c6f40ecd7
+	github.com/metacubex/gvisor v0.0.0-20260922041103-e2cbcd6e7400
 	github.com/metacubex/mihomo v1.19.33
+	github.com/metacubex/sing v0.5.8
+	github.com/metacubex/sing-tun v0.4.28
 	github.com/miekg/dns v1.1.73
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
 	github.com/xtls/xray-core v1.260327.1-0.20261021115930-1b1647cd9ddf
@@ -19,9 +22,9 @@ require (
 	gvisor.dev/gvisor v0.0.0-20260701204157-69c2d17aea96
 )
 
-replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.5
+replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.6
 
-replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.2
+replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.3
 
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
@@ -94,7 +97,6 @@ require (
 	github.com/metacubex/edwards25519 v1.2.0 // indirect
 	github.com/metacubex/fswatch v0.1.1 // indirect
 	github.com/metacubex/gopacket v1.1.20-0.20230608035415-7e2f98a3e759 // indirect
-	github.com/metacubex/gvisor v0.0.0-20260922041103-e2cbcd6e7400 // indirect
 	github.com/metacubex/hkdf v0.1.0 // indirect
 	github.com/metacubex/hpke v0.1.0 // indirect
 	github.com/metacubex/http v0.1.8 // indirect
@@ -111,12 +113,10 @@ require (
 	github.com/metacubex/randv2 v0.2.0 // indirect
 	github.com/metacubex/restls-client-go v0.1.9 // indirect
 	github.com/metacubex/sevenzip v1.6.4 // indirect
-	github.com/metacubex/sing v0.5.8 // indirect
 	github.com/metacubex/sing-mux v0.3.12 // indirect
 	github.com/metacubex/sing-quic v0.0.0-20260904234848-1c242664697a // indirect
 	github.com/metacubex/sing-shadowsocks v0.2.13 // indirect
 	github.com/metacubex/sing-shadowsocks2 v0.2.8 // indirect
-	github.com/metacubex/sing-tun v0.4.28 // indirect
 	github.com/metacubex/sing-vmess v0.2.5 // indirect
 	github.com/metacubex/sing-wireguard v0.0.0-20261002050126-e5fa1a607406 // indirect
 	github.com/metacubex/smux v0.0.0-20260105030934-d0c8756d3141 // indirect

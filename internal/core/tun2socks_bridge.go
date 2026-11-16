@@ -113,7 +113,7 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 		TCPReceiveBufferSize:     "4m",
 	}
 	// engine.Start owns the dup from here, whether it succeeds or not.
-	prepareBridgeEngine(key)
+	prepareBridgeEngine(key, x.admitTCPFlow)
 	startErr := engine.Start()
 	useTun2socksSink(logLevel)
 	if startErr != nil {

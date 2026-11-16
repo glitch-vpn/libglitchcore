@@ -71,7 +71,7 @@ func TestFetchExternalIPs_SkipV6(t *testing.T) {
 	srv := echoServer(t, "203.0.113.7")
 	st := fetchExternalIPs(ipResolveConfig{
 		enabled: true, urlV4: srv.URL, urlV6: srv.URL, skipV6: true, dial: directTestDial,
-	})
+	}, nil, nil)
 	if st.IPv4 != "203.0.113.7" || st.IPv4Error != "" {
 		t.Fatalf("v4: %+v", st)
 	}

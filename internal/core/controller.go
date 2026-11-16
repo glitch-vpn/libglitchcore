@@ -95,6 +95,13 @@ type CoreController struct {
 	// (atomic.Value of string; "" = none).
 	serverSelJSON atomic.Value
 	ipStateJSON   atomic.Value
+	// exitIPv6 is what the session's echo found out about the exit's IPv6.
+	exitIPv6 atomic.Int32
+	// exitIPv6Deadline ends a pending exitIPv6; guarded by ipFetchMu.
+	exitIPv6Deadline *time.Timer
+	// exitPerConnection: the session's servers are picked for each connection,
+	// so no echo speaks for the exit of the next flow.
+	exitPerConnection atomic.Bool
 	// atomic.Value of ipResolveConfig; ipGen invalidates in-flight fetches
 	// across engine restarts.
 	ipResolve    atomic.Value

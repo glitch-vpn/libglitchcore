@@ -3,21 +3,40 @@
 package core
 
 import (
+	"net/netip"
+
 	"gvisor.dev/gvisor/pkg/tcpip"
 	"gvisor.dev/gvisor/pkg/tcpip/header"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv4"
 	"gvisor.dev/gvisor/pkg/tcpip/network/ipv6"
 
+	t2score "github.com/xjasonlyu/tun2socks/v2/core"
 	"github.com/xjasonlyu/tun2socks/v2/core/adapter"
 	"github.com/xjasonlyu/tun2socks/v2/engine"
 )
 
-// prepareBridgeEngine loads a session's key and its ICMP handler together:
-// tun2socks clears the handler on every stop and on a failed start, so one
-// set earlier does not reach the next session.
-func prepareBridgeEngine(key *engine.Key) {
+// prepareBridgeEngine loads a session's key, its ICMP handler and its TCP
+// admission together: tun2socks clears the handlers on every stop and on a
+// failed start, so one set earlier does not reach the next session.
+func prepareBridgeEngine(key *engine.Key, admit func(netip.AddrPort) tcpVerdict) {
 	engine.SetICMPHandler(echoRequestDropper{})
+	engine.SetTCPAdmission(bridgeAdmission(admit))
 	engine.Insert(key)
+}
+
+func bridgeAdmission(admit func(netip.AddrPort) tcpVerdict) t2score.TCPAdmission {
+	if admit == nil {
+		return nil
+	}
+	return func(destination netip.AddrPort) t2score.TCPVerdict {
+		switch admit(destination) {
+		case tcpReset:
+			return t2score.TCPReset
+		case tcpDrop:
+			return t2score.TCPDrop
+		}
+		return t2score.TCPAdmit
+	}
 }
 
 // echoRequestDropper takes every ICMP echo request for itself and never

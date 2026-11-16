@@ -26,6 +26,7 @@ func (x *CoreController) setServerSelection(sel *serverinfo.Selection) {
 	}
 	x.serverSelJSON.Store(msg)
 	x.emitStatus(ServerEvent, msg)
+	x.noteExitSelection(prev, sel)
 	if prev != "" {
 		x.triggerIPResolve("server-change")
 	}

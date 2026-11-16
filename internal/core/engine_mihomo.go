@@ -420,11 +420,12 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	})
 	x.initMihomoServerState(links, o)
 	x.configureIPResolve(ipResolveConfig{
-		enabled: o.resolveIP,
-		urlV4:   o.ipEchoV4,
-		urlV6:   o.ipEchoV6,
-		skipV6:  o.dns.DisableIPv6,
-		dial:    x.mihomoTunnelDial(mihomoconfig.Target(links), mark),
+		enabled:             o.resolveIP,
+		urlV4:               o.ipEchoV4,
+		urlV6:               o.ipEchoV6,
+		skipV6:              o.dns.DisableIPv6,
+		dial:                x.mihomoTunnelDial(mihomoconfig.Target(links), mark),
+		localNetworksDirect: o.routing.LocalNetworks,
 	})
 	log.Println("[mihomo] started")
 	return nil

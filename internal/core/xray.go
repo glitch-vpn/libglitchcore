@@ -244,11 +244,12 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		})
 		x.initXrayServerState(res, links, o, stats)
 		x.configureIPResolve(ipResolveConfig{
-			enabled: o.resolveIP,
-			urlV4:   o.ipEchoV4,
-			urlV6:   o.ipEchoV6,
-			skipV6:  o.dns.DisableIPv6,
-			dial:    x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
+			enabled:             o.resolveIP,
+			urlV4:               o.ipEchoV4,
+			urlV6:               o.ipEchoV6,
+			skipV6:              o.dns.DisableIPv6,
+			dial:                x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
+			localNetworksDirect: o.routing.LocalNetworks,
 		})
 		log.Printf("[Xray] Proxy mode: SOCKS5 at %s (no TUN)", endpoint)
 		return nil
@@ -331,11 +332,12 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 	})
 	x.initXrayServerState(res, links, o, stats)
 	x.configureIPResolve(ipResolveConfig{
-		enabled: o.resolveIP,
-		urlV4:   o.ipEchoV4,
-		urlV6:   o.ipEchoV6,
-		skipV6:  o.dns.DisableIPv6,
-		dial:    x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
+		enabled:             o.resolveIP,
+		urlV4:               o.ipEchoV4,
+		urlV6:               o.ipEchoV6,
+		skipV6:              o.dns.DisableIPv6,
+		dial:                x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
+		localNetworksDirect: o.routing.LocalNetworks,
 	})
 
 	return nil

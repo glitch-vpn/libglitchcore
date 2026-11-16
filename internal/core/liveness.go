@@ -68,7 +68,7 @@ func (x *CoreController) startLiveness(p livenessParams) {
 			}
 		}()
 		var tr liveness.Tracker
-		timer := time.NewTimer(quickLivenessInterval)
+		timer := time.NewTimer(0)
 		defer timer.Stop()
 		for {
 			select {
@@ -89,6 +89,7 @@ func (x *CoreController) startLiveness(p livenessParams) {
 				}
 				if _, changed := tr.ObserveFailure(); changed {
 					logfmt.Warnf("[liveness] %s: internet through tunnel is DOWN: %v", p.engine, err)
+					x.endPendingExitIPv6()
 				}
 			} else {
 				x.linkProbeMs.Store(elapsed.Milliseconds())

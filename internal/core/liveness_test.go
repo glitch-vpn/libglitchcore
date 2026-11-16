@@ -62,3 +62,31 @@ func TestStopLiveness_CancelsTheProbeInFlight(t *testing.T) {
 		t.Fatal("stopLiveness waited out the probe's timeout")
 	}
 }
+
+// The echo that tells the session whether its exit has IPv6 waits for the link
+// to come up, so the first probe does not sit out the polling interval.
+func TestStartLiveness_ProbesAtOnce(t *testing.T) {
+	prev := quickLivenessInterval
+	quickLivenessInterval = time.Hour
+	t.Cleanup(func() { quickLivenessInterval = prev })
+
+	probed := make(chan struct{}, 1)
+	x := &CoreController{}
+	x.startLiveness(livenessParams{
+		engine:   "test",
+		interval: time.Hour,
+		probe: func(context.Context) (time.Duration, error) {
+			select {
+			case probed <- struct{}{}:
+			default:
+			}
+			return time.Millisecond, nil
+		},
+	})
+	t.Cleanup(x.stopLiveness)
+	select {
+	case <-probed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the first probe waited for the polling interval")
+	}
+}
