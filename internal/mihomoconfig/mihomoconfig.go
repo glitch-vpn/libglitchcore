@@ -224,7 +224,7 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 		applyHosts(raw, in.Tun.DNS)
 	}
 
-	resolvers := in.dns().NormalizedServers(dnsconfig.DefaultResolver)
+	resolvers := OutboundResolvers(in)
 	names := ProxyNames(links)
 	ni := 0
 	for i, link := range links {
@@ -692,6 +692,24 @@ func underSuffix(key string, suffixes []string) bool {
 	}
 	for _, suffix := range suffixes {
 		if name == suffix || strings.HasSuffix(name, "."+suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// OutboundResolvers are the resolvers a WireGuard outbound of the session
+// looks names up with, each dialled through that outbound.
+func OutboundResolvers(in Inbound) []string {
+	return in.dns().NormalizedServers(dnsconfig.DefaultResolver)
+}
+
+// ResolvesNamesLocally reports whether the pool holds an outbound that finds a
+// name's address itself, as WireGuard and AmneziaWG do. Every other outbound
+// sends the name to its server.
+func ResolvesNamesLocally(links []string) bool {
+	for _, link := range links {
+		if awgconfig.IsLink(strings.TrimSpace(link)) {
 			return true
 		}
 	}

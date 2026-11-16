@@ -416,7 +416,7 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	x.startLiveness(livenessParams{
 		engine:   "mihomo",
 		interval: livenessInterval(o.livenessSec),
-		probe:    tunnelProber(x.mihomoTunnelDial(mihomoconfig.Target(links), mark), o.probeURL),
+		probe:    tunnelProber(x.mihomoProbeDial(links, inbound, mark), o.probeURL),
 	})
 	x.initMihomoServerState(links, o)
 	x.configureIPResolve(ipResolveConfig{
