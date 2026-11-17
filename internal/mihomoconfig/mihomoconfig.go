@@ -48,7 +48,14 @@ type TunInbound struct {
 	FileDescriptor int    // > 0 -> adopt this fd (Android VpnService)
 	Device         string // desktop adapter name (e.g. "GlitchVPN")
 	MTU            int
-	DNS            dnsconfig.Config
+	// UDPTimeoutSec is how long an idle UDP flow lives, in seconds; 0 keeps
+	// mihomo's own.
+	UDPTimeoutSec int
+	// ProcessFirst puts the process rules ahead of the tiers, so a process's
+	// flow meets every block first (processFirstRules). Set where mihomo reads
+	// the app behind a flow: the desktop adapter.
+	ProcessFirst bool
+	DNS          dnsconfig.Config
 }
 
 // Inbound: loopback mixed (proxy mode), the core's tun2socks bridge, or
@@ -256,9 +263,25 @@ func buildRaw(links []string, in Inbound, opts Options, prof routing.Profile) (*
 		return nil, nil, err
 	}
 
-	rules := append(fakePoolRejectRules(raw), buildRules(prof, target, in.ForceProxy, in.ForceDirect, named)...)
+	var rules []string
+	var appSubRules map[string][]string
+	if in.Tun != nil && in.Tun.ProcessFirst {
+		var appRules []string
+		appRules, appSubRules = processFirstRules(prof, target)
+		rules = append(append(killSwitchRules(prof), appRules...), tierRules(prof, target, named)...)
+	} else {
+		rules = buildRules(prof, target, in.ForceProxy, in.ForceDirect, named)
+	}
+	rules = append(fakePoolRejectRules(raw), rules...)
 	raw.Rule = rules
 	geoRules := rules
+	for name, subRule := range appSubRules {
+		if raw.SubRules == nil {
+			raw.SubRules = map[string][]string{}
+		}
+		raw.SubRules[name] = subRule
+		geoRules = append(append([]string{}, geoRules...), subRule...)
+	}
 	if geo := policyGeoRules(raw); len(geo) > 0 {
 		geoRules = append(append([]string{}, geoRules...), geo...)
 	}
@@ -335,14 +358,7 @@ func requireGeoFile(path, listName, label string) error {
 // tier's block and the local networks, then reach the proxy even in direct-all
 // mode.
 func buildRules(p routing.Profile, target string, forceProxy, forceDirect bool, named map[string]string) []string {
-	var rules []string
-	if p.DisableIPv6 {
-		rules = append(rules, "IP-CIDR,::/0,REJECT,no-resolve")
-	}
-	if p.DisableUDP {
-		// :53 stays open so DNS keeps resolving.
-		rules = append(rules, "AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT")
-	}
+	rules := killSwitchRules(p)
 	if forceProxy {
 		if forceFlowsNeedSubRule(p) {
 			rules = append(rules, "SUB-RULE,(IN-NAME,"+ForceProxyInName+"),"+forceFlowsSubRule)
@@ -361,6 +377,25 @@ func buildRules(p routing.Profile, target string, forceProxy, forceDirect bool, 
 			rules = append(rules, "IN-NAME,"+ForceDirectInName+",DIRECT")
 		}
 	}
+	return append(rules, tierRules(p, target, named)...)
+}
+
+// killSwitchRules lead every list: nothing below them reaches a flow they refuse.
+func killSwitchRules(p routing.Profile) []string {
+	var rules []string
+	if p.DisableIPv6 {
+		rules = append(rules, "IP-CIDR,::/0,REJECT,no-resolve")
+	}
+	if p.DisableUDP {
+		// :53 stays open so DNS keeps resolving.
+		rules = append(rules, "AND,((NETWORK,udp),(NOT,((DST-PORT,53)))),REJECT")
+	}
+	return rules
+}
+
+// tierRules are the tiers in order, the local networks and the mode's catch-all.
+func tierRules(p routing.Profile, target string, named map[string]string) []string {
+	var rules []string
 	outcomes := map[string]string{routing.TargetBlock: "REJECT", routing.TargetDirect: "DIRECT", routing.TargetProxy: target}
 	for _, tier := range p.Tiers {
 		for _, step := range tier.Steps() {
@@ -806,6 +841,9 @@ func applyTun(raw *config.RawConfig, t *TunInbound, prof routing.Profile, target
 	// own address under no rule. The stack drops it instead, as the tun2socks
 	// bridge does.
 	raw.Tun.DisableICMPForwarding = true
+	if t.UDPTimeoutSec > 0 {
+		raw.Tun.UDPTimeout = int64(t.UDPTimeoutSec)
+	}
 
 	if t.FileDescriptor > 0 {
 		// Android. AutoRoute/AutoDetectInterface MUST stay off: either one makes
