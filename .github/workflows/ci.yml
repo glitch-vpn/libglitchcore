@@ -53,19 +53,25 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # amneziawg-go is a test-only peer: no composition links it.
+          # amneziawg-go is a test-only peer: no composition links it. The main
+          # variant links no tun2socks: sing-tun is its only TUN layer.
           - name: full (xray+mihomo), main
             tags: ''
             race: true
-            forbidden: 'github.com/amnezia-vpn'
+            forbidden: 'github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
+            mainVariant: true
           - name: full (xray+mihomo), tun2socks
             tags: 'with_tun2socks'
             race: true
             forbidden: 'github.com/amnezia-vpn'
-          # Without mihomo nothing GPL links: no mihomo/sing (either fork) at all.
+          # Without mihomo no engine of its own links; the main variant's TUN
+          # layer is sing-tun, so its GPL code is the one thing that stays.
           - name: xray-only (no_mihomo), main
             tags: 'no_mihomo'
-            forbidden: 'github.com/metacubex|github.com/sagernet/sing|github.com/amnezia-vpn'
+            forbidden: 'github.com/metacubex/mihomo|github.com/sagernet/sing|github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
+            mainVariant: true
+          # Without mihomo and on the bridge nothing GPL links: no mihomo/sing
+          # (either fork) at all.
           - name: xray-only (no_mihomo), tun2socks
             tags: 'with_tun2socks no_mihomo'
             forbidden: 'github.com/metacubex|github.com/sagernet/sing|github.com/amnezia-vpn'
@@ -75,6 +81,7 @@ jobs:
             tags: 'no_xray'
             forbidden: 'github.com/xtls/xray-core|github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
             wintunForbidden: 'golang.zx2c4.com/wintun'
+            mainVariant: true
           - name: mihomo-only (no_xray), tun2socks
             tags: 'with_tun2socks no_xray'
             forbidden: 'github.com/xtls/xray-core|github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
@@ -131,3 +138,31 @@ jobs:
           count=$(GOOS=windows CGO_ENABLED=0 go list -tags="${{ matrix.tags }} with_gvisor" -deps ./internal/core/ ./internal/pinger/ ./internal/linkrelay/ | grep -cE "${{ matrix.wintunForbidden }}" || true)
           echo "forbidden packages linked: $count"
           [ "$count" = "0" ]
+
+      # The main variant links no tun2socks on any target, so no second
+      # TUN layer and no bridge Wintun binding comes with it.
+      - name: TUN layer guard (main variant, every target)
+        if: matrix.mainVariant
+        run: |
+          for target in linux windows android; do
+            count=$(GOOS=$target CGO_ENABLED=1 go list -tags="${{ matrix.tags }} with_gvisor" -deps ./internal/core/ ./internal/pinger/ ./internal/linkrelay/ | grep -c 'github.com/xjasonlyu/tun2socks' || true)
+            echo "$target: tun2socks packages linked: $count"
+            [ "$count" = "0" ]
+          done
+
+      # Only sing-tun's binding drives a Windows adapter in the main variant:
+      # the built binary holds no tun2socks symbol. golang.zx2c4.com/wintun
+      # stays linked through xray-core's TUN, WireGuard and masque packages;
+      # TestXrayTun_NeverLoadsTheWintunLibraryOnDisk shows it is never loaded.
+      - name: Wintun symbols (windows binary, main full)
+        if: matrix.name == 'full (xray+mihomo), main'
+        run: |
+          sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64
+          DART_SDK=$(dirname "$(dirname "$(which dart)")")
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc CGO_CFLAGS="-I$DART_SDK/include" \
+            go build -buildvcs=false -tags="service with_gvisor no_tailscale no_easytier no_zerotier" -o core.exe ./
+          go tool nm core.exe > symbols.txt
+          tun2socks=$(grep -c 'tun2socks' symbols.txt || true)
+          singtun=$(grep -c 'sing-tun/internal/wintun\.CreateAdapter' symbols.txt || true)
+          echo "tun2socks symbols: $tun2socks, sing-tun's CreateAdapter: $singtun"
+          [ "$tun2socks" = "0" ] && [ "$singtun" != "0" ]
