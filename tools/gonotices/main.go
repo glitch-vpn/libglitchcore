@@ -37,6 +37,13 @@ func releaseTargets(baseTags, androidTags, serviceTags string, androidArchs []st
 	)
 }
 
+// mustBeReplaced lists modules whose upstream licence cannot ship in this
+// combined work: a release that links one of them from upstream fails.
+var mustBeReplaced = map[string]string{
+	// GPL-2.0 only; the stub refuses LZO instead.
+	"github.com/rasky/go-lzo": "./third_party/nolzo",
+}
+
 type module struct {
 	path, version string
 	replacePath   string
@@ -125,6 +132,9 @@ func collect(goos, goarch, tags string, modules map[string]*module) error {
 			m = &module{path: f[0], version: f[1], replacePath: f[2], replaceVer: f[3], dir: f[4], licenceDirs: map[string]bool{}}
 			modules[f[0]] = m
 		}
+		if want, ok := mustBeReplaced[m.path]; ok && filepath.ToSlash(m.replacePath) != want {
+			return fmt.Errorf("%s is linked from upstream (replaced by %q); go.mod must replace it with %s", m.path, m.replacePath, want)
+		}
 		// A package's own directory and each parent up to the module root can
 		// carry a licence for vendored code.
 		for dir := f[5]; ; dir = filepath.Dir(dir) {
@@ -201,7 +211,7 @@ func render(m *module) (string, error) {
 	b.WriteString(strings.Repeat("=", 78) + "\n")
 	fmt.Fprintf(&b, "Module:  %s %s\n", m.path, m.version)
 	if m.replacePath != "" {
-		fmt.Fprintf(&b, "Replaced by: %s %s\n", m.replacePath, m.replaceVer)
+		fmt.Fprintf(&b, "Replaced by: %s\n", strings.TrimSpace(m.replacePath+" "+m.replaceVer))
 	}
 	fmt.Fprintf(&b, "Licence: %s\n", strings.Join(names, ", "))
 	for _, note := range notes {

@@ -26,6 +26,9 @@ replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 
 
 replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.5
 
+// github.com/rasky/go-lzo is GPL-2.0 only; the stub keeps it out of the link.
+replace github.com/rasky/go-lzo => ./third_party/nolzo
+
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
 	github.com/Yawning/aez v0.0.0-20211027044916-e49e68abd344 // indirect
