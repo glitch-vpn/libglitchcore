@@ -129,8 +129,9 @@ func (d *directAppAddressBlocks) ListenPacketContext(ctx context.Context, metada
 	if err != nil {
 		return nil, err
 	}
-	// The tunnel sends to the address the metadata ends up with.
-	metadata.DstIP = addresses[0]
+	// The tunnel sends to the address the metadata ends up with, and DIRECT
+	// looks a name up again whenever the metadata still carries one.
+	metadata.DstIP, metadata.Host = addresses[0], ""
 	return d.ProxyAdapter.ListenPacketContext(ctx, metadata)
 }
 

@@ -5,6 +5,7 @@ package core
 import (
 	"io"
 	"net"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/component/process"
+	C "github.com/metacubex/mihomo/constant"
+	mihomoTunnel "github.com/metacubex/mihomo/tunnel"
 	D "github.com/miekg/dns"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
@@ -188,5 +191,83 @@ func TestMihomoNativeTun_ProcessDirectTCPFlowNeverDialsAnAddressItDidNotCheck(t 
 	time.Sleep(1500 * time.Millisecond)
 	if n := blocked.Load(); n != 0 {
 		t.Errorf("the blocked address took %d connections", n)
+	}
+}
+
+// mihomoDatagram is a datagram the TUN hands mihomo's tunnel.
+type mihomoDatagram struct {
+	data []byte
+	src  *net.UDPAddr
+}
+
+func (p *mihomoDatagram) Data() []byte                                { return p.data }
+func (p *mihomoDatagram) WriteBack(b []byte, _ net.Addr) (int, error) { return len(b), nil }
+func (p *mihomoDatagram) Drop()                                       {}
+func (p *mihomoDatagram) LocalAddr() net.Addr                         { return p.src }
+
+// listenCountingUDP counts the datagrams that reach host:port.
+func listenCountingUDP(t *testing.T, host string, port int) *atomic.Int32 {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", net.JoinHostPort(host, strconv.Itoa(port)))
+	if err != nil {
+		t.Skipf("listen udp on %s: %v", host, err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	var count atomic.Int32
+	go func() {
+		buf := make([]byte, 2048)
+		for {
+			if _, _, err := pc.ReadFrom(buf); err != nil {
+				return
+			}
+			count.Add(1)
+		}
+	}()
+	return &count
+}
+
+// The datagrams of a process-direct app to a name whose answer changes at every
+// lookup all reach the address the blocks were checked against: the name is
+// looked up once for the flow.
+func TestMihomoNativeTun_ProcessDirectUDPFlowSendsToTheCheckedAddressWhenTheAnswerChanges(t *testing.T) {
+	var lookups atomic.Int32
+	answers := []net.IP{net.IPv4(127, 0, 0, 6), net.IPv4(127, 0, 0, 5)}
+	server := directResolver(t, net.IPv4(127, 0, 0, 2), func(name string, qtype uint16) ([]D.RR, time.Duration) {
+		if name != "rotating-udp.test" || qtype != D.TypeA {
+			return nil, 0
+		}
+		ip := answers[int(lookups.Add(1)-1)%len(answers)]
+		return []D.RR{&D.A{Hdr: D.RR_Header{Name: name + ".", Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 0}, A: ip.To4()}}, 0
+	})
+	port, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	open := listenCountingUDP(t, "127.0.0.6", port)
+	blocked := listenCountingUDP(t, "127.0.0.5", port)
+	startNativeDirectApp(t, nativeDirectAppProfile, server)
+
+	const datagrams = 5
+	for round := 0; round < 3; round++ {
+		fake := fakeIPFor(t, "rotating-udp.test")
+		lookups.Store(0)
+		openBefore := open.Load()
+		src := &net.UDPAddr{IP: net.IPv4(198, 18, 0, 1), Port: 43000 + round}
+		for i := 0; i < datagrams; i++ {
+			metadata := &C.Metadata{NetWork: C.UDP, Type: C.TUN, SrcIP: netip.MustParseAddr("198.18.0.1"), SrcPort: uint16(src.Port), DstPort: uint16(port), Process: "direct.exe"}
+			metadata.DstIP, _ = netip.AddrFromSlice(fake.To4())
+			mihomoTunnel.Tunnel.HandleUDPPacket(&mihomoDatagram{data: []byte("datagram"), src: src}, metadata)
+			time.Sleep(100 * time.Millisecond)
+		}
+		time.Sleep(300 * time.Millisecond)
+		if n := blocked.Load(); n != 0 {
+			t.Fatalf("round %d: the blocked address took %d datagrams", round, n)
+		}
+		if n := open.Load() - openBefore; n != datagrams {
+			t.Fatalf("round %d: %d of %d datagrams reached the checked address", round, n, datagrams)
+		}
+		if n := lookups.Load(); n != 1 {
+			t.Fatalf("round %d: the name was looked up %d times, want once", round, n)
+		}
 	}
 }
