@@ -156,6 +156,13 @@ Everything the caller needs to render arrives on the status port as
 | 303 | external IPv4/IPv6 of the exit, fetched through the proxy whatever the routing tiers say |
 | 400 / 401 | structured logs (off by default); 401 carries the error and fatal lines; credentials are redacted and xray masks addresses |
 | 402 | per-connection inspector (opt-in) |
+| 600 | Windows hotspot sharing: `{"shared":"tunnel"\|"wifi"\|"none","blocked","error","restartOn"}`; `restartOn` names the connection to restart the hotspot on when the live switch is unavailable |
+
+The Windows hotspot is driven by two calls, `PrepareHotspot()` (repairs ICS's
+stale state before a hotspot starts; 0, or 3 unsupported, 4 a hotspot runs, 5
+needs elevation, 6 failed) and `SetHotspotSharing(json)` with
+`{"on","blockWhileTunnelDown","blockedClients":[IPv4, …]}` (at most 8 clients;
+the whole state each call). Off Windows both answer 3.
 
 Registering a status port over a live engine replays the current state —
 connected status, server, external IP, stats — so a restarted UI restores

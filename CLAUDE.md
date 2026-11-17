@@ -122,20 +122,33 @@ break it.
 ### Hotspot sharing (Windows)
 
 `PrepareHotspot()` and `SetHotspotSharing(json)` (`{"on","blockWhileTunnelDown","blockedClients":[IPv4…]}`,
-the whole wanted state, idempotent) are the two exports the plugin's hotspot uses; both answer 3 off
-Windows and go over the service pipe (`prepare_hotspot`, `set_hotspot_sharing`, a result code in `data`).
+at most 8 clients, the whole wanted state, idempotent) are the two exports the plugin's hotspot uses; both
+answer 3 off Windows and go over the service pipe (`set_hotspot_sharing` with a result code in `data`;
+`prepare_hotspot` starts the repair off the pipe and answers `{"result","done"}`, asked again until done,
+so no command holds the pipe while ICS restarts).
 `hotspot_sharing.go` is the order over a `hotspotOS` interface (tested over fakes); the Windows calls are
-`hotspot_windows.go` (HNetCfgClient.dll's undocumented sharing exports, loaded from System32; forwarding
-through winipcfg), `hotspot_wfp_windows.go` (the per-client block) and `hotspot_ics_windows.go` (the repair).
-The order follows the controller's own lifecycle events from `emitStatus`; proxy mode has no
-«GlitchVPN» adapter, so it is always "down".
+`hotspot_windows.go` (HNetCfgClient.dll's undocumented sharing exports, loaded from System32, with the
+hotspot service's registry record as the fallback for reading the pair; forwarding through winipcfg),
+`hotspot_wfp_windows.go` (the per-client block) and `hotspot_ics_windows.go` (the repair).
+The order follows the controller's own lifecycle events from `emitStatus` (the controller tracks the
+phase from the start, so a hotspot turned on under a running tunnel begins from it) and the tunnel's
+adapter, found by its GUID: the tunnel counts as down only when the engine says so and the adapter is
+gone. Proxy mode is the session's own flag, always "down".
 
+- The rule: forwarding on the hotspot's interface is on only while ICS's public side is the connection
+  the phase wants. Unknown, refused, or a tunnel still going away is forwarding off.
 - ICS shares the physical connection, not the tunnel's adapter, while the tunnel is down: sharing the
-  tunnel's turns the hotspot off when it goes.
+  tunnel's turns the hotspot off when it goes. An index of an adapter that is gone is never the
+  physical connection.
 - Every `HNetCfgStartSharing` turns forwarding on again, so the block is set after each, and a periodic
-  check puts it back when ICS resumes by itself.
-- Never restart `SharedAccess` while a hotspot runs: it turns the hotspot off. `PrepareHotspot` refuses.
-- `INetSharingManager` answers an elevated caller only; the repair needs the service or an elevated process.
+  check puts it back when ICS resumes by itself. The check runs while sharing is on.
+- `on:false` stops a pair this order turned on; on a fresh core, only a pair whose public side is the
+  tunnel's adapter or a gone one. A pair on a physical connection is the user's own hotspot.
+- Never restart `SharedAccess` while a hotspot runs, or when the pair cannot be read: it turns the
+  hotspot off. `PrepareHotspot` refuses.
+- The repair clears only what names an adapter that is gone (HomeNet rows, a preferred public side); a
+  share of an adapter that exists is left alone. It needs the service or an elevated process.
+  `INetSharingManager` answers an elevated caller only.
 
 ### Controller concurrency
 
