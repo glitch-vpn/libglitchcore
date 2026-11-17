@@ -27,6 +27,15 @@ IMAGE_TAG      := $(or $(shell sha256sum "$(CURDIR)/Dockerfile" 2>/dev/null | cu
 IMAGE          := $(IMAGE_NAME):$(IMAGE_TAG)
 WINTUN_VERSION := 0.14.1
 
+# The release build's tag sets and Android ABIs. `ffi` builds with them and
+# `make notices` lists the licences of what they link.
+BASE_TAGS         := with_gvisor
+SERVICE_TAGS      := service
+ANDROID_TAGS      := cmfa
+MIHOMO_TRIM_TAGS  := no_tailscale no_easytier no_zerotier
+ANDROID_SPECS     := arm64:arm64-v8a:aarch64-linux-android21-clang arm:armeabi-v7a:armv7a-linux-androideabi21-clang amd64:x86_64:x86_64-linux-android21-clang
+ANDROID_GOARCHS   := $(foreach spec,$(ANDROID_SPECS),$(firstword $(subst :, ,$(spec))))
+
 # Engine composition (comma/space separated subset of: xray mihomo).
 ENGINES ?= xray,mihomo
 
@@ -117,7 +126,7 @@ ffi:
 	if [ -z "$$HAS_XRAY" ]; then NO_TAGS="$$NO_TAGS no_xray"; fi
 	if [ -z "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_mihomo"; fi
 	# mihomo outbounds no share link reaches; easytier alone embeds a ~7 MB WASM core.
-	if [ -n "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier"; fi
+	if [ -n "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS $(MIHOMO_TRIM_TAGS)"; fi
 	case "$${GLITCH_TUN_LAYER:-singtun}" in
 	  singtun) ;;
 	  tun2socks) NO_TAGS="$$NO_TAGS with_tun2socks" ;;
@@ -125,34 +134,34 @@ ffi:
 	esac
 	# cmfa gates mihomo's Android package reader; only meaningful with mihomo in.
 	CMFA=""
-	if [ -n "$$HAS_MIHOMO" ]; then CMFA="cmfa"; fi
+	if [ -n "$$HAS_MIHOMO" ]; then CMFA="$(ANDROID_TAGS)"; fi
 	echo "[INFO] engines: $$ENGINE_SET (extra tags:$$NO_TAGS)"
 	FFI=/app/build_output/ffi
 	rm -rf /app/build_output/*
 	# --- Android (arm64, armv7, amd64) ---
-	for spec in "arm64:arm64-v8a:aarch64-linux-android21-clang" "arm:armeabi-v7a:armv7a-linux-androideabi21-clang" "amd64:x86_64:x86_64-linux-android21-clang"; do
+	for spec in $(ANDROID_SPECS); do
 	  arch=$${spec%%:*}; rest=$${spec#*:}; jni=$${rest%%:*}; cc=$${rest##*:}
 	  echo "[INFO] android/$$arch -> $$jni"
 	  out="$$FFI/android/$$jni"; mkdir -p "$$out"
 	  GOOS=android GOARCH=$$arch GOARM=7 CGO_ENABLED=1 \
 	    CC="$$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin/$$cc" \
 	    CGO_CFLAGS="-I$$DART_SDK/include" CGO_LDFLAGS="-landroid -llog" \
-	    go build -buildvcs=false -tags="with_gvisor $$CMFA $$NO_TAGS" -buildmode=c-shared -ldflags="$$ANDROID_LDFLAGS" -o "$$out/libglitchcore.so" ./
+	    go build -buildvcs=false -tags="$(BASE_TAGS) $$CMFA $$NO_TAGS" -buildmode=c-shared -ldflags="$$ANDROID_LDFLAGS" -o "$$out/libglitchcore.so" ./
 	  if [ "$$arch" = "arm64" ] && [ -f "$$out/libglitchcore.h" ]; then cp "$$out/libglitchcore.h" "$$FFI/libglitchcore.h"; fi
 	done
 	echo "[OK] Android libraries built"
 	# --- Linux ---
 	out="$$FFI/linux"; mkdir -p "$$out"
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=gcc \
-	  go build -buildvcs=false -tags="with_gvisor $$NO_TAGS" -buildmode=c-shared -ldflags="$$LDFLAGS" -o "$$out/libglitchcore.so" ./
+	  go build -buildvcs=false -tags="$(BASE_TAGS) $$NO_TAGS" -buildmode=c-shared -ldflags="$$LDFLAGS" -o "$$out/libglitchcore.so" ./
 	[ -f "$$FFI/libglitchcore.h" ] || cp "$$out/libglitchcore.h" "$$FFI/libglitchcore.h"
 	echo "[OK] Linux library built"
 	# --- Windows (c-shared DLL + service exe) ---
 	out="$$FFI/windows"; mkdir -p "$$out"
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc \
-	  go build -buildvcs=false -tags="with_gvisor $$NO_TAGS" -buildmode=c-shared -ldflags="$$LDFLAGS" -o "$$out/libglitchcore.dll" ./
+	  go build -buildvcs=false -tags="$(BASE_TAGS) $$NO_TAGS" -buildmode=c-shared -ldflags="$$LDFLAGS" -o "$$out/libglitchcore.dll" ./
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 CC=x86_64-w64-mingw32-gcc \
-	  go build -buildvcs=false -tags="service with_gvisor $$NO_TAGS" -ldflags="$$LDFLAGS" -o "$$out/glitch_vpn_core_service.exe" ./
+	  go build -buildvcs=false -tags="$(SERVICE_TAGS) $(BASE_TAGS) $$NO_TAGS" -ldflags="$$LDFLAGS" -o "$$out/glitch_vpn_core_service.exe" ./
 	echo "[OK] Windows libraries built"
 	# --- Wintun (cached under /app/.cache) ---
 	wt="/app/.cache/wintun-$(WINTUN_VERSION)"
@@ -171,7 +180,7 @@ run-tests:
 	ENGINE_SET=$$(printf '%s' "$${GLITCH_ENGINES:-xray,mihomo}" | tr ',' ' ')
 	NO_TAGS=""
 	case " $$ENGINE_SET " in *" xray "*) ;; *) NO_TAGS="$$NO_TAGS no_xray" ;; esac
-	case " $$ENGINE_SET " in *" mihomo "*) NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier" ;; *) NO_TAGS="$$NO_TAGS no_mihomo" ;; esac
+	case " $$ENGINE_SET " in *" mihomo "*) NO_TAGS="$$NO_TAGS $(MIHOMO_TRIM_TAGS)" ;; *) NO_TAGS="$$NO_TAGS no_mihomo" ;; esac
 	case "$${GLITCH_TUN_LAYER:-singtun}" in
 	  singtun) ;;
 	  tun2socks) NO_TAGS="$$NO_TAGS with_tun2socks" ;;
@@ -185,17 +194,21 @@ run-tests:
 # Licence notices - host Go toolchain, no Docker
 # ---------------------------------------------------------------------------
 
+NOTICES_FLAGS := -base-tags "$(BASE_TAGS) $(MIHOMO_TRIM_TAGS)" -android-tags "$(ANDROID_TAGS)" -service-tags "$(SERVICE_TAGS)" -android-archs "$(ANDROID_GOARCHS)"
+
 # Every Go module the release binaries link, with its licence text.
 notices:
 	cd "$(CURDIR)"
 	go mod download
-	go run ./tools/gonotices -out THIRD_PARTY_GO_MODULES.txt
+	go run ./tools/gonotices $(NOTICES_FLAGS) -out THIRD_PARTY_GO_MODULES.txt
 
 notices-check:
 	cd "$(CURDIR)"
 	go mod download
+	# On a CRLF checkout (core.autocrlf) go.sum differs from tidy's LF output; run it from an LF copy there.
+	go mod tidy -diff
 	fresh=$$(mktemp)
-	go run ./tools/gonotices -out "$$fresh"
+	go run ./tools/gonotices $(NOTICES_FLAGS) -out "$$fresh"
 	if ! cmp -s "$$fresh" THIRD_PARTY_GO_MODULES.txt; then
 	  rm -f "$$fresh"
 	  echo "[ERR] THIRD_PARTY_GO_MODULES.txt is out of date: run make notices"

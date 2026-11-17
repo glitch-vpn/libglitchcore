@@ -16,18 +16,25 @@ import (
 	"strings"
 )
 
-// releaseTargets mirrors the `ffi` recipe in the Makefile (default engines,
-// main TUN layer): keep the tags and the target list in step with it and with
-// .github/workflows/release.yml.
-var releaseTargets = []struct {
+type target struct {
 	name, goos, goarch, tags string
-}{
-	{"android/arm64", "android", "arm64", "with_gvisor cmfa no_tailscale no_easytier no_zerotier"},
-	{"android/arm", "android", "arm", "with_gvisor cmfa no_tailscale no_easytier no_zerotier"},
-	{"android/amd64", "android", "amd64", "with_gvisor cmfa no_tailscale no_easytier no_zerotier"},
-	{"linux/amd64", "linux", "amd64", "with_gvisor no_tailscale no_easytier no_zerotier"},
-	{"windows/amd64 dll", "windows", "amd64", "with_gvisor no_tailscale no_easytier no_zerotier"},
-	{"windows/amd64 service", "windows", "amd64", "service with_gvisor no_tailscale no_easytier no_zerotier"},
+}
+
+// releaseTargets are the builds of the Makefile's `ffi` recipe in its default
+// composition. The tag sets and the Android architectures come from the
+// Makefile's variables, passed in as flags; linux and windows are amd64 only,
+// as in `ffi`.
+func releaseTargets(baseTags, androidTags, serviceTags string, androidArchs []string) []target {
+	join := func(parts ...string) string { return strings.Join(strings.Fields(strings.Join(parts, " ")), " ") }
+	var targets []target
+	for _, arch := range androidArchs {
+		targets = append(targets, target{"android/" + arch, "android", arch, join(baseTags, androidTags)})
+	}
+	return append(targets,
+		target{"linux/amd64", "linux", "amd64", join(baseTags)},
+		target{"windows/amd64 dll", "windows", "amd64", join(baseTags)},
+		target{"windows/amd64 service", "windows", "amd64", join(serviceTags, baseTags)},
+	)
 }
 
 type module struct {
@@ -42,16 +49,25 @@ type module struct {
 
 func main() {
 	out := flag.String("out", "THIRD_PARTY_GO_MODULES.txt", "file to write")
+	baseTags := flag.String("base-tags", "", "tags every target builds with")
+	androidTags := flag.String("android-tags", "", "tags added on Android")
+	serviceTags := flag.String("service-tags", "", "tags of the Windows service build")
+	androidArchs := flag.String("android-archs", "", "GOARCH values built for Android")
 	flag.Parse()
-	if err := run(*out); err != nil {
+	if *baseTags == "" || *androidArchs == "" {
+		fmt.Fprintln(os.Stderr, "-base-tags and -android-archs are required: run make notices")
+		os.Exit(2)
+	}
+	targets := releaseTargets(*baseTags, *androidTags, *serviceTags, strings.Fields(*androidArchs))
+	if err := run(*out, targets); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(outPath string) error {
+func run(outPath string, targets []target) error {
 	modules := map[string]*module{}
-	for _, target := range releaseTargets {
+	for _, target := range targets {
 		if err := collect(target.goos, target.goarch, target.tags, modules); err != nil {
 			return fmt.Errorf("%s: %w", target.name, err)
 		}
@@ -123,6 +139,16 @@ func collect(goos, goarch, tags string, modules map[string]*module) error {
 
 func samePath(a, b string) bool { return filepath.Clean(a) == filepath.Clean(b) }
 
+// handDecided names the licence of files the classifier cannot read, keyed by
+// module path and the file's path in the module. Each entry says where the
+// decision comes from.
+var handDecided = map[string]struct{ name, note string }{
+	"github.com/metacubex/mihomo/transport/hysteria/conns/faketcp/LICENSE": {
+		"MIT",
+		"the file says only \"Grabbed from https://github.com/xtaci/tcpraw with modifications\"; tcpraw is MIT upstream, and its text is not in the module cache to copy",
+	},
+}
+
 func render(m *module) (string, error) {
 	var files []licenceFile
 	seen := map[string]bool{}
@@ -130,7 +156,7 @@ func render(m *module) (string, error) {
 	for dir := range m.licenceDirs {
 		dirs = append(dirs, dir)
 	}
-	sort.Strings(dirs)
+	sort.Slice(dirs, func(i, j int) bool { return filepath.ToSlash(dirs[i]) < filepath.ToSlash(dirs[j]) })
 	for _, dir := range dirs {
 		found, err := readLicenceFiles(m.dir, dir)
 		if err != nil {
@@ -148,15 +174,27 @@ func render(m *module) (string, error) {
 		return "", fmt.Errorf("%s %s: no licence file", m.path, m.version)
 	}
 
-	var names []string
+	var names, notes, unread []string
 	for _, file := range files {
-		if !file.notice && file.name != "" {
-			names = append(names, file.name)
+		if file.notice {
+			continue
 		}
+		file.names = classify(file.text)
+		if hand, ok := handDecided[m.path+"/"+file.rel]; ok {
+			file.names = []string{hand.name}
+			notes = append(notes, fmt.Sprintf("%s: %s", file.rel, hand.note))
+		}
+		if len(file.names) == 0 {
+			unread = append(unread, file.rel)
+		}
+		names = append(names, file.names...)
+	}
+	if len(unread) > 0 {
+		return "", fmt.Errorf("%s %s: licence text not recognised: %s", m.path, m.version, strings.Join(unread, ", "))
 	}
 	names = unique(names)
 	if len(names) == 0 {
-		return "", fmt.Errorf("%s %s: licence text not recognised (%s)", m.path, m.version, files[0].rel)
+		return "", fmt.Errorf("%s %s: only NOTICE files", m.path, m.version)
 	}
 
 	var b strings.Builder
@@ -166,6 +204,9 @@ func render(m *module) (string, error) {
 		fmt.Fprintf(&b, "Replaced by: %s %s\n", m.replacePath, m.replaceVer)
 	}
 	fmt.Fprintf(&b, "Licence: %s\n", strings.Join(names, ", "))
+	for _, note := range notes {
+		fmt.Fprintf(&b, "Note:    %s\n", note)
+	}
 	for _, file := range files {
 		fmt.Fprintf(&b, "\n--- %s ---\n\n%s\n", file.rel, strings.TrimRight(file.text, "\n \t"))
 	}
@@ -185,8 +226,9 @@ func unique(in []string) []string {
 }
 
 type licenceFile struct {
-	rel, text, name string
-	notice          bool
+	rel, text string
+	names     []string
+	notice    bool
 }
 
 func readLicenceFiles(moduleDir, dir string) ([]licenceFile, error) {
@@ -203,18 +245,15 @@ func readLicenceFiles(moduleDir, dir string) ([]licenceFile, error) {
 		if err != nil {
 			return nil, err
 		}
-		text := strings.ReplaceAll(string(data), "\r\n", "\n")
 		rel, err := filepath.Rel(moduleDir, filepath.Join(dir, entry.Name()))
 		if err != nil {
 			return nil, err
 		}
-		file := licenceFile{rel: filepath.ToSlash(rel), text: text}
-		if strings.HasPrefix(strings.ToUpper(entry.Name()), "NOTICE") {
-			file.notice = true
-		} else {
-			file.name = classify(text)
-		}
-		out = append(out, file)
+		out = append(out, licenceFile{
+			rel:    filepath.ToSlash(rel),
+			text:   strings.ReplaceAll(string(data), "\r\n", "\n"),
+			notice: strings.HasPrefix(strings.ToUpper(entry.Name()), "NOTICE"),
+		})
 	}
 	return out, nil
 }
@@ -229,9 +268,9 @@ func isLicenceFileName(name string) bool {
 	return false
 }
 
-// classify names the licence a text carries, by phrases only that licence
-// has; "" when none matches.
-func classify(text string) string {
+// classify names every licence a text carries, by phrases only that licence
+// has; empty when none matches. A file may hold several licences.
+func classify(text string) []string {
 	t := strings.Join(strings.Fields(strings.ToLower(text)), " ")
 	has := func(parts ...string) bool {
 		for _, p := range parts {
@@ -241,38 +280,59 @@ func classify(text string) string {
 		}
 		return true
 	}
-	switch {
-	case has("licensed under the lgplv3", "as a special exception to the gnu lesser general public license version 3"):
-		return "LGPL-3.0 with static-linking exception"
-	case strings.HasPrefix(t, "gnu lesser general public license"):
-		return "LGPL"
-	case strings.HasPrefix(t, "gnu affero general public license"):
-		return "AGPL-3.0"
-	case strings.HasPrefix(t, "gnu general public license") && has("version 3, 29 june 2007"):
-		return "GPL-3.0"
-	case strings.HasPrefix(t, "gnu general public license") && has("version 2, june 1991"):
-		return "GPL-2.0"
-	case has("mozilla public license", "version 2.0"):
-		return "MPL-2.0"
-	case has("gnu general public license", "either version 3 of the license, or (at your option) any later version"):
-		return "GPL-3.0-or-later"
-	case has("apache license", "version 2.0, january 2004"),
-		has("licensed under the apache license, version 2.0"):
-		return "Apache-2.0"
-	case has("cc0 1.0 universal"):
-		return "CC0-1.0"
-	case has("this is free and unencumbered software released into the public domain"):
-		return "Unlicense"
-	case has("permission to use, copy, modify, and/or distribute this software for any purpose with or without fee"),
-		has("permission to use, copy, modify, and distribute this software for any purpose with or without fee"):
-		return "ISC"
-	case has("permission is hereby granted, free of charge, to any person obtaining a copy"):
-		return "MIT"
-	case has("redistribution and use in source and binary forms", "neither the name of"),
-		has("redistributions of source code must retain", "redistributions in binary form must reproduce", "endorse or promote"):
-		return "BSD-3-Clause"
-	case has("redistribution and use in source and binary forms", "this list of conditions and the following disclaimer in the documentation"):
-		return "BSD-2-Clause"
+	var names []string
+	add := func(name string) { names = append(names, name) }
+
+	if has("licensed under the lgplv3", "as a special exception to the gnu lesser general public license version 3") {
+		add("LGPL-3.0 with static-linking exception")
+	} else if has("gnu lesser general public license version 3, 29 june 2007") {
+		add("LGPL-3.0")
 	}
-	return ""
+	if has("gnu lesser general public license version 2.1, february 1999") {
+		add("LGPL-2.1")
+	}
+	if has("gnu affero general public license version 3, 19 november 2007") {
+		add("AGPL-3.0")
+	}
+	if has("gnu general public license version 3, 29 june 2007") {
+		add("GPL-3.0")
+	} else if has("gnu general public license", "either version 3 of the license, or (at your option) any later version") {
+		add("GPL-3.0-or-later")
+	}
+	if has("gnu general public license version 2, june 1991") {
+		add("GPL-2.0")
+	}
+	if has("mozilla public license", "version 2.0") {
+		add("MPL-2.0")
+	}
+	if has("apache license version 2.0, january 2004") || has("licensed under the apache license, version 2.0") {
+		add("Apache-2.0")
+	}
+	if has("cc0 1.0 universal") {
+		add("CC0-1.0")
+	}
+	if has("this is free and unencumbered software released into the public domain") {
+		add("Unlicense")
+	}
+	if has("permission to use, copy, modify, and/or distribute this software for any purpose with or without fee") ||
+		has("permission to use, copy, modify, and distribute this software for any purpose with or without fee") {
+		add("ISC")
+	}
+	if has("permission is hereby granted, free of charge, to any person obtaining a copy") {
+		add("MIT")
+	}
+	// A BSD-3 text holds the BSD-2 clauses too: a BSD-2 licence is present
+	// only when some copy of the clauses has no endorsement clause.
+	clauses := max(
+		strings.Count(t, "redistribution and use in source and binary forms"),
+		strings.Count(t, "redistributions in binary form must reproduce"),
+	)
+	endorsements := strings.Count(t, "endorse or promote")
+	if endorsements > 0 {
+		add("BSD-3-Clause")
+	}
+	if clauses > endorsements && has("this list of conditions and the following disclaimer in the documentation") {
+		add("BSD-2-Clause")
+	}
+	return names
 }

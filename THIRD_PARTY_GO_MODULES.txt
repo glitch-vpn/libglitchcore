@@ -615,7 +615,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
 Module:  github.com/enfein/mieru/v3 v3.38.1
-Licence: GPL-3.0, MIT
+Licence: BSD-2-Clause, GPL-3.0, MIT
 
 --- LICENSE ---
 
@@ -1571,7 +1571,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
 Module:  github.com/ghodss/yaml v1.0.1-0.20220118164431-d8423dcdf344
-Licence: MIT
+Licence: BSD-3-Clause, MIT
 
 --- LICENSE ---
 
@@ -3952,7 +3952,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
 Module:  github.com/metacubex/gvisor v0.0.0-20260922041103-e2cbcd6e7400
-Licence: Apache-2.0
+Licence: Apache-2.0, BSD-3-Clause, MIT
 
 --- LICENSE ---
 
@@ -4440,6 +4440,7 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ==============================================================================
 Module:  github.com/metacubex/mihomo v1.19.33
 Licence: GPL-3.0, MIT
+Note:    transport/hysteria/conns/faketcp/LICENSE: the file says only "Grabbed from https://github.com/xtaci/tcpraw with modifications"; tcpraw is MIT upstream, and its text is not in the module cache to copy
 
 --- LICENSE ---
 
@@ -8166,7 +8167,7 @@ PERFORMANCE OF THIS SOFTWARE.
 
 ==============================================================================
 Module:  github.com/pelletier/go-toml v1.9.5
-Licence: Apache-2.0
+Licence: Apache-2.0, MIT
 
 --- LICENSE ---
 
@@ -12518,7 +12519,7 @@ SOFTWARE.
 
 ==============================================================================
 Module:  go.yaml.in/yaml/v3 v3.0.5
-Licence: Apache-2.0
+Licence: Apache-2.0, MIT
 
 --- LICENSE ---
 
