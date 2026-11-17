@@ -6,12 +6,14 @@ via `make build ENGINES=...`), because Go links all dependencies statically:
 
 | Composition | GPL code linked | Effective binary license |
 |---|---|---|
-| `xray` only | none (xray-core is MPL-2.0) | permissive; MPL-2.0 file-level terms apply to xray-core's files |
+| `xray` only, tun2socks variant (`TUN_LAYER=tun2socks`) | none (xray-core is MPL-2.0) | permissive; MPL-2.0 file-level terms apply to xray-core's files |
+| `xray` only, main variant | sing-tun + sing (GPL-3.0) | **GPL-3.0 combined work** |
 | any composition with `mihomo` | mihomo + sing (GPL-3.0) | **GPL-3.0 combined work** |
 
 Note on xray: xray-core's own code is MPL-2.0, and as of v26.10.21 it no longer
 links the GPL-3.0-or-later `github.com/sagernet/sing*` modules, so a
-composition without mihomo carries no GPL code. The individual components keep
+composition without mihomo carries no GPL code of its own; the main variant
+brings sing-tun, which is its TUN layer. The individual components keep
 their own licenses listed below. Exact versions are pinned in
 [`go.mod`](go.mod). CI verifies per-composition linkage with `go list -deps`
 guards.
@@ -31,7 +33,7 @@ guards.
 
 | Component | License | Source |
 |---|---|---|
-| sing, sing-tun and other sing-* modules (metacubex forks, via mihomo) | GPL-3.0-or-later | https://github.com/MetaCubeX |
+| sing, sing-tun and other sing-* modules (metacubex forks, via mihomo, and as the TUN layer of the main variant) | GPL-3.0-or-later | https://github.com/MetaCubeX |
 | mipstack (via mihomo) | MPL-2.0 | https://github.com/metacubex/mipstack |
 | wireguard-go | MIT | https://git.zx2c4.com/wireguard-go |
 | gVisor (netstack) | Apache-2.0 | https://github.com/google/gvisor |

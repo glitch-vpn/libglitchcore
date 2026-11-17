@@ -133,7 +133,8 @@ resolves it at the first IP rule it meets. Under either of them:
 
 ## Per-process rules are tier-blind on desktop
 
-`process:` matchers feed a flat map consumed by the tun2socks dialer, so tier
+`process:` matchers feed a flat map consumed by the TUN layer's handler (the
+sing-tun handler in the main variant, the tun2socks dialer in the other), so tier
 order does not apply to them: the global priority block > direct > proxy wins.
 A flow the dialer sends direct or through the VPN still goes to the engine,
 under an inbound of its own, where every tier's block meets it first. A direct
@@ -162,6 +163,14 @@ the flow when an address they give is blocked or they cannot answer.
 * TUN needs elevation. Without the shipped system service the caller must run
   elevated; with it, engine commands cross a named pipe and the user sees no
   prompt. Proxy mode needs neither.
+* In the main variant sing-tun creates the adapter, its routes and its DNS for
+  both engines, and its strict route (Windows filtering rules) keeps DNS and
+  IPv6 from leaving by another interface than the TUN; only the engine's own
+  process is exempt. The proxy servers, and the private ranges when the profile
+  keeps local networks direct, are left out of the TUN's routes. A TUN that has
+  no IPv6 address blocks IPv6 for that reason: with IPv6 off the TUN takes none.
+  An echo request to an address beyond the TUN is dropped, so a ping shows no
+  latency that crossed no tunnel.
 * The service runs as LocalSystem, and its pipes admit LocalSystem, elevated
   administrators and the user at the console — or, with nobody there, the one
   user of an active remote session. Every command and every event subscriber

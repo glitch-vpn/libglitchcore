@@ -50,7 +50,8 @@ config, and fetches the health-probe URL (configurable, default
 
 The source is MIT ([LICENSE](LICENSE)). A built binary's licence depends on the
 engines in it: anything containing mihomo links GPL-3.0 code and is a
-GPL-3.0 combined work when distributed; a build of xray alone links
-none.
+GPL-3.0 combined work when distributed. xray's TUN layer is sing-tun, which is
+GPL-3.0 too, so the main variant of xray alone is a GPL-3.0 combined work; the
+tun2socks variant (`make build ENGINES=xray TUN_LAYER=tun2socks`) links none.
 Per-composition attribution is in
 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
