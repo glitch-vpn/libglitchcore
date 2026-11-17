@@ -24,7 +24,7 @@ require (
 
 replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.6
 
-replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.4
+replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.5
 
 require (
 	github.com/RyuaNerin/go-krypto v1.3.0 // indirect
