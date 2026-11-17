@@ -17,11 +17,6 @@ import (
 const (
 	defaultProxyAddress = "127.0.0.1"
 
-	// AppTrafficTag is the inbound app traffic arrives as: the TUN path dials
-	// in process under it, proxy mode listens under it, and the routing rules
-	// key on it.
-	AppTrafficTag = "tun2socks"
-
 	// ForceProxyTag is what the per-process dialer sends process->proxy flows
 	// as; applyRouting gives it a rule that always tunnels (mode-independent),
 	// so "route only this app through the VPN" works even in direct-all mode.
