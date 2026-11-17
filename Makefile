@@ -10,6 +10,8 @@
 #   make build TUN_LAYER=tun2socks  the variant on the tun2socks bridge (default: singtun)
 #   make test                      unit + integration smoke tests (in the container)
 #   make image                     (re)build the Docker toolchain image only
+#   make notices                   rewrite THIRD_PARTY_GO_MODULES.txt (needs Go and the module cache)
+#   make notices-check             fail when the committed file differs from a fresh run
 #   make clean                     remove build_output
 #   make help                      list targets
 #
@@ -38,7 +40,7 @@ CORE_VERSION ?= $(or $(shell git describe --tags --always 2>/dev/null),unknown)
 .ONESHELL:
 .SHELLFLAGS := -ec
 
-.PHONY: build test image clean help ffi run-tests
+.PHONY: build test image clean help ffi run-tests notices notices-check
 
 # ---------------------------------------------------------------------------
 # Host targets - Docker orchestration
@@ -51,6 +53,8 @@ help:
 	@echo "  make build TUN_LAYER=tun2socks  the tun2socks-bridge variant"
 	@echo "  make test                      unit + smoke tests (via Docker)"
 	@echo "  make image                     rebuild the Docker toolchain image"
+	@echo "  make notices                   rewrite THIRD_PARTY_GO_MODULES.txt"
+	@echo "  make notices-check             fail when it is out of date"
 	@echo "  make clean                     remove build_output"
 
 # Build only when an image matching the current Dockerfile tag is absent (CI
@@ -176,3 +180,26 @@ run-tests:
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=gcc CGO_CFLAGS="-I$$DART_SDK/include" \
 	  go test -tags="with_gvisor $$NO_TAGS" -count=1 -timeout 120s ./...
 	echo "[OK] Tests passed"
+
+# ---------------------------------------------------------------------------
+# Licence notices - host Go toolchain, no Docker
+# ---------------------------------------------------------------------------
+
+# Every Go module the release binaries link, with its licence text.
+notices:
+	cd "$(CURDIR)"
+	go mod download
+	go run ./tools/gonotices -out THIRD_PARTY_GO_MODULES.txt
+
+notices-check:
+	cd "$(CURDIR)"
+	go mod download
+	fresh=$$(mktemp)
+	go run ./tools/gonotices -out "$$fresh"
+	if ! cmp -s "$$fresh" THIRD_PARTY_GO_MODULES.txt; then
+	  rm -f "$$fresh"
+	  echo "[ERR] THIRD_PARTY_GO_MODULES.txt is out of date: run make notices"
+	  exit 1
+	fi
+	rm -f "$$fresh"
+	echo "[OK] THIRD_PARTY_GO_MODULES.txt is current"
