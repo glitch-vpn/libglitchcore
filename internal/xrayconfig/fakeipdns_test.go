@@ -54,7 +54,7 @@ func wantModuleQueryRules(t *testing.T, cfg *xrayConf.Config, before int) {
 	}
 	want = append(want,
 		ruleView{InboundTag: []string{dnsInternalTag}, OutboundTag: cfg.OutboundConfigs[0].Tag},
-		ruleView{InboundTag: []string{AppTrafficTag, ForceProxyTag}, Port: "53", OutboundTag: dnsOutboundTag})
+		ruleView{InboundTag: []string{AppTrafficTag, ProxyInboundTag, ForceProxyTag}, Port: "53", OutboundTag: dnsOutboundTag})
 	if !reflect.DeepEqual(added, want) {
 		t.Fatalf("added rules = %+v, want %+v", added, want)
 	}

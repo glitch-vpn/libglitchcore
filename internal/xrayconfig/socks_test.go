@@ -36,7 +36,7 @@ func TestApplyProxyInbound_Auth(t *testing.T) {
 			Pass string `json:"pass"`
 		} `json:"users"`
 	}
-	idx := findInboundIdx(authCfg.InboundConfigs, AppTrafficTag)
+	idx := findInboundIdx(authCfg.InboundConfigs, ProxyInboundTag)
 	if err := json.Unmarshal(*authCfg.InboundConfigs[idx].Settings, &s); err != nil {
 		t.Fatalf("settings unmarshal: %v", err)
 	}
@@ -53,9 +53,9 @@ func TestApplyProxyInbound_Auth(t *testing.T) {
 
 func inboundAuth(t *testing.T, cfg *xrayConf.Config) string {
 	t.Helper()
-	idx := findInboundIdx(cfg.InboundConfigs, AppTrafficTag)
+	idx := findInboundIdx(cfg.InboundConfigs, ProxyInboundTag)
 	if idx < 0 {
-		t.Fatal("tun2socks inbound not found")
+		t.Fatal("proxy inbound not found")
 	}
 	var s struct {
 		Auth string `json:"auth"`

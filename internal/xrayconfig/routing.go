@@ -286,7 +286,7 @@ func applyRouting(p RoutingProfile, cfg *xrayConf.Config, proxyTag string, targe
 		})...)
 	}
 
-	appInbound := []string{AppTrafficTag}
+	appInbound := []string{AppTrafficTag, ProxyInboundTag}
 	modeOutcome := proxy
 	if p.ResolvedMode() == ModeDirectAll {
 		modeOutcome = direct

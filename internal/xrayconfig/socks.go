@@ -22,6 +22,10 @@ const (
 	// so "route only this app through the VPN" works even in direct-all mode.
 	ForceProxyTag = "forceproxy"
 
+	// ProxyInboundTag is the inbound proxy mode's local SOCKS listener enters
+	// xray by.
+	ProxyInboundTag = "socks"
+
 	// ForceDirectTag is what the per-process dialer sends process->direct
 	// flows as: they meet every tier's block, then go direct, so a blocked
 	// site stays blocked for an app a rule sends direct.
@@ -174,9 +178,9 @@ func proxyInboundSettings(addr, user, pass string) (*json.RawMessage, error) {
 }
 
 // ApplyProxyInbound injects a SOCKS5 inbound on 127.0.0.1:port, tagged
-// AppTrafficTag so the routing rules apply. Proxy mode: expose a local SOCKS
-// proxy instead of bridging a TUN - no tun2socks, no admin. Returns the listen
-// endpoint.
+// ProxyInboundTag; the routing rules that cover AppTrafficTag cover it too.
+// Proxy mode: expose a local SOCKS proxy instead of bridging a TUN - no
+// tun2socks, no admin. Returns the listen endpoint.
 func ApplyProxyInbound(cfg *xrayConf.Config, port int, user, pass string) (string, error) {
 	if port <= 0 || port > 65535 {
 		return "", fmt.Errorf("invalid proxy port %d", port)
@@ -190,11 +194,11 @@ func ApplyProxyInbound(cfg *xrayConf.Config, port int, user, pass string) (strin
 		Protocol:       "socks",
 		PortList:       &xrayConf.PortList{Range: []xrayConf.PortRange{{From: uint32(port), To: uint32(port)}}},
 		ListenOn:       xrayConf.ParseSendThough(&addr),
-		Tag:            AppTrafficTag,
+		Tag:            ProxyInboundTag,
 		Settings:       settings,
 		SniffingConfig: sniffingConfig(),
 	}
-	if idx := findInboundIdx(cfg.InboundConfigs, AppTrafficTag); idx == -1 {
+	if idx := findInboundIdx(cfg.InboundConfigs, ProxyInboundTag); idx == -1 {
 		cfg.InboundConfigs = append(cfg.InboundConfigs, inbound)
 	} else {
 		cfg.InboundConfigs[idx] = inbound

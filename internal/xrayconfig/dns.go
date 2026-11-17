@@ -156,7 +156,7 @@ func interceptAppQueries(cfg *xrayConf.Config) {
 		Tag:      dnsOutboundTag,
 		Settings: &dnsSettings,
 	})
-	dnsRule := fieldRule{Port: "53", InboundTag: []string{AppTrafficTag, ForceProxyTag}, OutboundTag: dnsOutboundTag}
+	dnsRule := fieldRule{Port: "53", InboundTag: []string{AppTrafficTag, ProxyInboundTag, ForceProxyTag}, OutboundTag: dnsOutboundTag}
 	if cfg.RouterConfig == nil {
 		cfg.RouterConfig = &xrayConf.RouterConfig{}
 	}

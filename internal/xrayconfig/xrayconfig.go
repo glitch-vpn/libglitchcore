@@ -94,7 +94,7 @@ func linkHasVision(link string) bool {
 	return strings.Contains(strings.ToLower(u.Query().Get("flow")), "vision")
 }
 
-// BuildConfig adds no inbound: the TUN path dials in process as AppTrafficTag, and proxy mode adds its own (ApplyProxyInbound).
+// BuildConfig adds no inbound: the TUN path dials in process as AppTrafficTag, and proxy mode adds its own, ProxyInboundTag (ApplyProxyInbound).
 func BuildConfig(links []string, opts BalancerOptions, routing RoutingProfile, xrayLogLevel string) (*BuildResult, error) {
 	return buildConfig(links, opts, routing, xrayLogLevel, preResolveIPv4)
 }

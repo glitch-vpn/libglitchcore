@@ -49,8 +49,8 @@ func TestApply_ProxyAllDefault(t *testing.T) {
 		t.Fatalf("default profile: want the exit-echo rule and the catch-all, got %d: %+v", len(rules), rules)
 	}
 	r := rules[1]
-	if r.OutboundTag != "proxy" || len(r.InboundTag) != 1 || r.InboundTag[0] != AppTrafficTag {
-		t.Fatalf("catch-all = %+v, want tun2socks->proxy", r)
+	if r.OutboundTag != "proxy" || len(r.InboundTag) != 2 || r.InboundTag[0] != AppTrafficTag || r.InboundTag[1] != ProxyInboundTag {
+		t.Fatalf("catch-all = %+v, want the app inbounds->proxy", r)
 	}
 	if hasOutbound(cfg, directTag) || hasOutbound(cfg, blockTag) {
 		t.Error("default profile must not add direct/block outbounds")
@@ -74,7 +74,7 @@ func TestApply_ProxyAll_BlockDirectLocalOrder(t *testing.T) {
 	}
 	last := rules[len(rules)-1]
 	if last.OutboundTag != "proxy" || len(last.InboundTag) == 0 {
-		t.Errorf("last rule must be tun2socks->proxy catch-all: %+v", last)
+		t.Errorf("last rule must be app inbounds->proxy catch-all: %+v", last)
 	}
 	if !hasOutbound(cfg, directTag) || !hasOutbound(cfg, blockTag) {
 		t.Error("direct + block outbounds must be present")
@@ -106,7 +106,7 @@ func TestApply_DirectAll_CatchAllIsDirect(t *testing.T) {
 
 	last := rules[len(rules)-1]
 	if last.OutboundTag != directTag || len(last.InboundTag) == 0 {
-		t.Errorf("direct-all catch-all must be tun2socks->direct: %+v", last)
+		t.Errorf("direct-all catch-all must be app inbounds->direct: %+v", last)
 	}
 	foundProxyRule := false
 	for _, r := range rules {
@@ -376,7 +376,7 @@ func TestApply_IPIfNonMatchResolvesOnlyForIPRules(t *testing.T) {
 	catchAllIPs := func(p RoutingProfile) (app, force []string) {
 		_, rules := applyTo(t, p, "proxy", false)
 		for _, r := range rules {
-			if len(r.InboundTag) != 1 || len(r.Domain) > 0 || r.OutboundTag != "proxy" {
+			if (len(r.InboundTag) != 1 && !(len(r.InboundTag) == 2 && r.InboundTag[1] == ProxyInboundTag)) || len(r.Domain) > 0 || r.OutboundTag != "proxy" {
 				continue
 			}
 			switch r.InboundTag[0] {
