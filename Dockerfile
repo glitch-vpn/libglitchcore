@@ -55,7 +55,10 @@ RUN ln -s ${ANDROID_SDK_ROOT}/ndk/${NDK_VERSION} ${ANDROID_NDK_HOME}
 WORKDIR /app
 
 # Module files first so the download layer caches until go.mod/go.sum change.
+# go.mod replaces github.com/rasky/go-lzo with this local module, which the
+# download step reads.
 COPY go.mod go.sum ./
+COPY third_party/nolzo/go.mod third_party/nolzo/go.mod
 RUN go mod download
 COPY . .
 
