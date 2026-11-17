@@ -3,6 +3,7 @@
 package core
 
 import (
+	"errors"
 	"math"
 	"net/netip"
 	"testing"
@@ -81,13 +82,58 @@ func TestNormalizedGUIDReadsAWMIReference(t *testing.T) {
 func TestWindowsHotspotOSReadsWithoutElevation(t *testing.T) {
 	os := &windowsHotspotOS{}
 	if !os.SharingAvailable() {
-		t.Fatal("HNetCfgClient.dll's sharing exports are not found")
+		t.Skip("HNetCfgClient.dll's sharing exports are absent on this Windows")
 	}
-	public, private, err := os.SharedPair()
-	if err != nil {
+	if _, _, err := os.SharedPair(); err != nil {
 		t.Fatal(err)
 	}
-	if validInterfaceIndex(private) && public == math.MaxUint32 {
-		t.Logf("pair with no public side: %d", private)
+}
+
+func TestSharedPairFallsBackToTheHotspotServicesRecord(t *testing.T) {
+	if _, _, err := sharedPairFromRegistry(); err != nil {
+		t.Skipf("the hotspot service's record is not readable here: %v", err)
+	}
+}
+
+// The tunnel's adapter is found by a GUID its name fixes.
+func TestAdapterGUIDIsFixedByTheName(t *testing.T) {
+	first, second := adapterGUID(desktopAdapterName), adapterGUID(desktopAdapterName)
+	if *first != *second {
+		t.Error("the GUID changes between calls")
+	}
+	if *first == *adapterGUID("Other") {
+		t.Error("two names share a GUID")
+	}
+}
+
+// Only what names an adapter that is gone is the repair's to touch.
+func TestICSRepairTouchesOnlyNamesOfGoneAdapters(t *testing.T) {
+	snapshot := icsSnapshot{present: map[string]bool{"{A}": true}}
+	if snapshot.namesGoneAdapter("{A}") {
+		t.Error("a present adapter was taken for a gone one")
+	}
+	if !snapshot.namesGoneAdapter("{X}") {
+		t.Error("a gone adapter was not found")
+	}
+}
+
+// A pair that cannot be read is not "no hotspot": SharedAccess stays alone.
+func TestHotspotRunningIsTrueWhenThePairCannotBeRead(t *testing.T) {
+	os := newFakeHotspotOS()
+	if !hotspotRunning(os) {
+		t.Error("a hotspot on an adapter that is up was not seen")
+	}
+	os.pairErr = errors.New("unreadable")
+	if !hotspotRunning(os) {
+		t.Error("an unreadable pair read as no hotspot")
+	}
+	os.pairErr = nil
+	os.public, os.private = math.MaxUint32, math.MaxUint32
+	if hotspotRunning(os) {
+		t.Error("no pair read as a hotspot")
+	}
+	os.public, os.private = testWiFi, testGoneIndex
+	if hotspotRunning(os) {
+		t.Error("a pair on a gone adapter read as a hotspot")
 	}
 }

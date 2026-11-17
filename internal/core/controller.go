@@ -127,6 +127,11 @@ type CoreController struct {
 	// The order that moves a hotspot's shared connection with the tunnel;
 	// nil until a client asks for it.
 	hotspot atomic.Pointer[hotspotSharing]
+	// The tunnel's phase as the engine's events last said it, kept whether or
+	// not a hotspot asked yet, so an order created later starts from it; and
+	// whether the session runs in proxy mode.
+	enginePhase  atomic.Int32
+	proxySession atomic.Bool
 
 	xrayState
 	tunLayerState
@@ -142,6 +147,9 @@ func normalizedVersion(v string) string {
 
 func (x *CoreController) emitStatus(code int32, message string) {
 	x.updateConnectedAt(code)
+	if phase, ok := tunnelPhaseOf(code); ok {
+		x.enginePhase.Store(int32(phase))
+	}
 	if sharing := x.hotspot.Load(); sharing != nil {
 		sharing.notify(code)
 	}

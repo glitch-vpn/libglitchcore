@@ -299,28 +299,45 @@ func serviceReplaySession() error {
 	return err
 }
 
+// hotspotPrepareTimeout bounds the wait for the service's repair of ICS.
+const hotspotPrepareTimeout = 2 * time.Minute
+
 // A hotspot command answers with its result code in Data, since an elevated
 // refusal is not a transport failure.
-func serviceHotspotResult(action string, payload map[string]any) (int32, error) {
+func serviceHotspotResult(action string, payload map[string]any) (result int32, done bool, err error) {
 	resp, err := callService(action, payload)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	var data struct {
 		Result int32 `json:"result"`
+		Done   *bool `json:"done"`
 	}
 	if len(resp.Data) > 0 {
 		if err := json.Unmarshal(resp.Data, &data); err != nil {
-			return 0, err
+			return 0, false, err
 		}
 	}
-	return data.Result, nil
+	return data.Result, data.Done == nil || *data.Done, nil
 }
 
+// servicePrepareHotspot asks until the service's repair is done: each command
+// returns at once, so none holds the pipe while ICS restarts.
 func servicePrepareHotspot() (int32, error) {
-	return serviceHotspotResult("prepare_hotspot", nil)
+	deadline := time.Now().Add(hotspotPrepareTimeout)
+	for {
+		result, done, err := serviceHotspotResult("prepare_hotspot", nil)
+		if err != nil || done {
+			return result, err
+		}
+		if time.Now().After(deadline) {
+			return 0, errors.New("the service's repair of ICS did not finish in time")
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func serviceSetHotspotSharing(request string) (int32, error) {
-	return serviceHotspotResult("set_hotspot_sharing", map[string]any{"request": request})
+	result, _, err := serviceHotspotResult("set_hotspot_sharing", map[string]any{"request": request})
+	return result, err
 }

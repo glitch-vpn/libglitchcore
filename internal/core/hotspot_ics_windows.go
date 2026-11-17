@@ -52,18 +52,20 @@ type icsSnapshot struct {
 	preferredPublic string // "" when absent
 }
 
+func (s icsSnapshot) namesGoneAdapter(guid string) bool { return !s.present[guid] }
+
 // stale says whether ICS names an adapter that no longer exists.
 func (s icsSnapshot) stale() bool {
 	for _, flag := range s.flags {
-		if !s.present[flag.guid] {
+		if s.namesGoneAdapter(flag.guid) {
 			return true
 		}
 	}
-	return s.preferredPublic != "" && !s.present[s.preferredPublic]
+	return s.preferredPublic != "" && s.namesGoneAdapter(s.preferredPublic)
 }
 
 func prepareHotspot() int32 {
-	if hotspotRunning() {
+	if hotspotRunning(&windowsHotspotOS{}) {
 		return hotspotResultRunning
 	}
 	var snapshot icsSnapshot
@@ -89,18 +91,14 @@ func prepareHotspot() int32 {
 }
 
 // hotspotRunning: ICS shares a pair whose private side is an adapter that
-// is up. Restarting SharedAccess then turns the hotspot off.
-func hotspotRunning() bool {
-	_, private, err := (&windowsHotspotOS{}).SharedPair()
-	if err != nil || !validInterfaceIndex(private) {
-		return false
-	}
-	luid, err := winipcfg.LUIDFromIndex(private)
+// is up. Restarting SharedAccess then turns the hotspot off, so a pair that
+// cannot be read counts as running.
+func hotspotRunning(os hotspotOS) bool {
+	_, private, err := os.SharedPair()
 	if err != nil {
-		return false
+		return true
 	}
-	row, err := luid.Interface()
-	return err == nil && row.OperStatus == winipcfg.IfOperStatusUp
+	return validInterfaceIndex(private) && os.IsPhysical(private)
 }
 
 func withCOM(run func() error) error {
@@ -192,45 +190,6 @@ func forEachHomeNetRow(visit func(row *ole.IDispatch) error) error {
 	})
 }
 
-// forEachSharingConnection runs over every connection INetSharingManager
-// enumerates, with its INetSharingConfiguration.
-func forEachSharingConnection(visit func(guid string, configuration *ole.IDispatch) error) error {
-	manager, err := oleutil.CreateObject("HNetCfg.HNetShare")
-	if err != nil {
-		return err
-	}
-	defer manager.Release()
-	share, err := manager.QueryInterface(ole.IID_IDispatch)
-	if err != nil {
-		return err
-	}
-	defer share.Release()
-	connections, err := oleutil.GetProperty(share, "EnumEveryConnection")
-	if err != nil {
-		return err
-	}
-	defer connections.Clear()
-	return oleutil.ForEach(connections.ToIDispatch(), func(item *ole.VARIANT) error {
-		connection := item.Value()
-		props, err := oleutil.GetProperty(share, "NetConnectionProps", connection)
-		if err != nil {
-			return err
-		}
-		defer props.Clear()
-		guid, err := oleutil.GetProperty(props.ToIDispatch(), "Guid")
-		if err != nil {
-			return err
-		}
-		defer guid.Clear()
-		configuration, err := oleutil.GetProperty(share, "INetSharingConfigurationForINetConnection", connection)
-		if err != nil {
-			return err
-		}
-		defer configuration.Clear()
-		return visit(normalizedGUID(guid.ToString()), configuration.ToIDispatch())
-	})
-}
-
 func preferredPublicInterface() string {
 	key, err := registry.OpenKey(registry.LOCAL_MACHINE, icsSettingsKeyPath, registry.QUERY_VALUE)
 	if err != nil {
@@ -250,30 +209,24 @@ func preferredPublicInterface() string {
 	return strings.ToUpper(guid.String())
 }
 
-// repairICS puts ICS back to nothing shared: sharing off on every connection,
-// the rows' flags cleared, a preferred public side that is gone dropped, and
-// SharedAccess started afresh.
+// repairICS clears what names an adapter that is gone: the HomeNet rows that
+// mark it as ICS's public or private side, and a preferred public side. A
+// share of an adapter that exists is left as it is. SharedAccess is started
+// afresh to read the cleared store.
 func repairICS(snapshot icsSnapshot) error {
 	var problems []error
-	// INetSharingManager answers only an elevated caller. A failure here is
-	// logged and does not stop the rest, which is what clears ICS's stale names.
-	if err := forEachSharingConnection(func(guid string, configuration *ole.IDispatch) error {
-		enabled, err := oleutil.GetProperty(configuration, "SharingEnabled")
-		if err != nil {
-			return err
-		}
-		if enabled.Val == 0 {
-			return nil
-		}
-		_, err = oleutil.CallMethod(configuration, "DisableSharing")
-		return err
-	}); err != nil {
-		logfmt.Warnf("[hotspot] turn sharing off failed: %v", err)
-	}
 	if err := forEachHomeNetRow(func(row *ole.IDispatch) error {
 		public, private, err := homeNetRowFlags(row)
 		if err != nil || (!public && !private) {
 			return err
+		}
+		reference, err := oleutil.GetProperty(row, "Connection")
+		if err != nil {
+			return err
+		}
+		defer reference.Clear()
+		if !snapshot.namesGoneAdapter(normalizedGUID(reference.ToString())) {
+			return nil
 		}
 		if _, err := oleutil.PutProperty(row, "IsIcsPublic", false); err != nil {
 			return err
@@ -286,7 +239,7 @@ func repairICS(snapshot icsSnapshot) error {
 	}); err != nil {
 		problems = append(problems, fmt.Errorf("clear the HomeNet flags: %w", err))
 	}
-	if snapshot.preferredPublic != "" && !snapshot.present[snapshot.preferredPublic] {
+	if snapshot.preferredPublic != "" && snapshot.namesGoneAdapter(snapshot.preferredPublic) {
 		if err := dropPreferredPublicInterface(); err != nil {
 			problems = append(problems, fmt.Errorf("drop the preferred public interface: %w", err))
 		}

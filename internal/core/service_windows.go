@@ -770,7 +770,8 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		globalController.replaySession()
 		return pipeResponse{OK: true}
 	case "prepare_hotspot":
-		return pipeResponse{OK: true, Data: map[string]int32{"result": prepareHotspot()}}
+		done, result := pollPrepareHotspot()
+		return pipeResponse{OK: true, Data: map[string]any{"result": result, "done": done}}
 	case "set_hotspot_sharing":
 		var payload struct {
 			Request string `json:"request"`

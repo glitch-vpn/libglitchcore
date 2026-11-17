@@ -284,6 +284,7 @@ func (x *CoreController) engineStart(id string, req EngineStartRequest) int32 {
 		logfmt.Errorf("[Engine] start rejected: unknown engine %q", id)
 		return glitchCoreResultError
 	}
+	x.proxySession.Store(proxyPortFromOpts(req.Opts) > 0)
 	if useServiceIPC && proxyPortFromOpts(req.Opts) <= 0 {
 		if err := serviceEngineStart(id, req); err != nil {
 			logfmt.Errorf("[Engine] service start failed for %q: %v", id, err)

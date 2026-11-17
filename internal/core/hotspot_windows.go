@@ -6,11 +6,12 @@ import (
 	"fmt"
 	"math"
 	"net/netip"
-	"path/filepath"
+	"strings"
 	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
+	"golang.org/x/sys/windows/registry"
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
@@ -28,16 +29,11 @@ type icsClient struct {
 
 var sharingExports icsClient
 
-// load finds the exports in System32 by their full path; a Windows without them
-// leaves the live switch unavailable.
+// load finds the exports in System32; a Windows without them leaves the live
+// switch unavailable.
 func (c *icsClient) load() error {
 	c.once.Do(func() {
-		directory, err := windows.GetSystemDirectory()
-		if err != nil {
-			c.err = fmt.Errorf("find System32: %w", err)
-			return
-		}
-		library := windows.NewLazyDLL(filepath.Join(directory, "HNetCfgClient.dll"))
+		library := windows.NewLazySystemDLL("HNetCfgClient.dll")
 		c.getPublic = library.NewProc("HNetCfgGetPublicIndex")
 		c.getPrivate = library.NewProc("HNetCfgGetPrivateIndex")
 		c.start = library.NewProc("HNetCfgStartSharing")
@@ -79,15 +75,35 @@ func newHotspotOS() hotspotOS { return &windowsHotspotOS{} }
 
 func (o *windowsHotspotOS) SharingAvailable() bool { return sharingExports.load() == nil }
 
+// SharedPair reads ICS's pair from the sharing exports, and from the Mobile
+// hotspot service's own record of it where they are missing. A side that is
+// not shared reads as math.MaxUint32; an error is a pair that cannot be read.
 func (o *windowsHotspotOS) SharedPair() (uint32, uint32, error) {
-	if err := sharingExports.load(); err != nil {
-		return math.MaxUint32, math.MaxUint32, err
+	if sharingExports.load() != nil {
+		return sharedPairFromRegistry()
 	}
-	// A call that fails says that ICS has no such side: both come back as
-	// math.MaxUint32 then.
+	// A call that fails says that ICS has no such side.
 	public, _ := sharingExports.index(sharingExports.getPublic, "HNetCfgGetPublicIndex")
 	private, _ := sharingExports.index(sharingExports.getPrivate, "HNetCfgGetPrivateIndex")
 	return public, private, nil
+}
+
+const sharedAccessIndexKeyPath = `SOFTWARE\Microsoft\Windows\CurrentVersion\SharedAccess`
+
+func sharedPairFromRegistry() (public, private uint32, err error) {
+	key, err := registry.OpenKey(registry.LOCAL_MACHINE, sharedAccessIndexKeyPath, registry.QUERY_VALUE)
+	if err != nil {
+		return math.MaxUint32, math.MaxUint32, fmt.Errorf("read the hotspot service's pair: %w", err)
+	}
+	defer key.Close()
+	read := func(name string) uint32 {
+		value, _, err := key.GetIntegerValue(name)
+		if err != nil || !validInterfaceIndex(uint32(value)) {
+			return math.MaxUint32
+		}
+		return uint32(value)
+	}
+	return read("PublicIndex"), read("PrivateIndex"), nil
 }
 
 func (o *windowsHotspotOS) Share(public, private uint32) error {
@@ -106,41 +122,62 @@ func (o *windowsHotspotOS) Unshare(public, private uint32) error {
 	return hresultError("HNetCfgStopSharing", result)
 }
 
+// TunnelIndex finds the tunnel's adapter by its GUID, which its name fixes.
 func (o *windowsHotspotOS) TunnelIndex() (uint32, bool) {
-	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagDefault)
-	if err != nil {
+	adapter, ok := findAdapter(func(adapter *winipcfg.IPAdapterAddresses) bool {
+		return strings.EqualFold(adapter.AdapterName(), adapterGUID(desktopAdapterName).String())
+	})
+	if !ok {
 		return 0, false
 	}
+	return adapter.IfIndex, true
+}
+
+func findAdapter(match func(*winipcfg.IPAdapterAddresses) bool) (*winipcfg.IPAdapterAddresses, bool) {
+	adapters, err := winipcfg.GetAdaptersAddresses(windows.AF_UNSPEC, winipcfg.GAAFlagDefault)
+	if err != nil {
+		return nil, false
+	}
 	for _, adapter := range adapters {
-		if adapter.FriendlyName() == desktopAdapterName && adapter.IfIndex != 0 {
-			return adapter.IfIndex, true
+		if adapter.IfIndex != 0 && match(adapter) {
+			return adapter, true
 		}
 	}
-	return 0, false
+	return nil, false
+}
+
+func (o *windowsHotspotOS) IsPhysical(index uint32) bool {
+	if !validInterfaceIndex(index) {
+		return false
+	}
+	tunnel := adapterGUID(desktopAdapterName).String()
+	adapter, ok := findAdapter(func(adapter *winipcfg.IPAdapterAddresses) bool { return adapter.IfIndex == index })
+	return ok && adapter.OperStatus == winipcfg.IfOperStatusUp && !strings.EqualFold(adapter.AdapterName(), tunnel)
 }
 
 // PhysicalIndex is the interface of the IPv4 default route with the lowest
-// metric that is not the tunnel's.
+// route-plus-interface metric, which is how Windows ranks them, among the
+// interfaces that are physical.
 func (o *windowsHotspotOS) PhysicalIndex() (uint32, bool) {
 	routes, err := winipcfg.GetIPForwardTable2(windows.AF_INET)
 	if err != nil {
 		return 0, false
 	}
-	tunnel, _ := o.TunnelIndex()
-	var best *winipcfg.MibIPforwardRow2
+	bestMetric, best := uint32(math.MaxUint32), uint32(0)
 	for i := range routes {
 		route := &routes[i]
-		if route.DestinationPrefix.PrefixLength != 0 || route.InterfaceIndex == tunnel {
+		if route.DestinationPrefix.PrefixLength != 0 || !o.IsPhysical(route.InterfaceIndex) {
 			continue
 		}
-		if best == nil || route.Metric < best.Metric {
-			best = route
+		metric := route.Metric
+		if row, err := ipv4Interface(route.InterfaceIndex); err == nil {
+			metric += row.Metric
+		}
+		if metric < bestMetric {
+			bestMetric, best = metric, route.InterfaceIndex
 		}
 	}
-	if best == nil {
-		return 0, false
-	}
-	return best.InterfaceIndex, true
+	return best, best != 0
 }
 
 func ipv4Interface(index uint32) (*winipcfg.MibIPInterfaceRow, error) {

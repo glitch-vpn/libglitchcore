@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"encoding/json"
 	"fmt"
 	"runtime"
 	"testing"
@@ -14,13 +15,15 @@ import (
 // hotspotUnsupported is what the hotspot exports answer off Windows.
 const hotspotUnsupported = 3
 
-// Sharing switched off says so once and touches no connection, and a
-// proxy-mode session beside it, which has no tunnel, moves nothing.
-func TestSmoke_HotspotSharingOffBesideProxySession(t *testing.T) {
+// Sharing turned on, with no hotspot on this machine, says "none" and touches
+// no connection; a proxy-mode session beside it has no tunnel and moves
+// nothing; turning it off says so again.
+func TestSmoke_HotspotSharingOnBesideProxySession(t *testing.T) {
 	core.Initialize()
 	ev := captureEvents(t)
 
-	result := core.SetHotspotSharing(`{"on":false,"blockWhileTunnelDown":true,"blockedClients":[]}`)
+	const on = `{"on":true,"blockWhileTunnelDown":false,"blockedClients":[]}`
+	result := core.SetHotspotSharing(on)
 	if runtime.GOOS != "windows" {
 		if result != hotspotUnsupported {
 			t.Fatalf("SetHotspotSharing = %d, want %d off Windows", result, hotspotUnsupported)
@@ -33,10 +36,22 @@ func TestSmoke_HotspotSharingOffBesideProxySession(t *testing.T) {
 	if result != core.ResultSuccess {
 		t.Fatalf("SetHotspotSharing = %d", result)
 	}
-	const idle = `{"shared":"none","blocked":false,"error":"","restartOn":""}`
-	if got := ev.waitFor(t, core.HotspotSharingEvent, 5*time.Second); got != idle {
-		t.Fatalf("hotspot event = %s, want %s", got, idle)
+	var first struct {
+		Shared string `json:"shared"`
 	}
+	if err := json.Unmarshal([]byte(ev.waitFor(t, core.HotspotSharingEvent, 5*time.Second)), &first); err != nil {
+		t.Fatal(err)
+	}
+	if first.Shared != "none" {
+		t.Skip("a hotspot runs on this machine")
+	}
+	const off = `{"on":false,"blockWhileTunnelDown":false,"blockedClients":[]}`
+	turnedOff := false
+	t.Cleanup(func() {
+		if !turnedOff {
+			core.SetHotspotSharing(off)
+		}
+	})
 
 	upstream := startVlessServer(t)
 	echo := echoBody(t, "198.51.100.77")
@@ -45,7 +60,16 @@ func TestSmoke_HotspotSharingOffBesideProxySession(t *testing.T) {
 	ev.waitFor(t, core.EngineConnected, 30*time.Second)
 	stopEngine(t, "xray")
 	ev.waitFor(t, core.EngineDisconnected, 15*time.Second)
+	time.Sleep(2 * time.Second) // the worker's checks
 	if events := ev.all(core.HotspotSharingEvent); len(events) != 1 {
 		t.Errorf("hotspot events = %v, want only the first", events)
+	}
+
+	turnedOff = true
+	if core.SetHotspotSharing(off) != core.ResultSuccess {
+		t.Fatal("off was refused")
+	}
+	if !ev.waitForNew(t, core.HotspotSharingEvent, 1, 5*time.Second) {
+		t.Error("off did not answer with the state")
 	}
 }

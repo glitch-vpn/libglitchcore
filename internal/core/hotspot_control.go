@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"sync"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
@@ -18,7 +19,49 @@ func PrepareHotspot() int32 {
 		}
 		return code
 	}
-	return prepareHotspot()
+	return prepareHotspotOnce()
+}
+
+// The repair restarts a service and takes up to a minute, so it is one at a
+// time, and the service runs it off its command pipe: a command there returns
+// promptly, and the client asks again until the repair is done.
+var (
+	// prepareHotspotFunc is what the repair runs; a test replaces it.
+	prepareHotspotFunc = prepareHotspot
+	prepareMu          sync.Mutex
+	prepareFlight      struct {
+		mu       sync.Mutex
+		running  bool
+		finished bool
+		result   int32
+	}
+)
+
+func prepareHotspotOnce() int32 {
+	prepareMu.Lock()
+	defer prepareMu.Unlock()
+	return prepareHotspotFunc()
+}
+
+// pollPrepareHotspot starts the repair when none is under way, and answers
+// whether it is done and with what; an answer is given once.
+func pollPrepareHotspot() (done bool, result int32) {
+	prepareFlight.mu.Lock()
+	defer prepareFlight.mu.Unlock()
+	if prepareFlight.finished {
+		prepareFlight.finished = false
+		return true, prepareFlight.result
+	}
+	if !prepareFlight.running {
+		prepareFlight.running = true
+		go func() {
+			result := prepareHotspotOnce()
+			prepareFlight.mu.Lock()
+			prepareFlight.result, prepareFlight.finished, prepareFlight.running = result, true, false
+			prepareFlight.mu.Unlock()
+		}()
+	}
+	return false, 0
 }
 
 // SetHotspotSharing takes the whole wanted state of the hotspot's sharing, as
@@ -53,9 +96,12 @@ func (x *CoreController) setHotspotSharing(request hotspotSharingRequest) int32 
 	if sharing == nil {
 		fresh := newHotspotSharing(newHotspotOS(), func(payload string) {
 			x.emitStatus(HotspotSharingEvent, payload)
-		})
+		}, tunnelPhase(x.enginePhase.Load()))
+		fresh.proxySession = x.proxySession.Load
+		fresh.useWorker(hotspotReconcileEvery)
 		if x.hotspot.CompareAndSwap(nil, fresh) {
-			fresh.start(hotspotReconcileEvery)
+			// An event between reading the phase and publishing the order.
+			fresh.setPhase(tunnelPhase(x.enginePhase.Load()))
 			sharing = fresh
 		} else {
 			sharing = x.hotspot.Load()

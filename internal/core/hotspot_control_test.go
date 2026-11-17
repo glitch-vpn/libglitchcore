@@ -31,8 +31,8 @@ func TestControllerMovesTheHotspotWithEngineEvents(t *testing.T) {
 	})
 	t.Cleanup(func() { setStatusSink(nil) })
 
-	sharing := newHotspotSharing(os, func(payload string) { x.emitStatus(HotspotSharingEvent, payload) })
-	sharing.start(0)
+	sharing := newHotspotSharing(os, func(payload string) { x.emitStatus(HotspotSharingEvent, payload) }, tunnelPhase(x.enginePhase.Load()))
+	sharing.useWorker(0)
 	t.Cleanup(sharing.close)
 	x.hotspot.Store(sharing)
 
@@ -61,6 +61,10 @@ func TestControllerMovesTheHotspotWithEngineEvents(t *testing.T) {
 	x.emitStatus(EngineConnected, "[Xray] Connected")
 	waitEvent(hotspotSharingEvent{Shared: hotspotSharedTunnel})
 
+	x.emitStatus(EngineDisconnecting, "[Xray] Disconnecting")
+	os.mu.Lock()
+	os.tunnel = 0
+	os.mu.Unlock()
 	x.emitStatus(EngineDisconnected, "[Xray] Disconnected")
 	waitEvent(hotspotSharingEvent{Shared: hotspotSharedTunnel, Blocked: true})
 
@@ -86,5 +90,70 @@ func TestSetHotspotSharingRejectsABadRequest(t *testing.T) {
 		if got := SetHotspotSharing(request); got != hotspotResultBadRequest {
 			t.Errorf("SetHotspotSharing(%s) = %d, want %d", request, got, hotspotResultBadRequest)
 		}
+	}
+}
+
+// The controller tracks the engine's phase whether or not a hotspot asked yet,
+// so an order created later starts from it.
+func TestControllerTracksTheEnginePhaseForALaterHotspot(t *testing.T) {
+	x := &CoreController{}
+	x.emitStatus(EngineConnecting, "[Xray] Connecting")
+	x.emitStatus(EngineConnected, "[Xray] Connected")
+	x.emitStatus(StatsEvent, "{}")
+	if got := tunnelPhase(x.enginePhase.Load()); got != tunnelUp {
+		t.Fatalf("phase = %v, want up", got)
+	}
+
+	os := newFakeHotspotOS()
+	os.tunnel = testTunnel
+	os.present[testTunnel] = true
+	var payloads []string
+	sharing := newHotspotSharing(os, func(payload string) { payloads = append(payloads, payload) }, tunnelPhase(x.enginePhase.Load()))
+	if err := sharing.set(hotspotSharingRequest{On: true}); err != nil {
+		t.Fatal(err)
+	}
+	if os.public != testTunnel || !os.forwarding[testHotspot] {
+		t.Errorf("a hotspot turned on under a running tunnel is on ICS public %d, forwarding %t", os.public, os.forwarding[testHotspot])
+	}
+}
+
+func TestPollPrepareHotspotRunsOnceOffTheCaller(t *testing.T) {
+	release := make(chan struct{})
+	var mu sync.Mutex
+	calls := 0
+	previous := prepareHotspotFunc
+	prepareHotspotFunc = func() int32 {
+		mu.Lock()
+		calls++
+		mu.Unlock()
+		<-release
+		return hotspotResultRunning
+	}
+	t.Cleanup(func() { prepareHotspotFunc = previous })
+
+	for i := 0; i < 3; i++ {
+		if done, _ := pollPrepareHotspot(); done {
+			t.Fatal("a repair that has not finished answered done")
+		}
+	}
+	close(release)
+	deadline := time.After(5 * time.Second)
+	for {
+		if done, result := pollPrepareHotspot(); done {
+			if result != hotspotResultRunning {
+				t.Errorf("result = %d", result)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("the repair never finished")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if calls != 1 {
+		t.Errorf("the repair ran %d times, want 1", calls)
 	}
 }
