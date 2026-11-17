@@ -331,14 +331,29 @@ func classify(text string) []string {
 	if has("permission is hereby granted, free of charge, to any person obtaining a copy") {
 		add("MIT")
 	}
-	// A BSD-3 text holds the BSD-2 clauses too: a BSD-2 licence is present
-	// only when some copy of the clauses has no endorsement clause.
+	// The BSD family shares its wording. A BSD-3 text holds the BSD-2 clauses
+	// too; BSD-4 and Apache-1.1 add an advertising or an acknowledgement
+	// clause to them, and carry the endorsement clause as well. A BSD-2
+	// licence is present only when some copy of the clauses has no
+	// endorsement clause, and a text without the redistribution clauses is
+	// none of them.
 	clauses := max(
 		strings.Count(t, "redistribution and use in source and binary forms"),
 		strings.Count(t, "redistributions in binary form must reproduce"),
 	)
-	endorsements := strings.Count(t, "endorse or promote")
-	if endorsements > 0 {
+	endorsements := 0
+	if clauses > 0 {
+		endorsements = strings.Count(t, "endorse or promote")
+	}
+	advertising := strings.Count(t, "all advertising materials mentioning features or use of this software must display")
+	acknowledgements := strings.Count(t, "the end-user documentation included with the redistribution")
+	if advertising > 0 {
+		add("BSD-4-Clause")
+	}
+	if acknowledgements > 0 {
+		add("Apache-1.1")
+	}
+	if endorsements > advertising+acknowledgements {
 		add("BSD-3-Clause")
 	}
 	if clauses > endorsements && has("this list of conditions and the following disclaimer in the documentation") {

@@ -22,6 +22,35 @@ and/or other materials provided with the distribution.`
 3. Neither the name of the copyright holder nor the names of its contributors
 may be used to endorse or promote products derived from this software.`
 
+	bsd4Text = bsd2Text + `
+3. All advertising materials mentioning features or use of this software
+must display the following acknowledgement: This product includes software
+developed by the organization.
+4. Neither the name of the copyright holder nor the names of its contributors
+may be used to endorse or promote products derived from this software.`
+
+	apache11Text = `Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+1. Redistributions of source code must retain the above copyright notice,
+this list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+this list of conditions and the following disclaimer in the documentation
+and/or other materials provided with the distribution.
+3. The end-user documentation included with the redistribution, if any, must
+include the following acknowledgment: This product includes software
+developed by the Apache Software Foundation.
+4. The names "Apache" and "Apache Software Foundation" must not be used to
+endorse or promote products derived from this software without prior written
+permission.`
+
+	zlibText = `This software is provided 'as-is', without any express or implied warranty.
+Permission is granted to anyone to use this software for any purpose, subject
+to the following restrictions:
+1. The origin of this software must not be misrepresented.
+2. Altered source versions must be plainly marked as such.
+3. The name of the author may not be used to endorse or promote products
+derived from this software.`
+
 	apacheText = `Apache License
 Version 2.0, January 2004`
 
@@ -50,6 +79,11 @@ func TestClassify(t *testing.T) {
 		{"bsd3 then mit", bsd3Text + "\n\n" + mitText, []string{"MIT", "BSD-3-Clause"}},
 		{"bsd3 and bsd2", bsd3Text + "\n\n" + bsd2Text, []string{"BSD-3-Clause", "BSD-2-Clause"}},
 		{"mit, bsd3 and bsd2", mitText + "\n" + bsd3Text + "\n" + bsd2Text, []string{"MIT", "BSD-3-Clause", "BSD-2-Clause"}},
+		{"bsd4 is neither bsd3 nor bsd2", bsd4Text, []string{"BSD-4-Clause"}},
+		{"apache 1.1 is neither bsd3 nor bsd2", apache11Text, []string{"Apache-1.1"}},
+		{"bsd3 and bsd4", bsd3Text + "\n\n" + bsd4Text, []string{"BSD-3-Clause", "BSD-4-Clause"}},
+		{"bsd2 and apache 1.1", bsd2Text + "\n\n" + apache11Text, []string{"BSD-2-Clause", "Apache-1.1"}},
+		{"an endorsement clause without the redistribution clauses is not bsd", zlibText, nil},
 		{"apache and mit", apacheText + "\n" + mitText, []string{"Apache-2.0", "MIT"}},
 		{"full gpl text naming the lgpl is gpl only", gplv3Text, []string{"GPL-3.0"}},
 		{"short gpl notice", gplNotice, []string{"GPL-3.0-or-later"}},
