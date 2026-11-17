@@ -22,7 +22,6 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/serverinfo"
 	"github.com/metacubex/mihomo/common/observable"
 	"github.com/metacubex/mihomo/component/geodata"
-	"github.com/metacubex/mihomo/component/resolver"
 	mihomoCfg "github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub/executor"
@@ -399,24 +398,16 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	countMihomoDirect(cfg, &mihomoSessionTraffic)
 	mihomoSessionTraffic.startSession()
 
-	nativeDirectBlocks := bridge == nil && inbound.Tun != nil && inbound.Tun.ProcessFirst && prof.HasAddressBlock()
-	if nativeDirectBlocks {
-		guardDirectAppAddressBlocks(cfg.SubRules, &mihomoDirectLookup)
-	}
-
 	log.Println("[mihomo] applying config")
 	if bridge == nil {
 		tun.take()
 	}
 	// ApplyConfig is void but blocks through TUN creation; a cleared TUN Enable
 	// flag is the only success signal (checked below, native TUN mode only).
-	executor.ApplyConfig(cfg, true)
+	applyMihomoConfig(cfg, inbound, bridge != nil, prof)
 	if bridge == nil && proxyPort <= 0 && !listener.GetTunConf().Enable {
 		mihomoTeardown()
 		return fmt.Errorf("[mihomo] TUN listener failed to start (see mihomo logs)")
-	}
-	if nativeDirectBlocks {
-		mihomoDirectLookup.set(resolver.DirectHostResolver)
 	}
 	if bridge != nil {
 		if err := x.mihomoStartBridge(bridge, prof, dns, tun.take(), mark); err != nil {

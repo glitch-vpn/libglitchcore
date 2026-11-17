@@ -11,9 +11,7 @@ import (
 
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/component/process"
-	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
-	"github.com/metacubex/mihomo/hub/executor"
 	mihomoLog "github.com/metacubex/mihomo/log"
 	mihomoTunnel "github.com/metacubex/mihomo/tunnel"
 
@@ -64,8 +62,8 @@ func TestMihomoNativeTun_RoutesByAppAndByName(t *testing.T) {
 		},
 	}
 	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}}
-	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink},
-		mihomoconfig.Inbound{Tun: mihomoTunInbound(dns, -1)}, mihomoconfig.Options{}, prof)
+	inbound := mihomoconfig.Inbound{Tun: mihomoTunInbound(dns, -1)}
+	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink}, inbound, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
@@ -78,7 +76,7 @@ func TestMihomoNativeTun_RoutesByAppAndByName(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Proxies[target] = recorder
-	executor.ApplyConfig(cfg, true)
+	applyMihomoConfig(cfg, inbound, false, prof)
 
 	routed := mihomoLog.Subscribe()
 	t.Cleanup(func() { mihomoLog.UnSubscribe(routed) })
@@ -152,8 +150,8 @@ func TestMihomoNativeTun_DirectAppNamedFlowMeetsAddressBlocks(t *testing.T) {
 		Servers:       []string{"127.0.0.1:1"},
 		DirectServers: []string{"tcp://127.0.0.2:" + strconv.Itoa(resolverPort)},
 	}
-	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink},
-		mihomoconfig.Inbound{Tun: mihomoTunInbound(dns, -1)}, mihomoconfig.Options{}, prof)
+	inbound := mihomoconfig.Inbound{Tun: mihomoTunInbound(dns, -1)}
+	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink}, inbound, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
@@ -165,9 +163,7 @@ func TestMihomoNativeTun_DirectAppNamedFlowMeetsAddressBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg.Proxies[target] = recorder
-	guardDirectAppAddressBlocks(cfg.SubRules, &mihomoDirectLookup)
-	executor.ApplyConfig(cfg, true)
-	mihomoDirectLookup.set(resolver.DirectHostResolver)
+	applyMihomoConfig(cfg, inbound, false, prof)
 
 	routed := mihomoLog.Subscribe()
 	t.Cleanup(func() { mihomoLog.UnSubscribe(routed) })

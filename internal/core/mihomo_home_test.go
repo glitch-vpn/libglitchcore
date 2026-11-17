@@ -146,7 +146,7 @@ func fakeIPFor(t *testing.T, name string) net.IP {
 
 // What mihomo did with a flow: "proxy:<destination>" as the recorder behind
 // the proxy saw it, "direct:<address>" as the listener at that address saw it,
-// "block" as mihomo's routing line for a refused flow says.
+// "block" as mihomo's routing line, or the guarded outbound's error line, for a refused flow says.
 func flowOutcome(t *testing.T, remote string, port int, proxied, direct <-chan string, routed <-chan mihomoLog.Event) string {
 	t.Helper()
 	addr := net.JoinHostPort(remote, fmt.Sprint(port))
@@ -158,7 +158,7 @@ func flowOutcome(t *testing.T, remote string, port int, proxied, direct <-chan s
 		case s := <-direct:
 			return s
 		case ev := <-routed:
-			if strings.Contains(ev.Payload, addr) && strings.Contains(ev.Payload, "REJECT") {
+			if strings.Contains(ev.Payload, addr) && (strings.Contains(ev.Payload, "REJECT") || strings.Contains(ev.Payload, errDirectFlowRefused.Error())) {
 				return "block"
 			}
 		case <-deadline:
