@@ -38,8 +38,7 @@ guards.
 | wireguard-go | MIT | https://git.zx2c4.com/wireguard-go |
 | gVisor (netstack) | Apache-2.0 | https://github.com/google/gvisor |
 
-The full transitive module list, each with its own license, is resolvable from
-`go.mod` / `go.sum` (e.g. with `go-licenses report ./...`).
+[`THIRD_PARTY_GO_MODULES.txt`](THIRD_PARTY_GO_MODULES.txt) lists every Go module a release links, with its license text; it ships in the release zip.
 
 ## Prebuilt binaries
 

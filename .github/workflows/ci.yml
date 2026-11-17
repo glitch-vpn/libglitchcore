@@ -20,6 +20,18 @@ jobs:
             echo "gofmt needed on:" && echo "$files" && exit 1
           fi
 
+  # The licence texts of the modules the release links are committed; a
+  # dependency bump that moves them has to move the file with it.
+  notices:
+    name: Go module notices
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.27.3'
+      - run: make notices-check
+
   # The service composition runs the engine inside the Windows service process;
   # dispatchCommand-level tests (geo assets crossing the IPC request) only
   # compile with the service+windows tags, so they need a Windows runner.

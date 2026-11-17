@@ -41,7 +41,7 @@ jobs:
         run: sudo chown -R "$(id -u):$(id -g)" build_output
 
       - name: Include license files
-        run: cp LICENSE THIRD_PARTY_NOTICES.md build_output/
+        run: cp LICENSE THIRD_PARTY_NOTICES.md THIRD_PARTY_GO_MODULES.txt build_output/
 
       - name: List artifacts
         run: find build_output -type f -exec ls -lh {} \;
