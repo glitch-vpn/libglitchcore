@@ -55,7 +55,12 @@ type TunInbound struct {
 	// flow meets every block first (processFirstRules). Set where mihomo reads
 	// the app behind a flow: the desktop adapter.
 	ProcessFirst bool
-	DNS          dnsconfig.Config
+	// StrictRoute has the platform refuse what would bypass the TUN's
+	// :53 hijack: on Windows, sing-tun's firewall rules block DNS on any
+	// interface but the TUN for every process but the core's own, and IPv6
+	// when the TUN has no IPv6 address.
+	StrictRoute bool
+	DNS         dnsconfig.Config
 }
 
 // Inbound: loopback mixed (proxy mode), the core's tun2socks bridge, or
@@ -856,6 +861,10 @@ func applyTun(raw *config.RawConfig, t *TunInbound, prof routing.Profile, target
 		raw.Tun.Device = t.Device
 		raw.Tun.AutoRoute = true
 		raw.Tun.AutoDetectInterface = true
+		raw.Tun.StrictRoute = t.StrictRoute
+		// sing-tun then gives the adapter its own DNS address, where the hijack
+		// answers, and the lowest interface metric, so Windows asks it first.
+		raw.Tun.DNSMode = "hijack"
 	}
 
 	// AAAA is answered unless the caller turned IPv6 off; without it a name

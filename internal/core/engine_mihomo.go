@@ -10,6 +10,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -320,7 +321,11 @@ const mihomoDesktopAdapterName = "GlitchVPNMeta"
 // (Android), left as that platform sets it up. Without one mihomo creates the
 // adapter, and the user's MTU and UDP timeout (SetTun2SocksConfig) apply, as
 // they did on the bridge it replaces; with the adapter's own flows readable,
-// the process rules lead.
+// the process rules lead. On Windows the strict route keeps DNS from leaving
+// by another interface than the TUN: the bridge set the adapter's DNS and
+// metric, which sing-tun's auto-route sets too, but nothing else stopped
+// Windows' multi-homed resolution or an on-link LAN resolver from answering
+// past the hijack.
 func mihomoTunInbound(dns dnsconfig.Config, fd int) *mihomoconfig.TunInbound {
 	tin := &mihomoconfig.TunInbound{MTU: defaultTunMTU, DNS: dns}
 	if fd >= 0 {
@@ -335,6 +340,7 @@ func mihomoTunInbound(dns dnsconfig.Config, fd int) *mihomoconfig.TunInbound {
 	tin.Device = mihomoDesktopAdapterName
 	tin.MTU, tin.UDPTimeoutSec = currentTun2SocksConfig()
 	tin.ProcessFirst = true
+	tin.StrictRoute = runtime.GOOS == "windows"
 	return tin
 }
 

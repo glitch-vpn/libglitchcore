@@ -3,6 +3,7 @@
 package core
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
@@ -27,6 +28,9 @@ func TestMihomoTunInbound_AdapterTakesTheUserSettings(t *testing.T) {
 	if !tin.ProcessFirst {
 		t.Fatal("the adapter's process rules do not lead")
 	}
+	if want := runtime.GOOS == "windows"; tin.StrictRoute != want {
+		t.Fatalf("%s: strict route %v, want %v", runtime.GOOS, tin.StrictRoute, want)
+	}
 }
 
 func TestMihomoTunInbound_AdapterDefaultsMatchTheBridge(t *testing.T) {
@@ -47,7 +51,7 @@ func TestMihomoTunInbound_PlatformFdIsLeftAlone(t *testing.T) {
 	if tin.FileDescriptor != 42 || tin.Device != "" {
 		t.Fatalf("fd %d, device %q, want the fd alone", tin.FileDescriptor, tin.Device)
 	}
-	if tin.MTU != defaultTunMTU || tin.UDPTimeoutSec != 0 || tin.ProcessFirst {
+	if tin.MTU != defaultTunMTU || tin.UDPTimeoutSec != 0 || tin.ProcessFirst || tin.StrictRoute {
 		t.Fatalf("mtu %d, udp timeout %d, process first %v, want the defaults", tin.MTU, tin.UDPTimeoutSec, tin.ProcessFirst)
 	}
 }
