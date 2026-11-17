@@ -774,7 +774,9 @@ func TestXrayTun_TunnelsAProcessARuleSendsToTheProxy(t *testing.T) {
 	proxied := make(chan string, 4)
 	exe := "tunneled.exe"
 	rig := startTunRig(t, startTunInstance(t, prof, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, socksRecorder(t, proxied), server), prof, tunTestMTU,
-		func(string, netip.AddrPort) (string, error) { return filepath.Join(string(filepath.Separator), "apps", exe), nil })
+		func(string, netip.AddrPort) (string, error) {
+			return filepath.Join(string(filepath.Separator), "apps", exe), nil
+		})
 
 	conn, err := rig.dialTCP(t, 443)
 	if err != nil {

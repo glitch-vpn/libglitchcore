@@ -88,16 +88,23 @@ func dialFakeIP(t *testing.T, app xrayEntry, name string, port int) {
 func TestXray_FakeIPLookupsTravelWithTheirFlows(t *testing.T) {
 	direct := routing.Profile{Mode: routing.ModeProxyAll, Tiers: []routing.Tier{{Direct: []string{"domain:ru"}}}}
 
-	app, proxied, fromDevice, _ := xrayFakeIPSession(t, direct, []string{"full:outside.test"})
-	sendQuery(t, app, "outside.test", D.TypeA)
-	requireQueryTravels(t, proxied, fromDevice, "proxy:"+generalResolver)
-
-	app, proxied, fromDevice, directPort := xrayFakeIPSession(t, direct, nil)
-	dialFakeIP(t, app, "vk.ru", directPort)
-	requireQueryTravels(t, proxied, fromDevice, "direct:127.0.0.2")
-
-	resolving := routing.Profile{Mode: routing.ModeProxyAll, DomainStrategy: "IPIfNonMatch", Tiers: []routing.Tier{{Direct: []string{"domain:ru"}, Block: []string{"192.0.2.0/24"}}}}
-	app, proxied, fromDevice, _ = xrayFakeIPSession(t, resolving, nil)
-	dialFakeIP(t, app, "lookup.test", 443)
-	requireQueryTravels(t, proxied, fromDevice, "proxy:"+generalResolver)
+	// Each session runs in a subtest, so its instance is closed before the next
+	// one starts: xray's system dialer is one per process, and starting an
+	// instance writes it.
+	t.Run("a name the filter keeps off the pool", func(t *testing.T) {
+		app, proxied, fromDevice, _ := xrayFakeIPSession(t, direct, []string{"full:outside.test"})
+		sendQuery(t, app, "outside.test", D.TypeA)
+		requireQueryTravels(t, proxied, fromDevice, "proxy:"+generalResolver)
+	})
+	t.Run("a direct tier's name", func(t *testing.T) {
+		app, proxied, fromDevice, directPort := xrayFakeIPSession(t, direct, nil)
+		dialFakeIP(t, app, "vk.ru", directPort)
+		requireQueryTravels(t, proxied, fromDevice, "direct:127.0.0.2")
+	})
+	t.Run("the router's lookup of an unlisted name", func(t *testing.T) {
+		resolving := routing.Profile{Mode: routing.ModeProxyAll, DomainStrategy: "IPIfNonMatch", Tiers: []routing.Tier{{Direct: []string{"domain:ru"}, Block: []string{"192.0.2.0/24"}}}}
+		app, proxied, fromDevice, _ := xrayFakeIPSession(t, resolving, nil)
+		dialFakeIP(t, app, "lookup.test", 443)
+		requireQueryTravels(t, proxied, fromDevice, "proxy:"+generalResolver)
+	})
 }
