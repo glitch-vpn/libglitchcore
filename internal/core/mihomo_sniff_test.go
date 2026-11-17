@@ -73,12 +73,12 @@ func TestMihomoBridge_SniffsFlowsAddressedByIP(t *testing.T) {
 				},
 			}
 			dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}}
-			cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink},
+			cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink},
 				mihomoconfig.Inbound{Bridge: true, ForceProxy: true, DNS: dns}, mihomoconfig.Options{}, prof)
 			if err != nil {
 				t.Fatalf("BuildConfig: %v", err)
 			}
-			target := mihomoconfig.Target([]string{bridgeTestVlessLink})
+			target := mihomoconfig.Target([]string{vlessTestLink})
 			recorder, err := adapter.ParseProxy(map[string]any{"name": target, "type": "socks5", "server": "127.0.0.1", "port": socksPort})
 			if err != nil {
 				t.Fatal(err)

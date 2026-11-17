@@ -1,10 +1,9 @@
-//go:build !no_xray
+//go:build !no_xray && with_tun2socks
 
 package core
 
 import (
 	"context"
-	"fmt"
 	"net"
 	"net/netip"
 	"sync"
@@ -14,76 +13,32 @@ import (
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xtls/xray-core/common"
 	"github.com/xtls/xray-core/common/buf"
-	xrayCtx "github.com/xtls/xray-core/common/ctx"
-	xrayLog "github.com/xtls/xray-core/common/log"
 	xrayNet "github.com/xtls/xray-core/common/net"
-	"github.com/xtls/xray-core/common/session"
-	xrayCore "github.com/xtls/xray-core/core"
-	"github.com/xtls/xray-core/features/routing"
 	"github.com/xtls/xray-core/transport"
 )
 
 var _ t2sproxy.Proxy = (*xrayBridgeProxy)(nil)
 
-type xrayInstanceContext struct{}
-
-func init() {
-	common.Must(common.RegisterConfig((*xrayInstanceContext)(nil), func(ctx context.Context, _ interface{}) (interface{}, error) {
-		return ctx, nil
-	}))
-}
-
 // newXrayBridgeProxy hands tun2socks's flows to xray in process, as the
-// inbound tagged tag would. Once its session has ended it refuses every flow.
-func (x *CoreController) newXrayBridgeProxy(inst *xrayCore.Instance, tag string, sniffing session.SniffingRequest, mark int64) (*xrayBridgeProxy, error) {
-	// The instance's own context, which xray's inbounds derive a
-	// connection's from: per-connection code such as the fake-DNS sniffer
-	// reads the instance out of it.
-	instCtx, err := xrayCore.CreateObject(inst, (*xrayInstanceContext)(nil))
-	if err != nil {
-		return nil, err
-	}
-	dispatcher, ok := inst.GetFeature(routing.DispatcherType()).(routing.Dispatcher)
-	if !ok {
-		return nil, fmt.Errorf("xray has no dispatcher")
-	}
-	return &xrayBridgeProxy{
-		x:          x,
-		mark:       mark,
-		ctx:        instCtx.(context.Context),
-		dispatcher: dispatcher,
-		tag:        tag,
-		sniffing:   sniffing,
-	}, nil
+// inbound would. Once its session has ended it refuses every flow.
+func (x *CoreController) newXrayBridgeProxy(in *xrayInbound, mark int64) *xrayBridgeProxy {
+	return &xrayBridgeProxy{x: x, mark: mark, inbound: in}
 }
 
 type xrayBridgeProxy struct {
-	x          *CoreController
-	mark       int64
-	ctx        context.Context
-	dispatcher routing.Dispatcher
-	tag        string
-	sniffing   session.SniffingRequest
+	x       *CoreController
+	mark    int64
+	inbound *xrayInbound
 }
 
-// dispatch hands one flow to xray as its inbound worker would. xray ends the
-// flow when its context is cancelled, so the context outlives the dial and
-// only the caller's close cancels it.
 func (p *xrayBridgeProxy) dispatch(m *M.Metadata, network xrayNet.Network) (*transport.Link, context.CancelFunc, error) {
 	if p.x.sessionGen.Load() != p.mark {
 		return nil, nil, errSessionEnded
 	}
-	src := xrayNet.Destination{Network: network, Address: xrayNet.IPAddress(m.SrcIP.AsSlice()), Port: xrayNet.Port(m.SrcPort)}
-	dest := xrayNet.Destination{Network: network, Address: xrayNet.IPAddress(m.DstIP.AsSlice()), Port: xrayNet.Port(m.DstPort)}
-	ctx, cancel := context.WithCancel(p.ctx)
-	ctx = xrayCtx.ContextWithID(ctx, session.NewID())
-	// CanSpliceCopy 3: no raw socket backs the flow, so xray must copy.
-	ctx = session.ContextWithInbound(ctx, &session.Inbound{Source: src, Tag: p.tag, CanSpliceCopy: 3})
-	ctx = session.ContextWithContent(ctx, &session.Content{SniffingRequest: p.sniffing})
-	outbound := &session.Outbound{}
-	ctx = session.ContextWithOutbounds(ctx, []*session.Outbound{outbound})
-	ctx = xrayLog.ContextWithAccessMessage(ctx, &xrayLog.AccessMessage{From: src, To: sniffedTarget{dest: dest, outbound: outbound}, Status: xrayLog.AccessAccepted})
-	link, err := p.dispatcher.Dispatch(ctx, dest)
+	src := xrayAddrDestination(network, netip.AddrPortFrom(m.SrcIP, m.SrcPort))
+	dest := xrayAddrDestination(network, netip.AddrPortFrom(m.DstIP, m.DstPort))
+	ctx, cancel := p.inbound.flowContext(src, dest)
+	link, err := p.inbound.dispatcher.Dispatch(ctx, dest)
 	if err != nil {
 		cancel()
 		return nil, nil, err
@@ -130,19 +85,6 @@ func (p *xrayBridgeProxy) DialUDP(m *M.Metadata) (net.PacketConn, error) {
 	return flow, nil
 }
 
-// xraySender is the address a reply came from, or invalid when xray names it
-// by domain (fake-ip) or not at all.
-func xraySender(from *xrayNet.Destination) netip.AddrPort {
-	if from == nil || !from.Address.Family().IsIP() {
-		return netip.AddrPort{}
-	}
-	ip, ok := netip.AddrFromSlice(from.Address.IP())
-	if !ok {
-		return netip.AddrPort{}
-	}
-	return netip.AddrPortFrom(ip.Unmap(), uint16(from.Port))
-}
-
 // xrayLinkConn is the TCP side of a flow's link. CloseWrite ends the uplink,
 // so an app's half-close reaches the server as it would through a socket.
 // xray bounds a half-closed flow itself, so deadlines are not kept.
@@ -178,24 +120,3 @@ func (c *xrayLinkConn) RemoteAddr() net.Addr             { return &net.TCPAddr{}
 func (c *xrayLinkConn) SetDeadline(time.Time) error      { return nil }
 func (c *xrayLinkConn) SetReadDeadline(time.Time) error  { return nil }
 func (c *xrayLinkConn) SetWriteDeadline(time.Time) error { return nil }
-
-// sniffedTarget is the access message's destination: the address the flow
-// came in on until xray's sniffer finds a domain in it. A fake-IP result
-// replaces the destination itself; route-only sniffing keeps the dialed
-// address and records the domain apart. The message reads both when it is
-// written, after the route is picked.
-type sniffedTarget struct {
-	dest     xrayNet.Destination
-	outbound *session.Outbound
-}
-
-func (t sniffedTarget) String() string {
-	dest := t.dest
-	for _, found := range []xrayNet.Destination{t.outbound.Target, t.outbound.RouteTarget} {
-		if found.IsValid() && found.Address.Family().IsDomain() {
-			dest.Address = found.Address
-			break
-		}
-	}
-	return dest.String()
-}

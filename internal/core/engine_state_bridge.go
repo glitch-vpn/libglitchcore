@@ -1,9 +1,15 @@
-//go:build !no_xray
+//go:build !no_xray && with_tun2socks
 
 package core
 
-import "github.com/xjasonlyu/tun2socks/v2/engine"
+import (
+	"sync/atomic"
 
-type bridgeState struct {
-	tun2socksKey *engine.Key
+	"github.com/xjasonlyu/tun2socks/v2/engine"
+)
+
+// tunLayerState is what the tun2socks bridge holds for a session.
+type tunLayerState struct {
+	isTun2socksRunning atomic.Bool
+	tun2socksKey       *engine.Key
 }

@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"github.com/metacubex/mihomo/component/resolver"
+	mihomoCfg "github.com/metacubex/mihomo/config"
+	C "github.com/metacubex/mihomo/constant"
 	mihomoTunnel "github.com/metacubex/mihomo/tunnel"
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 
@@ -29,6 +31,22 @@ func (x *CoreController) mihomoUsesBridge(proxyPort int) bool {
 		return os.Getenv("GLITCH_MIHOMO_ANDROID_BRIDGE") == "1"
 	}
 	return runtime.GOOS == "windows"
+}
+
+// bridgeSetup is what a session on the bridge needs besides the proxies.
+type bridgeSetup struct {
+	forceProxy  bool // process->proxy rules need flows that always tunnel
+	forceDirect bool // process->direct rules need flows that meet the blocks, then go direct
+	// directBlocks is the force-direct flows' sub-rule, held when a block is
+	// by address: the bridge then checks a flow's name and every address it
+	// resolves to against it, as mihomo could only check one.
+	directBlocks []C.Rule
+}
+
+func (b *bridgeSetup) adoptDirectBlocks(cfg *mihomoCfg.Config, prof routing.Profile) {
+	if b.forceDirect && prof.HasAddressBlock() {
+		b.directBlocks = cfg.SubRules[mihomoconfig.DirectFlowsSubRule]
+	}
 }
 
 // Bridge inbound + plan; defaults dns to fake-ip (like native path).

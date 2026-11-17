@@ -1,3 +1,5 @@
+//go:build !no_xray && with_tun2socks
+
 package core
 
 import "net/netip"
@@ -14,11 +16,9 @@ type tunPlan struct {
 	// engine's ::/0 reject rule drops them, while a route left on the physical
 	// adapter would carry them out in the clear.
 	TunRoutes []netip.Prefix
-	// BypassRoutes go round the TUN through the physical gateway: the private
-	// ranges, only when the profile keeps local networks direct. Narrower than
-	// routing.LocalNetworkCIDRs on purpose: the carrier-grade NAT range
-	// (100.64/10) reaches overlay networks and ISP equipment, not the user's
-	// LAN, and loopback and link-local never leave the host.
+	// BypassRoutes go round the TUN through the physical gateway: the
+	// localNetworkBypass ranges, only when the profile keeps local networks
+	// direct.
 	BypassRoutes []netip.Prefix
 	// InterfaceMetric is the lowest, so Windows asks the TUN's resolvers before
 	// the physical adapter's.
@@ -31,9 +31,8 @@ const (
 )
 
 var (
-	tunHalvesV4   = []string{"0.0.0.0/1", "128.0.0.0/1"}
-	tunHalvesV6   = []string{"::/1", "8000::/1"}
-	privateRanges = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+	tunHalvesV4 = []string{"0.0.0.0/1", "128.0.0.0/1"}
+	tunHalvesV6 = []string{"::/1", "8000::/1"}
 )
 
 func planTun(ipv6, localNetworks bool) tunPlan {
@@ -51,7 +50,7 @@ func planTun(ipv6, localNetworks bool) tunPlan {
 		plan.TunRoutes = append(plan.TunRoutes, netip.MustParsePrefix(cidr))
 	}
 	if localNetworks {
-		for _, cidr := range privateRanges {
+		for _, cidr := range localNetworkBypass {
 			plan.BypassRoutes = append(plan.BypassRoutes, netip.MustParsePrefix(cidr))
 		}
 	}

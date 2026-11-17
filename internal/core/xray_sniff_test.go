@@ -13,7 +13,6 @@ import (
 	"time"
 
 	D "github.com/miekg/dns"
-	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	xrayCore "github.com/xtls/xray-core/core"
 	xrayConf "github.com/xtls/xray-core/infra/conf"
 
@@ -103,7 +102,7 @@ func startSniffInstance(t *testing.T, prof routing.Profile, socksPort int) *xray
 
 func startSniffInstanceDNS(t *testing.T, prof routing.Profile, socksPort int, dns dnsconfig.Config) *xrayCore.Instance {
 	t.Helper()
-	res, err := xrayconfig.BuildConfig([]string{bridgeTestVlessLink}, xrayconfig.BalancerOptions{}, prof, "none")
+	res, err := xrayconfig.BuildConfig([]string{vlessTestLink}, xrayconfig.BalancerOptions{}, prof, "none")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,10 +129,10 @@ func startSniffInstanceDNS(t *testing.T, prof routing.Profile, socksPort int, dn
 }
 
 // fakeAnswer asks the instance's fake DNS for name and returns the fake IP.
-func fakeAnswer(t *testing.T, p *xrayBridgeProxy, name string, qtype uint16) net.IP {
+func fakeAnswer(t *testing.T, p xrayEntry, name string, qtype uint16) net.IP {
 	t.Helper()
 	resolver := &net.UDPAddr{IP: net.IPv4(1, 1, 1, 1), Port: 53}
-	pc, err := p.DialUDP(bridgeTestFlow(M.UDP, resolver))
+	pc, err := p.DialUDP(addrPortOf(resolver))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,14 +162,14 @@ func fakeAnswer(t *testing.T, p *xrayBridgeProxy, name string, qtype uint16) net
 	return nil
 }
 
-// sniffFlow dials ip:port through the bridge proxy, sends a TLS ClientHello or
+// sniffFlow dials ip:port through the TUN layer's entry, sends a TLS ClientHello or
 // an HTTP request naming name (or nothing), and returns where the flow ended up.
-func sniffFlow(t *testing.T, p *xrayBridgeProxy, ip net.IP, port int, kind, name string, seen chan string) string {
+func sniffFlow(t *testing.T, p xrayEntry, ip net.IP, port int, kind, name string, seen chan string) string {
 	t.Helper()
 	for len(seen) > 0 {
 		<-seen
 	}
-	conn, err := p.DialContext(context.Background(), bridgeTestFlow(M.TCP, &net.TCPAddr{IP: ip, Port: port}))
+	conn, err := p.DialTCP(context.Background(), addrPortOf(&net.TCPAddr{IP: ip, Port: port}))
 	if err != nil {
 		return "dial error: " + err.Error()
 	}
@@ -212,14 +211,8 @@ func TestXraySniffing_LocalNetworksStayDirect(t *testing.T) {
 				t.Fatal(err)
 			}
 			x := &CoreController{}
-			app, err := x.newXrayBridgeProxy(inst, xrayconfig.AppTrafficTag, sniffing, x.sessionGen.Load())
-			if err != nil {
-				t.Fatal(err)
-			}
-			force, err := x.newXrayBridgeProxy(inst, xrayconfig.ForceProxyTag, sniffing, x.sessionGen.Load())
-			if err != nil {
-				t.Fatal(err)
-			}
+			app := newXrayEntry(t, x, inst, xrayconfig.AppTrafficTag, sniffing)
+			force := newXrayEntry(t, x, inst, xrayconfig.ForceProxyTag, sniffing)
 
 			wantLAN := "proxy:" + lanHost
 			if localNetworks {
@@ -228,7 +221,7 @@ func TestXraySniffing_LocalNetworksStayDirect(t *testing.T) {
 			lanIP, publicIP := net.ParseIP(lanHost), net.ParseIP("198.51.100.9")
 			for _, side := range []struct {
 				name  string
-				proxy *xrayBridgeProxy
+				proxy xrayEntry
 			}{{"normal", app}, {"per-app", force}} {
 				for _, kind := range []string{"tls", "http"} {
 					if got := sniffFlow(t, side.proxy, lanIP, lanPort, kind, "nas.local", seen); got != wantLAN {

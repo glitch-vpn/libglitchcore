@@ -1,4 +1,4 @@
-//go:build !no_xray
+//go:build !no_xray && with_tun2socks
 
 package core
 
@@ -7,9 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/url"
-	"os"
 	"runtime"
-	"strconv"
 	"sync"
 	"time"
 
@@ -22,8 +20,8 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
-// tun2socksParams configures the shared TUN bridge used by xray and
-// Windows-desktop mihomo. One wireguard/Wintun TUN in front of the engine
+// tun2socksParams configures the TUN bridge xray and mihomo share in the
+// tun2socks variant. One wireguard/Wintun TUN in front of the engine
 // avoids the Wintun cross-binding conflict mihomo's own sing-tun caused on
 // Windows ("duplicate name" / device-installation-mutex). The bridge hands
 // each flow to the engine in process, so the TUN path opens no listener.
@@ -65,26 +63,6 @@ func setBridgeProxy(p t2sproxy.Proxy) {
 	bridgeProxyMu.Unlock()
 }
 
-func tun2socksMTU() int {
-	mtu := defaultTunMTU
-	if s := os.Getenv("GLITCH_TUN2SOCKS_MTU"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 1200 && v <= 1500 {
-			mtu = v
-		}
-	}
-	return mtu
-}
-
-func tun2socksUDPTimeout() time.Duration {
-	udpTimeout := 30 * time.Second
-	if s := os.Getenv("GLITCH_TUN2SOCKS_UDP_TIMEOUT_SEC"); s != "" {
-		if v, err := strconv.Atoi(s); err == nil && v >= 5 && v <= 300 {
-			udpTimeout = time.Duration(v) * time.Second
-		}
-	}
-	return udpTimeout
-}
-
 // startTun2socks bridges the platform TUN to params.proxy. On the fd path it
 // takes the start's own copy of the fd, made in the FFI call: disconnect must
 // not double-close the platform-owned (ParcelFileDescriptor) fd.
@@ -100,13 +78,14 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 	}
 
 	logLevel := capTun2socksLogLevel(p.logLevel)
+	mtu, udpTimeoutSec := currentTun2SocksConfig()
 	setBridgeProxy(sessionBridgeProxy(p))
 	key := &engine.Key{
 		Device:                   devURI,
 		Proxy:                    bridgeProxyURL,
 		LogLevel:                 logLevel,
-		MTU:                      tun2socksMTU(),
-		UDPTimeout:               tun2socksUDPTimeout(),
+		MTU:                      mtu,
+		UDPTimeout:               time.Duration(udpTimeoutSec) * time.Second,
 		Interface:                "",
 		TCPModerateReceiveBuffer: true,
 		TCPSendBufferSize:        "4m",

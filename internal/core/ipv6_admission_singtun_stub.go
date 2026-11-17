@@ -1,4 +1,4 @@
-//go:build no_mihomo || !with_gvisor
+//go:build !with_gvisor || (no_mihomo && (no_xray || with_tun2socks))
 
 package core
 

@@ -64,7 +64,7 @@ func TestMihomoNativeTun_RoutesByAppAndByName(t *testing.T) {
 		},
 	}
 	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"127.0.0.1:1"}}
-	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink},
+	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink},
 		mihomoconfig.Inbound{Tun: mihomoTunInbound(dns, -1)}, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
@@ -72,7 +72,7 @@ func TestMihomoNativeTun_RoutesByAppAndByName(t *testing.T) {
 	// No adapter in a test: the listener is off, the tunnel is fed by hand.
 	cfg.General.Tun.Enable = false
 	cfg.General.FindProcessMode = process.FindProcessOff
-	target := mihomoconfig.Target([]string{bridgeTestVlessLink})
+	target := mihomoconfig.Target([]string{vlessTestLink})
 	recorder, err := adapter.ParseProxy(map[string]any{"name": target, "type": "socks5", "server": "127.0.0.1", "port": socksPort})
 	if err != nil {
 		t.Fatal(err)
@@ -152,14 +152,14 @@ func TestMihomoNativeTun_DirectAppNamedFlowMeetsAddressBlocks(t *testing.T) {
 		Servers:       []string{"127.0.0.1:1"},
 		DirectServers: []string{"tcp://127.0.0.2:" + strconv.Itoa(resolverPort)},
 	}
-	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink},
+	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink},
 		mihomoconfig.Inbound{Tun: mihomoTunInbound(dns, -1)}, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
 	cfg.General.Tun.Enable = false
 	cfg.General.FindProcessMode = process.FindProcessOff
-	target := mihomoconfig.Target([]string{bridgeTestVlessLink})
+	target := mihomoconfig.Target([]string{vlessTestLink})
 	recorder, err := adapter.ParseProxy(map[string]any{"name": target, "type": "socks5", "server": "127.0.0.1", "port": socksPort})
 	if err != nil {
 		t.Fatal(err)

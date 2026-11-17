@@ -1,4 +1,4 @@
-//go:build windows
+//go:build windows && !no_xray && with_tun2socks
 
 package core
 

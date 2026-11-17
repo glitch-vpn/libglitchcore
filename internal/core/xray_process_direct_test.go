@@ -16,7 +16,7 @@ import (
 
 // An app a rule sends direct by process still meets the blocks: a flow naming
 // a blocked site is refused, and one to anywhere else is dialled direct.
-func TestXrayBridge_ProcessDirectFlowsMeetTheBlocks(t *testing.T) {
+func TestXrayTunLayer_ProcessDirectFlowsMeetTheBlocks(t *testing.T) {
 	const lanHost = "127.0.0.5"
 	seen := make(chan string, 8)
 	socksPort := socksRecorder(t, seen)
@@ -31,10 +31,7 @@ func TestXrayBridge_ProcessDirectFlowsMeetTheBlocks(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := &CoreController{}
-	forceDirect, err := x.newXrayBridgeProxy(inst, xrayconfig.ForceDirectTag, sniffing, x.sessionGen.Load())
-	if err != nil {
-		t.Fatal(err)
-	}
+	forceDirect := newXrayEntry(t, x, inst, xrayconfig.ForceDirectTag, sniffing)
 	if got := sniffFlow(t, forceDirect, net.ParseIP("198.51.100.9"), 443, "tls", "blocked.test", seen); got != "none" {
 		t.Errorf("process-direct flow naming blocked.test -> %s, want it blocked", got)
 	}
@@ -45,7 +42,7 @@ func TestXrayBridge_ProcessDirectFlowsMeetTheBlocks(t *testing.T) {
 
 // A name no block names, but which resolves to an address a block holds, is
 // refused for a process-direct app too.
-func TestXrayBridge_ProcessDirectFlowsMeetAddressBlocksByName(t *testing.T) {
+func TestXrayTunLayer_ProcessDirectFlowsMeetAddressBlocksByName(t *testing.T) {
 	seen := make(chan string, 8)
 	socksPort := socksRecorder(t, seen)
 	directPort := directRecorder(t, "127.0.0.6", seen)
@@ -79,14 +76,8 @@ func TestXrayBridge_ProcessDirectFlowsMeetAddressBlocksByName(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := &CoreController{}
-	app, err := x.newXrayBridgeProxy(inst, xrayconfig.AppTrafficTag, sniffing, x.sessionGen.Load())
-	if err != nil {
-		t.Fatal(err)
-	}
-	forceDirect, err := x.newXrayBridgeProxy(inst, xrayconfig.ForceDirectTag, sniffing, x.sessionGen.Load())
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := newXrayEntry(t, x, inst, xrayconfig.AppTrafficTag, sniffing)
+	forceDirect := newXrayEntry(t, x, inst, xrayconfig.ForceDirectTag, sniffing)
 	for name, want := range map[string]string{"blocked-address.test": "none", "open-address.test": "direct:127.0.0.6"} {
 		ip := fakeAnswer(t, app, name, D.TypeA)
 		if ip == nil {

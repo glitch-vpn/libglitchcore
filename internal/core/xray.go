@@ -11,13 +11,11 @@ import (
 	"runtime"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/xraydialer"
-	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 	"github.com/xtls/xray-core/common/geodata"
 	xrayNet "github.com/xtls/xray-core/common/net"
 	"github.com/xtls/xray-core/common/session"
@@ -154,8 +152,6 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		return err
 	}
 
-	// Master switch off (default) holds tun2socks silent, whatever the connect logLevel.
-	tun2socksLogLevel := xrayconfig.Tun2socksLogLevel(logLevel, atomic.LoadInt32(&statusVerbosity) >= 0)
 	var cfg xrayConf.Config
 
 	log.Printf("[Xray] Parsing link(s)")
@@ -163,8 +159,7 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 	routing := o.routing
 	// Windows: direct egress must bind the physical NIC (IP_UNICAST_IF), else it
 	// loops back through the TUN - a source-IP bind is not enough.
-	routing.DirectSendThrough = physicalInterfaceIP()
-	routing.DirectInterface = physicalInterfaceName()
+	routing.DirectInterface, routing.DirectSendThrough = xrayDirectEgress()
 	ds, ok := xrayconfig.NormalizeDomainStrategy(routing.DomainStrategy)
 	if !ok {
 		return fmt.Errorf("[Xray] invalid domainStrategy %q (want asis|ipifnonmatch|ipondemand)", routing.DomainStrategy)
@@ -279,39 +274,18 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		x.xrayRollback()
 		return fmt.Errorf("[Xray] sniffing: %w", err)
 	}
-	appProxy, err := x.newXrayBridgeProxy(x.xrayCoreInstance, xrayconfig.AppTrafficTag, sniffing, mark)
-	if err != nil {
-		x.xrayRollback()
-		return fmt.Errorf("[Xray] bridge: %w", err)
-	}
-	var forceProxy t2sproxy.Proxy
-	if routingHasForceProxy(routing) {
-		if forceProxy, err = x.newXrayBridgeProxy(x.xrayCoreInstance, xrayconfig.ForceProxyTag, sniffing, mark); err != nil {
-			x.xrayRollback()
-			return fmt.Errorf("[Xray] bridge: %w", err)
-		}
-	}
-
-	var forceDirect t2sproxy.Proxy
-	if routingHasForceDirect(routing) {
-		if forceDirect, err = x.newXrayBridgeProxy(x.xrayCoreInstance, xrayconfig.ForceDirectTag, sniffing, mark); err != nil {
-			x.xrayRollback()
-			return fmt.Errorf("[Xray] bridge: %w", err)
-		}
-	}
-
-	log.Println("[Xray] Starting tun2socks")
-	if err := x.startTun2socks(tun2socksParams{
-		proxy:       appProxy,
-		forceProxy:  forceProxy,
-		forceDirect: forceDirect,
-		tunFd:       tun.take(),
-		serverIPv4s: serverDialIPv4s,
-		dnsServer:   dnsServer,
-		logLevel:    tun2socksLogLevel,
+	log.Println("[Xray] Starting the TUN layer")
+	if err := x.startXrayTunLayer(xrayTunParams{
+		instance:    x.xrayCoreInstance,
+		sniffing:    sniffing,
 		routing:     routing,
+		mark:        mark,
+		tunFd:       tun.take(),
+		serverHosts: serverDialIPv4s,
+		dnsServer:   dnsServer,
+		logLevel:    logLevel,
 	}); err != nil {
-		x.stopTun2socks()
+		x.stopXrayTunLayer()
 		x.xrayRollback()
 		return fmt.Errorf("[Xray] %w", err)
 	}
@@ -397,10 +371,10 @@ func (x *CoreController) xrayStop(stopGen int64) error {
 	return x.stopEngineInstance("xray", &x.xraySession, stopGen, x.xrayStopLocked)
 }
 
-// xrayStopLocked closes the bridge, the connections xray holds and the
+// xrayStopLocked closes the TUN layer, the connections xray holds and the
 // instance. The caller holds coreMutex.
 func (x *CoreController) xrayStopLocked() {
-	x.stopTun2socks()
+	x.stopXrayTunLayer()
 	x.endXrayLife()
 
 	if x.xraySession.running.Load() {

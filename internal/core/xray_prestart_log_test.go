@@ -42,7 +42,7 @@ func TestRegisterCoreLogHandler_TakesXrayLinesBeforeAnInstance(t *testing.T) {
 
 func newXrayInstanceForLogTest(t *testing.T) *xrayCore.Instance {
 	t.Helper()
-	res, err := xrayconfig.BuildConfig([]string{bridgeTestVlessLink}, xrayconfig.BalancerOptions{}, xrayconfig.RoutingProfile{}, "error")
+	res, err := xrayconfig.BuildConfig([]string{vlessTestLink}, xrayconfig.BalancerOptions{}, xrayconfig.RoutingProfile{}, "error")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -103,7 +103,7 @@ func TestPingDuringAXraySession_KeepsTheSessionsLogHandler(t *testing.T) {
 
 	pinger.Measure(pinger.Request{
 		Engine:    "xray",
-		Links:     []string{bridgeTestVlessLink},
+		Links:     []string{vlessTestLink},
 		ProbeURL:  "http://198.51.100.1/",
 		TimeoutMs: 800,
 	})

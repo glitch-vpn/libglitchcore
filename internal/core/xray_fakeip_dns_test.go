@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	D "github.com/miekg/dns"
-	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
@@ -21,12 +20,12 @@ import (
 // local networks, since a resolver on them is reached direct on purpose; the
 // recorder reports the address without connecting, so nothing listens there.
 // The direct resolver listens on loopback and reports what reached it. The
-// app reaches the instance through the bridge proxy. The direct resolver
+// app reaches the instance through the TUN layer's entry. The direct resolver
 // answers vk.ru with its own address and port, so a direct dial it resolved
 // completes against it: xray's dialer is one per process, and a dial left
 // retrying its lookup after the instance closes would resolve through the
 // next test's instance.
-func xrayFakeIPSession(t *testing.T, prof routing.Profile, filter []string) (app *xrayBridgeProxy, proxied, fromDevice chan string, directPort int) {
+func xrayFakeIPSession(t *testing.T, prof routing.Profile, filter []string) (app xrayEntry, proxied, fromDevice chan string, directPort int) {
 	t.Helper()
 	directPort, err := loopbackport.Pick()
 	if err != nil {
@@ -45,16 +44,16 @@ func xrayFakeIPSession(t *testing.T, prof routing.Profile, filter []string) (app
 	}
 	inst := startSniffInstanceDNS(t, prof, socksPort, dns)
 	x := &CoreController{}
-	return xrayAppProxy(t, x, inst), proxied, fromDevice, directPort
+	return xrayAppEntry(t, x, inst), proxied, fromDevice, directPort
 }
 
 // generalResolver is the general resolver's address: off the local networks.
 const generalResolver = "9.9.9.9"
 
-func sendQuery(t *testing.T, app *xrayBridgeProxy, name string, qtype uint16) {
+func sendQuery(t *testing.T, app xrayEntry, name string, qtype uint16) {
 	t.Helper()
 	resolver := &net.UDPAddr{IP: net.IPv4(1, 1, 1, 1), Port: 53}
-	pc, err := app.DialUDP(bridgeTestFlow(M.UDP, resolver))
+	pc, err := app.DialUDP(addrPortOf(resolver))
 	if err != nil {
 		t.Fatalf("DialUDP: %v", err)
 	}
@@ -69,13 +68,13 @@ func sendQuery(t *testing.T, app *xrayBridgeProxy, name string, qtype uint16) {
 
 // dialFakeIP asks fakedns for the name and dials the fake address: what xray
 // looks up to carry the flow is the lookup under test.
-func dialFakeIP(t *testing.T, app *xrayBridgeProxy, name string, port int) {
+func dialFakeIP(t *testing.T, app xrayEntry, name string, port int) {
 	t.Helper()
 	ip := fakeAnswer(t, app, name, D.TypeA)
 	if ip == nil {
 		t.Fatalf("no fake answer for %s", name)
 	}
-	conn, err := app.DialContext(context.Background(), bridgeTestFlow(M.TCP, &net.TCPAddr{IP: ip, Port: port}))
+	conn, err := app.DialTCP(context.Background(), addrPortOf(&net.TCPAddr{IP: ip, Port: port}))
 	if err != nil {
 		t.Fatalf("dial %s: %v", name, err)
 	}

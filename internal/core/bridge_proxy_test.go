@@ -1,10 +1,11 @@
-//go:build !no_xray
+//go:build !no_xray && with_tun2socks
 
 package core
 
 import (
 	"context"
 	"net"
+	"net/netip"
 	"path/filepath"
 	"testing"
 
@@ -38,9 +39,11 @@ func TestProcessSplitProxy_DirectFlowsGoToTheEngineForTheBlocks(t *testing.T) {
 		base:        base,
 		forceProxy:  force,
 		forceDirect: direct,
-		rules:       map[string]string{"direct.exe": routing.TargetDirect, "proxy.exe": routing.TargetProxy},
-		processName: func(*M.Metadata) (string, error) {
-			return filepath.Join(string(filepath.Separator), "apps", "Direct.exe"), nil
+		split: processSplit{
+			rules: map[string]string{"direct.exe": routing.TargetDirect, "proxy.exe": routing.TargetProxy},
+			processName: func(string, netip.AddrPort) (string, error) {
+				return filepath.Join(string(filepath.Separator), "apps", "Direct.exe"), nil
+			},
 		},
 	}
 	flow := bridgeTestFlow(M.TCP, &net.TCPAddr{IP: net.IPv4(198, 51, 100, 9), Port: 443})
@@ -54,9 +57,11 @@ func TestProcessSplitProxy_DirectFlowsGoToTheEngineForTheBlocks(t *testing.T) {
 func TestProcessSplitProxy_DirectFlowWithoutAForceDirectDialerIsRefused(t *testing.T) {
 	base := &namedProxy{}
 	split := &processSplitProxy{
-		base:        base,
-		rules:       map[string]string{"direct.exe": routing.TargetDirect},
-		processName: func(*M.Metadata) (string, error) { return "direct.exe", nil },
+		base: base,
+		split: processSplit{
+			rules:       map[string]string{"direct.exe": routing.TargetDirect},
+			processName: func(string, netip.AddrPort) (string, error) { return "direct.exe", nil },
+		},
 	}
 	flow := bridgeTestFlow(M.TCP, &net.TCPAddr{IP: net.IPv4(198, 51, 100, 9), Port: 443})
 	if _, err := split.DialContext(context.Background(), flow); err != errNoForceDirect {

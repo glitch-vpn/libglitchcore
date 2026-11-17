@@ -53,10 +53,7 @@ func TestXrayAccessTarget_NamesTheSniffedDomain(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := &CoreController{}
-	app, err := x.newXrayBridgeProxy(inst, xrayconfig.AppTrafficTag, sniffing, x.sessionGen.Load())
-	if err != nil {
-		t.Fatal(err)
-	}
+	app := newXrayEntry(t, x, inst, xrayconfig.AppTrafficTag, sniffing)
 
 	sniffFlow(t, app, net.ParseIP("198.51.100.9"), 443, "tls", "named.example", seen)
 	if got := recorder.last(); !strings.Contains(got, "tcp:named.example:443") {

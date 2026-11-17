@@ -8,7 +8,6 @@ import (
 	"net"
 	"testing"
 
-	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	xrayCore "github.com/xtls/xray-core/core"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
@@ -17,9 +16,9 @@ import (
 )
 
 // The TUN path's config: no inbound, the app's traffic routed by tag.
-func startXrayForBridge(t *testing.T, prof routing.Profile, dns dnsconfig.Config) *xrayCore.Instance {
+func startXrayInstance(t *testing.T, prof routing.Profile, dns dnsconfig.Config) *xrayCore.Instance {
 	t.Helper()
-	res, err := xrayconfig.BuildConfig([]string{bridgeTestVlessLink}, xrayconfig.BalancerOptions{}, prof, "none")
+	res, err := xrayconfig.BuildConfig([]string{vlessTestLink}, xrayconfig.BalancerOptions{}, prof, "none")
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
@@ -39,26 +38,23 @@ func startXrayForBridge(t *testing.T, prof routing.Profile, dns dnsconfig.Config
 	return inst
 }
 
-func xrayAppProxy(t *testing.T, x *CoreController, inst *xrayCore.Instance) *xrayBridgeProxy {
+func xrayAppEntry(t *testing.T, x *CoreController, inst *xrayCore.Instance) xrayEntry {
 	t.Helper()
 	sniffing, err := xrayconfig.AppSniffing(true, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	p, err := x.newXrayBridgeProxy(inst, xrayconfig.AppTrafficTag, sniffing, x.sessionGen.Load())
-	if err != nil {
-		t.Fatal(err)
-	}
+	p := newXrayEntry(t, x, inst, xrayconfig.AppTrafficTag, sniffing)
 	return p
 }
 
-func TestXrayBridge_CarriesTCPAndUDP(t *testing.T) {
-	inst := startXrayForBridge(t, routing.Profile{Mode: routing.ModeDirectAll}, dnsconfig.Config{Servers: []string{"1.1.1.1"}})
-	p := xrayAppProxy(t, &CoreController{}, inst)
+func TestXrayTunLayer_CarriesTCPAndUDP(t *testing.T) {
+	inst := startXrayInstance(t, routing.Profile{Mode: routing.ModeDirectAll}, dnsconfig.Config{Servers: []string{"1.1.1.1"}})
+	p := xrayAppEntry(t, &CoreController{}, inst)
 	requireTCPRoundTrip(t, p, tcpEcho(t), "ping")
 
 	echo := udpEcho(t)
-	pc, err := p.DialUDP(bridgeTestFlow(M.UDP, echo))
+	pc, err := p.DialUDP(addrPortOf(echo))
 	if err != nil {
 		t.Fatalf("DialUDP: %v", err)
 	}
@@ -68,11 +64,11 @@ func TestXrayBridge_CarriesTCPAndUDP(t *testing.T) {
 }
 
 // fake-ip: the app's :53 meets xray's DNS outbound through the app tag's rule.
-func TestXrayBridge_AnswersTheAppsDNSWithFakeIPs(t *testing.T) {
-	inst := startXrayForBridge(t, routing.Profile{}, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}})
-	p := xrayAppProxy(t, &CoreController{}, inst)
+func TestXrayTunLayer_AnswersTheAppsDNSWithFakeIPs(t *testing.T) {
+	inst := startXrayInstance(t, routing.Profile{}, dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}})
+	p := xrayAppEntry(t, &CoreController{}, inst)
 	resolver := &net.UDPAddr{IP: net.IPv4(1, 1, 1, 1), Port: 53}
-	pc, err := p.DialUDP(bridgeTestFlow(M.UDP, resolver))
+	pc, err := p.DialUDP(addrPortOf(resolver))
 	if err != nil {
 		t.Fatalf("DialUDP: %v", err)
 	}
@@ -80,18 +76,18 @@ func TestXrayBridge_AnswersTheAppsDNSWithFakeIPs(t *testing.T) {
 	requireFakeIPAnswer(t, pc, resolver, "198.19.")
 }
 
-func TestXrayBridge_RefusesAfterItsSessionEnds(t *testing.T) {
-	inst := startXrayForBridge(t, routing.Profile{Mode: routing.ModeDirectAll}, dnsconfig.Config{Servers: []string{"1.1.1.1"}})
+func TestXrayTunLayer_RefusesAfterItsSessionEnds(t *testing.T) {
+	inst := startXrayInstance(t, routing.Profile{Mode: routing.ModeDirectAll}, dnsconfig.Config{Servers: []string{"1.1.1.1"}})
 	x := &CoreController{}
-	p := xrayAppProxy(t, x, inst)
+	p := xrayAppEntry(t, x, inst)
 	x.clearSessionState()
-	if conn, err := p.DialContext(context.Background(), bridgeTestFlow(M.TCP, tcpEcho(t))); !errors.Is(err, errSessionEnded) {
+	if conn, err := p.DialTCP(context.Background(), addrPortOf(tcpEcho(t))); !errors.Is(err, errSessionEnded) {
 		if conn != nil {
 			_ = conn.Close()
 		}
 		t.Fatalf("tcp after the session ended: %v, want errSessionEnded", err)
 	}
-	if pc, err := p.DialUDP(bridgeTestFlow(M.UDP, udpEcho(t))); !errors.Is(err, errSessionEnded) {
+	if pc, err := p.DialUDP(addrPortOf(udpEcho(t))); !errors.Is(err, errSessionEnded) {
 		if pc != nil {
 			_ = pc.Close()
 		}

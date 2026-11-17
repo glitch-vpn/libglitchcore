@@ -50,12 +50,12 @@ func startMihomoBridgeThrough(t *testing.T, x *CoreController, prof routing.Prof
 	t.Helper()
 	mihomoTestHome(t)
 	in, b := mihomoBridgeInbound(&dns, prof)
-	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink}, in, mihomoconfig.Options{}, prof)
+	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink}, in, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
 	if socksPort > 0 {
-		target := mihomoconfig.Target([]string{bridgeTestVlessLink})
+		target := mihomoconfig.Target([]string{vlessTestLink})
 		proxy, err := adapter.ParseProxy(map[string]any{"name": target, "type": "socks5", "server": "127.0.0.1", "port": socksPort})
 		if err != nil {
 			t.Fatal(err)
@@ -125,7 +125,7 @@ func socksRelay(t *testing.T) int {
 func TestMihomoBridge_CarriesTCPAndUDP(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	app, _ := startMihomoBridge(t, &CoreController{})
-	requireTCPRoundTrip(t, app, tcpEcho(t), "pingeof")
+	requireTCPRoundTrip(t, bridgeEntry{app}, tcpEcho(t), "pingeof")
 
 	// One app port, two destinations: tun2socks opens a flow for each, and
 	// each must get its own replies.
@@ -142,7 +142,7 @@ func TestMihomoBridge_CarriesTCPAndUDP(t *testing.T) {
 	defer b.Close()
 	requireUDPRoundTrip(t, a, first, []byte("first"))
 	requireUDPRoundTrip(t, b, second, []byte("second"))
-	requireNoThirdPartyReply(t, app)
+	requireNoThirdPartyReply(t, bridgeEntry{app})
 }
 
 func TestMihomoBridge_AnswersTheAppsDNSInProcess(t *testing.T) {

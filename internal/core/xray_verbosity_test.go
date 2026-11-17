@@ -18,7 +18,7 @@ func TestXrayInstance_SeverityFollowsVerbosityAcrossSessions(t *testing.T) {
 	captureLogs(t, -1)
 	x := &CoreController{}
 	for session := 0; session < 2; session++ {
-		res, err := xrayconfig.BuildConfig([]string{bridgeTestVlessLink}, xrayconfig.BalancerOptions{}, routing.Profile{Mode: routing.ModeProxyAll}, xrayconfig.InstanceLogLevel)
+		res, err := xrayconfig.BuildConfig([]string{vlessTestLink}, xrayconfig.BalancerOptions{}, routing.Profile{Mode: routing.ModeProxyAll}, xrayconfig.InstanceLogLevel)
 		if err != nil {
 			t.Fatal(err)
 		}

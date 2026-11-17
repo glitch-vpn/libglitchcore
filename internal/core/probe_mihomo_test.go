@@ -76,10 +76,10 @@ func TestMihomoProbeDial_ALookupNeverLeavesFromTheDevice(t *testing.T) {
 // Only WireGuard and AmneziaWG find a name's address themselves; the rest send
 // the name to their server, so the probe is not pinned for them.
 func TestResolvesNamesLocally_OnlyWireGuardAndAmneziaWGLinksDo(t *testing.T) {
-	if mihomoconfig.ResolvesNamesLocally([]string{bridgeTestVlessLink, "hysteria2://p@h.example:443"}) {
+	if mihomoconfig.ResolvesNamesLocally([]string{vlessTestLink, "hysteria2://p@h.example:443"}) {
 		t.Fatal("a pool of VLESS and Hysteria2 reads as resolving names locally")
 	}
-	if !mihomoconfig.ResolvesNamesLocally([]string{bridgeTestVlessLink, "awg://AAAA#one"}) {
+	if !mihomoconfig.ResolvesNamesLocally([]string{vlessTestLink, "awg://AAAA#one"}) {
 		t.Fatal("a pool holding an AmneziaWG link reads as not resolving names locally")
 	}
 	if !mihomoconfig.ResolvesNamesLocally([]string{"wireguard://k@h:51820?publickey=p"}) {

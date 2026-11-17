@@ -2,4 +2,4 @@
 
 package core
 
-type bridgeState struct{}
+type tunLayerState struct{}

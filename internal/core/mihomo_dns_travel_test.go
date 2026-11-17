@@ -45,11 +45,11 @@ func bridgeQuery(t *testing.T, dns dnsconfig.Config, prof routing.Profile, withD
 		dns.DirectServers = []string{"tcp://127.0.0.2:" + strconv.Itoa(directPort)}
 	}
 	in, _ := mihomoBridgeInbound(&dns, prof)
-	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink}, in, mihomoconfig.Options{}, prof)
+	cfg, err := mihomoconfig.BuildConfig([]string{vlessTestLink}, in, mihomoconfig.Options{}, prof)
 	if err != nil {
 		t.Fatalf("BuildConfig: %v", err)
 	}
-	target := mihomoconfig.Target([]string{bridgeTestVlessLink})
+	target := mihomoconfig.Target([]string{vlessTestLink})
 	recorder, err := adapter.ParseProxy(map[string]any{"name": target, "type": "socks5", "server": "127.0.0.1", "port": socksPort})
 	if err != nil {
 		t.Fatal(err)

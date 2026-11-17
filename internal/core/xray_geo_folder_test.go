@@ -46,7 +46,7 @@ func routeInXraySession(t *testing.T, dir, ip string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res, err := xrayconfig.BuildConfig([]string{bridgeTestVlessLink}, xrayconfig.BalancerOptions{}, prof, "none")
+	res, err := xrayconfig.BuildConfig([]string{vlessTestLink}, xrayconfig.BalancerOptions{}, prof, "none")
 	if err != nil {
 		t.Fatal(err)
 	}

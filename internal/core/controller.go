@@ -65,17 +65,16 @@ const (
 )
 
 // CoreController: one engine at a time. Engine-typed fields live in embedded
-// xrayState/bridgeState so an excluded engine links none of its packages.
+// xrayState/tunLayerState so an excluded engine links none of its packages.
 type CoreController struct {
-	coreMutex          sync.Mutex
-	isTun2socksRunning atomic.Bool
-	xraySession        engineSession
-	mihomoSession      engineSession
-	statsMu            sync.Mutex
-	statsTicker        *time.Ticker
-	statsQuit          chan struct{}
-	statsDone          chan struct{}
-	connectedAtUnixMs  atomic.Int64
+	coreMutex         sync.Mutex
+	xraySession       engineSession
+	mihomoSession     engineSession
+	statsMu           sync.Mutex
+	statsTicker       *time.Ticker
+	statsQuit         chan struct{}
+	statsDone         chan struct{}
+	connectedAtUnixMs atomic.Int64
 	// atomic.Int32 holding a liveness.State.
 	linkState   atomic.Int32
 	linkProbeMs atomic.Int64
@@ -119,7 +118,7 @@ type CoreController struct {
 	selWatchDone    chan struct{}
 
 	xrayState
-	bridgeState
+	tunLayerState
 }
 
 func normalizedVersion(v string) string {

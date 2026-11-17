@@ -1,33 +1,20 @@
-//go:build !no_xray
+//go:build !no_xray && with_tun2socks
 
 package core
 
 import (
 	"context"
-	"errors"
-	"log"
 	"net"
-	"path/filepath"
+	"net/netip"
 	"runtime"
-	"strings"
-	"sync"
 
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 	t2sproxy "github.com/xjasonlyu/tun2socks/v2/proxy"
 
-	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
-	"github.com/glitch-vpn/libglitchcore/internal/procname"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
 var _ t2sproxy.Proxy = (*processSplitProxy)(nil)
-
-// A direct flow with no force-direct dialer is refused rather than sent
-// through the engine's tiers, where a proxy rule could tunnel it.
-var errNoForceDirect = errors.New("process split: no force-direct dialer")
-
-// A refused flow's error reaches the log, so it does not name the destination.
-var errProcessBlocked = errors.New("process split: blocked")
 
 // The owning process is resolved by source port before the flow reaches the
 // engine; unmatched flows fall through to base. A flow the rules send direct
@@ -37,36 +24,14 @@ type processSplitProxy struct {
 	base        t2sproxy.Proxy
 	forceProxy  t2sproxy.Proxy // always tunnels (may be nil)
 	forceDirect t2sproxy.Proxy // meets the blocks, then goes direct (may be nil)
-	rules       map[string]string
-	logged      sync.Map
-	// processName is the executable behind a flow; the host's lookup by source
-	// port when nil.
-	processName func(*M.Metadata) (string, error)
+	split       processSplit
 }
 
 func (p *processSplitProxy) decide(m *M.Metadata) string {
-	if m == nil || len(p.rules) == 0 {
+	if m == nil {
 		return ""
 	}
-	lookup := p.processName
-	if lookup == nil {
-		lookup = func(m *M.Metadata) (string, error) {
-			return procname.FindProcessName(m.Network.String(), m.SrcIP, int(m.SrcPort))
-		}
-	}
-	name, err := lookup(m)
-	if err != nil || name == "" {
-		if _, seen := p.logged.LoadOrStore("ERR", true); !seen {
-			logfmt.Warnf("[bridge] process-split: FindProcessName(%s %s:%d) failed: %v - per-process won't match", m.Network.String(), m.SrcIP, m.SrcPort, err)
-		}
-		return ""
-	}
-	exe := strings.ToLower(filepath.Base(name))
-	target := p.rules[exe]
-	if _, seen := p.logged.LoadOrStore(exe+"|"+target, true); !seen {
-		log.Printf("[bridge] process-split saw %s -> rule=%q (forceProxy=%v)", exe, target, p.forceProxy != nil)
-	}
-	return target
+	return p.split.target(m.Network.String(), netip.AddrPortFrom(m.SrcIP, m.SrcPort))
 }
 
 // proxyFor uses the always-tunnel proxy when present, else base
@@ -124,6 +89,6 @@ func sessionBridgeProxy(p tun2socksParams) t2sproxy.Proxy {
 		base:        p.proxy,
 		forceProxy:  p.forceProxy,
 		forceDirect: p.forceDirect,
-		rules:       rules,
+		split:       processSplit{rules: rules},
 	}
 }
