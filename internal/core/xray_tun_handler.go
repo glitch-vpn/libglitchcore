@@ -89,22 +89,51 @@ func (h *xrayTunHandler) serveTCP(in *xrayInbound, conn net.Conn, src, dst netip
 
 type xrayUDPKey struct{ src, dst netip.AddrPort }
 
+// xrayUDPQueueDatagrams is how many datagrams of one flow wait for its proxy;
+// the rest are dropped, as UDP allows.
+const xrayUDPQueueDatagrams = 64
+
 // xrayUDPFlow is one app socket's datagrams to one destination, as the bridge
-// pairs them: every reply reads as coming from dst.
+// pairs them: every reply reads as coming from dst. Its own goroutine opens
+// the flow in xray and writes what the queue holds, so the stack's delivery
+// goroutine never waits on a flow.
 type xrayUDPFlow struct {
-	link      *transport.Link
-	cancel    context.CancelFunc
-	idle      *time.Timer
-	closeOnce sync.Once
+	queue chan []byte
+	idle  *time.Timer
+	done  chan struct{}
+
+	mu     sync.Mutex
+	closed bool
+	link   *transport.Link
+	cancel context.CancelFunc
+}
+
+// attach gives the flow the link xray opened for it, or reports that the flow
+// has ended meanwhile.
+func (f *xrayUDPFlow) attach(link *transport.Link, cancel context.CancelFunc) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return false
+	}
+	f.link, f.cancel = link, cancel
+	return true
 }
 
 func (f *xrayUDPFlow) close() {
-	f.closeOnce.Do(func() {
-		f.idle.Stop()
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.closed {
+		return
+	}
+	f.closed = true
+	f.idle.Stop()
+	close(f.done)
+	if f.link != nil {
 		_ = common.Close(f.link.Writer)
 		_ = common.Interrupt(f.link.Reader)
 		f.cancel()
-	})
+	}
 }
 
 func (h *xrayTunHandler) NewPacket(_ context.Context, key netip.AddrPort, buffer *sbuf.Buffer, metadata SM.Metadata, init func(SN.PacketConn) SN.PacketWriter) {
@@ -118,17 +147,19 @@ func (h *xrayTunHandler) NewPacket(_ context.Context, key netip.AddrPort, buffer
 	h.sendDatagram(flowKey, flow, buffer.Bytes())
 }
 
-func (h *xrayTunHandler) sendDatagram(key xrayUDPKey, flow *xrayUDPFlow, datagram []byte) {
+// sendDatagram queues the datagram for the flow's goroutine and drops it when
+// the queue is full.
+func (h *xrayTunHandler) sendDatagram(_ xrayUDPKey, flow *xrayUDPFlow, datagram []byte) {
 	flow.idle.Reset(h.udpTimeout)
-	b := buf.NewWithSize(int32(len(datagram)))
-	_, _ = b.Write(datagram)
-	if err := flow.link.Writer.WriteMultiBuffer(buf.MultiBuffer{b}); err != nil {
-		h.dropUDPFlow(key, flow)
+	select {
+	case flow.queue <- append([]byte(nil), datagram...):
+	default:
 	}
 }
 
-// udpFlow is the flow for key, opened on its first datagram under the inbound
-// the process rules pick, or in when the caller names one.
+// udpFlow is the flow for key. A new one runs on its own goroutine, which
+// picks the inbound the process rules name, or uses in when the caller names
+// one, and opens the flow in xray.
 func (h *xrayTunHandler) udpFlow(key xrayUDPKey, in *xrayInbound, replies func() SN.PacketWriter) (*xrayUDPFlow, error) {
 	h.udpMu.Lock()
 	defer h.udpMu.Unlock()
@@ -138,10 +169,24 @@ func (h *xrayTunHandler) udpFlow(key xrayUDPKey, in *xrayInbound, replies func()
 	if h.x.sessionGen.Load() != h.mark {
 		return nil, errSessionEnded
 	}
+	flow := &xrayUDPFlow{queue: make(chan []byte, xrayUDPQueueDatagrams), done: make(chan struct{})}
+	flow.idle = time.AfterFunc(h.udpTimeout, func() { h.dropUDPFlow(key, flow) })
+	if h.udpFlows == nil {
+		h.udpFlows = make(map[xrayUDPKey]*xrayUDPFlow)
+	}
+	h.udpFlows[key] = flow
+	go h.runUDPFlow(key, flow, in, replies())
+	return flow, nil
+}
+
+// runUDPFlow opens the flow in xray and carries the queued datagrams into it
+// until the flow ends.
+func (h *xrayTunHandler) runUDPFlow(key xrayUDPKey, flow *xrayUDPFlow, in *xrayInbound, back SN.PacketWriter) {
+	defer h.dropUDPFlow(key, flow)
 	if in == nil {
 		var err error
 		if in, err = h.inboundFor("udp", key.src); err != nil {
-			return nil, err
+			return
 		}
 	}
 	dest := xrayAddrDestination(xrayNet.Network_UDP, key.dst)
@@ -149,16 +194,25 @@ func (h *xrayTunHandler) udpFlow(key xrayUDPKey, in *xrayInbound, replies func()
 	link, err := in.dispatcher.Dispatch(ctx, dest)
 	if err != nil {
 		cancel()
-		return nil, err
+		return
 	}
-	flow := &xrayUDPFlow{link: link, cancel: cancel}
-	flow.idle = time.AfterFunc(h.udpTimeout, func() { h.dropUDPFlow(key, flow) })
-	if h.udpFlows == nil {
-		h.udpFlows = make(map[xrayUDPKey]*xrayUDPFlow)
+	if !flow.attach(link, cancel) {
+		cancel()
+		return
 	}
-	h.udpFlows[key] = flow
-	go h.writeReplies(key, flow, replies())
-	return flow, nil
+	go h.writeReplies(key, flow, back)
+	for {
+		select {
+		case datagram := <-flow.queue:
+			b := buf.NewWithSize(int32(len(datagram)))
+			_, _ = b.Write(datagram)
+			if err := link.Writer.WriteMultiBuffer(buf.MultiBuffer{b}); err != nil {
+				return
+			}
+		case <-flow.done:
+			return
+		}
+	}
 }
 
 func (h *xrayTunHandler) writeReplies(key xrayUDPKey, flow *xrayUDPFlow, back SN.PacketWriter) {
