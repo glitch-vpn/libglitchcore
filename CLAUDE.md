@@ -89,6 +89,7 @@ internal/
   loopbackport/            # loopback ports free on TCP and UDP, for the tests
   routing/ dnsconfig/ logfmt/ conninspect/ procname/
 tools/gonotices/           # writes THIRD_PARTY_GO_MODULES.txt (make notices)
+third_party/nolzo/         # stub for github.com/rasky/go-lzo (GPL-2.0 only): refuses LZO
 Makefile, Dockerfile       # deploy builds (Docker)
 .github/workflows/         # ci (tag matrix + license guards), release
 wiki/                      # user-facing docs (GitHub wiki page names);

@@ -41,6 +41,10 @@ guards.
 [`THIRD_PARTY_GO_MODULES.txt`](THIRD_PARTY_GO_MODULES.txt) lists every Go module
 a release links, with its license text; it ships in the release zip.
 
+OpenVPN `comp-lzo` is not supported: mihomo's LZO decoder, `rasky/go-lzo`, is
+GPL-2.0 only, so `third_party/nolzo` replaces it and refuses LZO-compressed
+packets.
+
 ## Prebuilt binaries
 
 Wintun (`wintun.dll`, shipped with the Windows artifacts) is not built from

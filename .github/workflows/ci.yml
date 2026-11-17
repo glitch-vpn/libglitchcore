@@ -22,6 +22,8 @@ jobs:
 
   # The licence texts of the modules the release links are committed; a
   # dependency bump that moves them has to move the file with it.
+  # The same run fails when github.com/rasky/go-lzo (GPL-2.0 only) is linked
+  # from upstream instead of third_party/nolzo.
   notices:
     name: Go module notices
     runs-on: ubuntu-latest
@@ -31,6 +33,8 @@ jobs:
         with:
           go-version: '1.27.3'
       - run: make notices-check
+      - name: LZO stub refuses
+        run: cd third_party/nolzo && go test ./...
 
   # The service composition runs the engine inside the Windows service process;
   # dispatchCommand-level tests (geo assets crossing the IPC request) only
