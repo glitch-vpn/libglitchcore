@@ -1,4 +1,4 @@
-//go:build !no_mihomo && !no_xray
+//go:build !no_mihomo && !no_xray && with_tun2socks
 
 package core
 
@@ -15,7 +15,6 @@ import (
 
 	"github.com/metacubex/mihomo/hub/executor"
 	mihomoLog "github.com/metacubex/mihomo/log"
-	D "github.com/miekg/dns"
 	M "github.com/xjasonlyu/tun2socks/v2/metadata"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
@@ -23,31 +22,6 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
-
-// recordingResolver answers nothing and reports each name it is asked.
-func recordingResolver(t *testing.T) (addr string, asked <-chan string) {
-	t.Helper()
-	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = pc.Close() })
-	names := make(chan string, 16)
-	go func() {
-		buf := make([]byte, 4096)
-		for {
-			n, _, err := pc.ReadFrom(buf)
-			if err != nil {
-				return
-			}
-			var q D.Msg
-			if q.Unpack(buf[:n]) == nil && len(q.Question) > 0 {
-				names <- strings.TrimSuffix(q.Question[0].Name, ".")
-			}
-		}
-	}()
-	return pc.LocalAddr().String(), names
-}
 
 // A WireGuard outbound resolves the names of its flows inside its own tunnel:
 // the session's resolver is never asked from the device's own address. The

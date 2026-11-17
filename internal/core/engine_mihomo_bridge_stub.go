@@ -1,4 +1,4 @@
-//go:build !no_mihomo && no_xray
+//go:build !no_mihomo && (no_xray || !with_tun2socks)
 
 package core
 
@@ -10,7 +10,8 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
-// Stubs: mihomo-only builds never link tun2socks (native sing-tun everywhere).
+// Stubs: a build without the with_tun2socks tag (or without xray) runs mihomo on
+// its native sing-tun everywhere and never links the bridge for it.
 func (x *CoreController) mihomoUsesBridge(int) bool { return false }
 
 func mihomoBridgeInbound(*dnsconfig.Config, routing.Profile) (mihomoconfig.Inbound, *bridgeSetup) {

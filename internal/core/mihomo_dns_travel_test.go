@@ -1,4 +1,4 @@
-//go:build !no_mihomo && !no_xray
+//go:build !no_mihomo && !no_xray && with_tun2socks
 
 package core
 
@@ -6,7 +6,6 @@ import (
 	"net"
 	"strconv"
 	"testing"
-	"time"
 
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/hub/executor"
@@ -74,33 +73,6 @@ func bridgeQuery(t *testing.T, dns dnsconfig.Config, prof routing.Profile, withD
 	}
 	return seen, device
 }
-
-// requireQueryTravels waits for the first resolver reached and then, for a
-// second, lets the engine retry it, failing on any other destination.
-func requireQueryTravels(t *testing.T, proxied, fromDevice <-chan string, want string) {
-	t.Helper()
-	deadline := time.After(15 * time.Second)
-	for first := true; ; first = false {
-		var seen string
-		select {
-		case seen = <-proxied:
-		case seen = <-fromDevice:
-		case <-deadline:
-			if first {
-				t.Fatal("the query reached neither the proxy nor a resolver")
-			}
-			return
-		}
-		if seen != want {
-			t.Fatalf("a query reached %s, want %s", seen, want)
-		}
-		if first {
-			deadline = time.After(time.Second)
-		}
-	}
-}
-
-var normalMode = dnsconfig.Config{Mode: dnsconfig.ModeNormal}
 
 // With fake-ip off the bridge hands an app's query to mihomo's resolver, and
 // the resolver reaches its upstream through the proxy, never from the

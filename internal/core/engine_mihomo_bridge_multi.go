@@ -1,4 +1,4 @@
-//go:build !no_mihomo && !no_xray
+//go:build !no_mihomo && !no_xray && with_tun2socks
 
 package core
 
@@ -17,9 +17,10 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
 
-// Windows needs the tun2socks bridge - mihomo's Wintun conflicts with tun2socks'.
-// Android uses native sing-tun: through the bridge, mihomo's fake-ip stopped
-// resolving addresses (GLITCH_MIHOMO_ANDROID_BRIDGE=1 forces the bridge).
+// The with_tun2socks variant puts mihomo behind the bridge on Windows, so one
+// Wintun binding carries both engines. Android uses native sing-tun: through
+// the bridge, mihomo's fake-ip stopped resolving addresses
+// (GLITCH_MIHOMO_ANDROID_BRIDGE=1 forces the bridge).
 func (x *CoreController) mihomoUsesBridge(proxyPort int) bool {
 	if proxyPort > 0 {
 		return false

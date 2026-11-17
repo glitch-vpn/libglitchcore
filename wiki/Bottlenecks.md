@@ -149,6 +149,14 @@ in the order the resolvers gave them until one answers; a UDP flow is handed
 to the engine with the first of them. Domain and IP matchers honour tier order
 normally.
 
+On mihomo's own TUN (the main variant, Windows included) mihomo reads the app
+behind each flow, and the config writes the process rules ahead of the tiers in
+the same order: a blocked app is refused, an app sent direct meets every tier's
+block and then goes direct, an app sent to the VPN meets them and the local
+networks and then goes to the VPN. An address block does not meet a name there:
+mihomo checks it against the flow's address only, where the bridge resolved the
+name first.
+
 ## Windows
 
 * TUN needs elevation. Without the shipped system service the caller must run

@@ -1,4 +1,4 @@
-//go:build !no_mihomo && !no_xray
+//go:build !no_mihomo && !no_xray && with_tun2socks
 
 package core
 
@@ -28,18 +28,6 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
-
-// mihomo keeps cache.db open inside its home dir, so the dir outlives the test.
-func mihomoTestHome(t *testing.T) {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "glitch-mihomo-bridge-test")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ensureMihomoHome(dir); err != nil {
-		t.Fatal(err)
-	}
-}
 
 var bridgeTestProfile = routing.Profile{Mode: routing.ModeDirectAll, Tiers: []routing.Tier{{Proxy: []string{"process:app.exe"}}}}
 

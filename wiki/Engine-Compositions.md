@@ -35,8 +35,12 @@ More numbers, and how they were taken: [Benchmarks](Benchmarks).
 * **Protocol coverage.** WireGuard and AmneziaWG links (`awg://`,
   `wireguard://`, `wg://`, a raw `[Interface]` config) run on mihomo, so a
   build without it carries none of them.
-* **Data path.** The tun2socks bridge is linked when xray is in. A mihomo-only
-  build runs native sing-tun everywhere and comes out noticeably smaller.
+* **Data path.** One TUN layer per binary, chosen at build time. The main
+  variant runs mihomo on its own sing-tun on every platform, Windows included.
+  The build tag `with_tun2socks` selects the tun2socks bridge for mihomo on
+  Windows (and, with the Android switch, on Android) instead. xray is on the
+  bridge in both variants, so a build with xray links it. A mihomo-only build
+  never links the bridge and comes out noticeably smaller.
 * **Runtime discovery.** `CoreCapabilities()` reports the engines a given
   binary actually has, so one UI can drive several compositions without
   guessing.

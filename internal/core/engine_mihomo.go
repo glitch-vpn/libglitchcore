@@ -311,6 +311,32 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	return glitchCoreResultSuccess
 }
 
+// mihomoDesktopAdapterName is the adapter mihomo creates where no platform
+// hands it a TUN (Windows through Wintun, Linux).
+const mihomoDesktopAdapterName = "GlitchVPNMeta"
+
+// mihomoTunInbound is mihomo's own TUN. An fd is a platform's VpnService TUN
+// (Android), left as that platform sets it up. Without one mihomo creates the
+// adapter, and the user's MTU and UDP timeout (SetTun2SocksConfig) apply, as
+// they did on the bridge it replaces; with the adapter's own flows readable,
+// the process rules lead.
+func mihomoTunInbound(dns dnsconfig.Config, fd int) *mihomoconfig.TunInbound {
+	tin := &mihomoconfig.TunInbound{MTU: defaultTunMTU, DNS: dns}
+	if fd >= 0 {
+		// The start's copy: sing-tun closes the fd it's given on teardown,
+		// but ParcelFileDescriptor/NE still owns the original. Until
+		// ApplyConfig takes it, the start's done closes it; left open, it
+		// keeps the platform's VPN interface up after the plugin closes its
+		// own fd.
+		tin.FileDescriptor = fd
+		return tin
+	}
+	tin.Device = mihomoDesktopAdapterName
+	tin.MTU, tin.UDPTimeoutSec = currentTun2SocksConfig()
+	tin.ProcessFirst = true
+	return tin
+}
+
 func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts, mark int64) error {
 	engineStartGate("mihomo", mark)
 	x.coreMutex.Lock()
@@ -351,19 +377,11 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 		if len(dns.NormalizedServers("")) == 0 {
 			dns.Servers = []string{dnsconfig.DefaultResolver}
 		}
-		tin := &mihomoconfig.TunInbound{MTU: defaultTunMTU, DNS: dns}
+		tin := mihomoTunInbound(dns, tun.fd)
 		if tun.fd >= 0 {
-			// The start's copy: sing-tun closes the fd it's given on teardown,
-			// but ParcelFileDescriptor/NE still owns the original. Until
-			// ApplyConfig takes it, the start's done closes it; left open, it
-			// keeps the platform's VPN interface up after the plugin closes its
-			// own fd.
-			tin.FileDescriptor = tun.fd
 			// Android cmfa: seed mihomo's system resolver so bootstrap/proxy
 			// hostname resolution works (no-op elsewhere).
 			seedMihomoSystemDNS(plainDNSServers(dns))
-		} else {
-			tin.Device = "GlitchVPNMeta" // Linux desktop: mihomo creates the adapter
 		}
 		inbound = mihomoconfig.Inbound{Tun: tin}
 	}

@@ -1,4 +1,4 @@
-//go:build !no_mihomo && !no_xray
+//go:build !no_mihomo && !no_xray && with_tun2socks
 
 package core
 
