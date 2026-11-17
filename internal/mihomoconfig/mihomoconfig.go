@@ -862,6 +862,13 @@ func applyTun(raw *config.RawConfig, t *TunInbound, prof routing.Profile, target
 		raw.Tun.AutoRoute = true
 		raw.Tun.AutoDetectInterface = true
 		raw.Tun.StrictRoute = t.StrictRoute
+		if prof.LocalNetworks {
+			// Left off the TUN's routes, local networks take the physical
+			// adapter's default.
+			for _, cidr := range routing.LocalNetworkTunBypass {
+				raw.Tun.RouteExcludeAddress = append(raw.Tun.RouteExcludeAddress, netip.MustParsePrefix(cidr))
+			}
+		}
 		// sing-tun then gives the adapter its own DNS address, where the hijack
 		// answers, and the lowest interface metric, so Windows asks it first.
 		raw.Tun.DNSMode = "hijack"

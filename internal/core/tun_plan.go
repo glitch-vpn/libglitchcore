@@ -2,7 +2,11 @@
 
 package core
 
-import "net/netip"
+import (
+	"net/netip"
+
+	"github.com/glitch-vpn/libglitchcore/internal/routing"
+)
 
 // tunPlan is what the Windows TUN gets before traffic flows: computed here,
 // away from the Windows calls, so a session's profile can be checked against
@@ -17,7 +21,7 @@ type tunPlan struct {
 	// adapter would carry them out in the clear.
 	TunRoutes []netip.Prefix
 	// BypassRoutes go round the TUN through the physical gateway: the
-	// localNetworkBypass ranges, only when the profile keeps local networks
+	// routing.LocalNetworkTunBypass ranges, only when the profile keeps local networks
 	// direct.
 	BypassRoutes []netip.Prefix
 	// InterfaceMetric is the lowest, so Windows asks the TUN's resolvers before
@@ -50,7 +54,7 @@ func planTun(ipv6, localNetworks bool) tunPlan {
 		plan.TunRoutes = append(plan.TunRoutes, netip.MustParsePrefix(cidr))
 	}
 	if localNetworks {
-		for _, cidr := range localNetworkBypass {
+		for _, cidr := range routing.LocalNetworkTunBypass {
 			plan.BypassRoutes = append(plan.BypassRoutes, netip.MustParsePrefix(cidr))
 		}
 	}

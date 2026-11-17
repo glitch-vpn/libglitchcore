@@ -97,7 +97,7 @@ func xrayTunOptions(goos string, p xrayTunParams, servers []netip.Addr) (tun.Opt
 		options.Inet4RouteExcludeAddress = append(options.Inet4RouteExcludeAddress, netip.PrefixFrom(server, 32))
 	}
 	if p.routing.LocalNetworks {
-		for _, cidr := range localNetworkBypass {
+		for _, cidr := range routing.LocalNetworkTunBypass {
 			options.Inet4RouteExcludeAddress = append(options.Inet4RouteExcludeAddress, netip.MustParsePrefix(cidr))
 		}
 	}

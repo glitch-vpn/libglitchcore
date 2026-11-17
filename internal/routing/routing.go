@@ -58,6 +58,13 @@ var LocalNetworkCIDRs = []string{
 	"169.254.0.0/16", "127.0.0.0/8", "fc00::/7", "fe80::/10", "::1/128",
 }
 
+// LocalNetworkTunBypass is what stays off a TUN's routes when the profile keeps
+// local networks direct. Narrower than LocalNetworkCIDRs on purpose: the
+// carrier-grade NAT range (100.64/10) reaches overlay networks and ISP
+// equipment, not the user's LAN, and loopback and link-local never leave the
+// host.
+var LocalNetworkTunBypass = []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
+
 // Tier is one rule group; Steps gives the rules it is evaluated as.
 type Tier struct {
 	Block  []string `json:"block,omitempty"`

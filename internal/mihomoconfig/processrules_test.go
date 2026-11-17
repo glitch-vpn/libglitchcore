@@ -163,3 +163,32 @@ func TestBuildConfig_TunUDPTimeout(t *testing.T) {
 		t.Fatalf("udp timeout %d without one set, want mihomo's own (0)", unset.General.Tun.UDPTimeout)
 	}
 }
+
+// With local networks direct, the private ranges stay off the adapter's
+// routes, as on the other TUN layers; without, and on a TUN the platform
+// routes, nothing is excluded.
+func TestBuildConfig_TunKeepsLocalNetworksOffItsRoutes(t *testing.T) {
+	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=none"
+	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
+	excluded := func(tun *TunInbound, localNetworks bool) []string {
+		cfg, err := BuildConfig([]string{link}, Inbound{Tun: tun}, Options{}, routing.Profile{LocalNetworks: localNetworks})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, prefix := range cfg.General.Tun.RouteExcludeAddress {
+			out = append(out, prefix.String())
+		}
+		return out
+	}
+	desktop := &TunInbound{Device: "GlitchVPNMeta", DNS: dns}
+	if got := excluded(desktop, true); !slices.Equal(got, []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}) {
+		t.Errorf("local networks direct excluded %v, want the three private ranges", got)
+	}
+	if got := excluded(desktop, false); len(got) != 0 {
+		t.Errorf("local networks proxied excluded %v, want none", got)
+	}
+	if got := excluded(&TunInbound{FileDescriptor: 7, DNS: dns}, true); len(got) != 0 {
+		t.Errorf("an fd TUN excluded %v, want none: the platform routes it", got)
+	}
+}
