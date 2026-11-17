@@ -29,6 +29,8 @@ type xrayTunSession struct {
 	device  tun.Tun // nil when the caller owns it (tests)
 	stack   tun.Stack
 	handler *xrayTunHandler
+	// Frees desktopAdapterGate once the device's Close has returned.
+	releaseAdapter func()
 }
 
 func (s *xrayTunSession) close() {
@@ -36,6 +38,9 @@ func (s *xrayTunSession) close() {
 	s.handler.closeUDPFlows()
 	if s.device != nil {
 		_ = s.device.Close()
+	}
+	if s.releaseAdapter != nil {
+		s.releaseAdapter()
 	}
 }
 
@@ -162,19 +167,45 @@ func (x *CoreController) startXrayTunLayer(fdCopy *tunCopy, p xrayTunParams) err
 	if err != nil {
 		return err
 	}
-	device, err := tun.New(options)
+	device, releaseAdapter, err := openXrayTun(options)
 	if err != nil {
 		return fmt.Errorf("open tun: %w", err)
 	}
 	session, err := startXrayTunStack(device, options, handler)
 	if err != nil {
 		_ = device.Close()
+		releaseAdapter()
 		return fmt.Errorf("start tun stack: %w", err)
 	}
 	session.device = device
+	session.releaseAdapter = releaseAdapter
 	x.xrayTun = session
 	log.Println("[tun] sing-tun stack started")
 	return nil
+}
+
+// newTunDevice and tunLayerStopWait are the tests' seams: a device whose Close
+// blocks, and a stop that gives up sooner.
+var (
+	newTunDevice     = func(options tun.Options) (tun.Tun, error) { return tun.New(options) }
+	tunLayerStopWait = 5 * time.Second
+)
+
+// openXrayTun creates the device. A named adapter (no fd) waits on
+// desktopAdapterGate for the previous adapter's Close; release frees the gate
+// and is a no-op for an fd.
+func openXrayTun(options tun.Options) (device tun.Tun, release func(), err error) {
+	release = func() {}
+	if options.FileDescriptor == 0 {
+		if release, err = desktopAdapterGate.claim(desktopAdapterWait); err != nil {
+			return nil, nil, err
+		}
+	}
+	if device, err = newTunDevice(options); err != nil {
+		release()
+		return nil, nil, err
+	}
+	return device, release, nil
 }
 
 func (x *CoreController) stopXrayTunLayer() {
@@ -191,8 +222,8 @@ func (x *CoreController) stopXrayTunLayer() {
 	select {
 	case <-done:
 		log.Println("[tun] sing-tun stack stopped")
-	case <-time.After(5 * time.Second):
-		log.Println("[tun] sing-tun stack stop timed out after 5s")
+	case <-time.After(tunLayerStopWait):
+		log.Println("[tun] sing-tun stack stop timed out; the close carries on")
 	}
 }
 

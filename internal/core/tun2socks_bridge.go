@@ -79,6 +79,13 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 
 	logLevel := capTun2socksLogLevel(p.logLevel)
 	mtu, udpTimeoutSec := currentTun2SocksConfig()
+	if runtime.GOOS == "windows" {
+		release, err := desktopAdapterGate.claim(desktopAdapterWait)
+		if err != nil {
+			return fmt.Errorf("start tun2socks: %w", err)
+		}
+		x.desktopAdapterRelease = release
+	}
 	setBridgeProxy(sessionBridgeProxy(p))
 	key := &engine.Key{
 		Device:                   devURI,
@@ -96,6 +103,7 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 	startErr := engine.Start()
 	useTun2socksSink(logLevel)
 	if startErr != nil {
+		x.releaseDesktopAdapter()
 		setBridgeProxy(nil)
 		return fmt.Errorf("start tun2socks: %w", startErr)
 	}
@@ -116,9 +124,14 @@ func (x *CoreController) stopTun2socks() {
 		return
 	}
 	done := make(chan struct{})
+	release := x.desktopAdapterRelease
+	x.desktopAdapterRelease = nil
 	go func() {
 		engine.Stop()
 		close(done)
+		if release != nil {
+			release()
+		}
 	}()
 	select {
 	case <-done:

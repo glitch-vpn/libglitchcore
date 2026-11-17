@@ -70,6 +70,9 @@ type CoreController struct {
 	coreMutex         sync.Mutex
 	xraySession       engineSession
 	mihomoSession     engineSession
+	// Releases desktopAdapterGate for the adapter mihomo's native TUN or the
+	// tun2socks bridge holds; guarded by coreMutex.
+	desktopAdapterRelease func()
 	statsMu           sync.Mutex
 	statsTicker       *time.Ticker
 	statsQuit         chan struct{}

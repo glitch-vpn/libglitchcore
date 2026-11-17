@@ -391,6 +391,14 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	if bridge != nil {
 		bridge.adoptDirectBlocks(cfg, prof)
 	}
+	if inbound.Tun != nil && inbound.Tun.Device != "" {
+		release, err := desktopAdapterGate.claim(desktopAdapterWait)
+		if err != nil {
+			stopMihomoLogBridge()
+			return fmt.Errorf("[mihomo] %w", err)
+		}
+		x.desktopAdapterRelease = release
+	}
 	countMihomoDirect(cfg, &mihomoSessionTraffic)
 	mihomoSessionTraffic.startSession()
 
@@ -403,6 +411,7 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	applyMihomoConfig(cfg, inbound, bridge != nil, prof)
 	if bridge == nil && proxyPort <= 0 && !listener.GetTunConf().Enable {
 		mihomoTeardown()
+		x.releaseDesktopAdapter()
 		return fmt.Errorf("[mihomo] TUN listener failed to start (see mihomo logs)")
 	}
 	if bridge != nil {
@@ -550,6 +559,7 @@ func (x *CoreController) mihomoStopLocked() {
 	}
 	x.mihomoStopBridge()
 	mihomoTeardown()
+	x.releaseDesktopAdapter()
 	x.mihomoSession.running.Store(false)
 	log.Println("[mihomo] stopped")
 }

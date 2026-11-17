@@ -4,10 +4,11 @@ package core
 
 import "testing"
 
-// Both engines create the one desktop adapter. An engine's running flag stays
-// set until its stop has closed that adapter, and the other engine's start is
-// refused while it is set, so the second adapter is never created beside the
-// first.
+// The other engine's start is refused while an engine's stop is still pending
+// and accepted once it has finished. Both run in proxy mode, so no adapter
+// exists here: what keeps a start from creating the desktop adapter while the
+// last one's Close is running is desktopAdapterGate
+// (xray_tun_adapter_test.go).
 func TestEngineSwitch_NoStartBeforeTheOldEngineStopped(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	home := mihomoSessionHome(t)
