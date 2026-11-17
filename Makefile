@@ -205,7 +205,6 @@ notices:
 notices-check:
 	cd "$(CURDIR)"
 	go mod download
-	# On a CRLF checkout (core.autocrlf) go.sum differs from tidy's LF output; run it from an LF copy there.
 	go mod tidy -diff
 	fresh=$$(mktemp)
 	go run ./tools/gonotices $(NOTICES_FLAGS) -out "$$fresh"
