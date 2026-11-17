@@ -170,7 +170,9 @@ the flow when an address they give is blocked or they cannot answer.
   keeps local networks direct, are left out of the TUN's routes. A TUN that has
   no IPv6 address blocks IPv6 for that reason: with IPv6 off the TUN takes none.
   An echo request to an address beyond the TUN is dropped, so a ping shows no
-  latency that crossed no tunnel.
+  latency that crossed no tunnel. A ping of the TUN's own address is answered
+  by the operating system before it reaches the TUN, so nothing outside the
+  host sees that reply.
 * The service runs as LocalSystem, and its pipes admit LocalSystem, elevated
   administrators and the user at the console — or, with nobody there, the one
   user of an active remote session. Every command and every event subscriber
