@@ -474,9 +474,11 @@ func forceFlowRules(p routing.Profile, target string) []string {
 
 // directFlowRules is the sub-rule the force-direct flows enter: every tier's
 // block entries in tier order, then DIRECT. Only those flows see it. The
-// address rules keep no-resolve: the bridge checks a flow's name and every
-// address it resolves to against these lines itself, and hands the flow over
-// resolved (mihomoBridgeProxy).
+// address rules keep no-resolve: the dialer of these flows checks a flow's
+// name and every address it resolves to against these lines itself, and dials
+// only what passed (mihomoBridgeProxy in the tun2socks variant; on mihomo's own
+// TUN, the outbound that guardDirectAppAddressBlocks swaps in for the sub-rule's
+// address rules).
 func directFlowRules(p routing.Profile) []string {
 	var rules []string
 	for _, tier := range p.Tiers {

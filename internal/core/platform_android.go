@@ -6,10 +6,11 @@ package core
 #include <dlfcn.h>
 #include <stdint.h>
 
-// Relax fdsan from FATAL to WARN_ALWAYS (level 2; API 29+). tun2socks
-// double-closes the TUN fd (engine.Stop's FD.Close, then gvisor stack.Close ->
-// nic.remove -> FD.Close again); between the two the kernel recycles the fd for
-// a graphics fence, so the second close trips fdsan and aborts.
+// Relax fdsan from FATAL to WARN_ALWAYS (level 2; API 29+). The tun2socks
+// variant double-closes the TUN fd (engine.Stop's FD.Close, then gvisor
+// stack.Close -> nic.remove -> FD.Close again); between the two the kernel
+// recycles the fd for a graphics fence, so the second close trips fdsan and
+// aborts. The relaxation applies to every Android build.
 static void relax_fdsan() {
     typedef int (*set_error_level_fn)(int);
     set_error_level_fn fn = (set_error_level_fn)dlsym(RTLD_DEFAULT,

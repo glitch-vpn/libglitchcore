@@ -24,7 +24,7 @@ guards.
 |---|---|---|
 | Xray-core | MPL-2.0 | https://github.com/XTLS/Xray-core |
 | mihomo (Clash.Meta) | GPL-3.0 | https://github.com/MetaCubeX/mihomo |
-| tun2socks (fork of xjasonlyu/tun2socks) | MIT | https://github.com/glitch-vpn/tun2socks |
+| tun2socks (fork of xjasonlyu/tun2socks), in the `with_tun2socks` variant only | MIT | https://github.com/glitch-vpn/tun2socks |
 | wireguard/windows (tun/Wintun bindings) | MIT | https://git.zx2c4.com/wireguard-windows |
 | go-winio | MIT | https://github.com/microsoft/go-winio |
 | golang.org/x/net, golang.org/x/sys | BSD-3-Clause | https://go.googlesource.com |
@@ -33,7 +33,7 @@ guards.
 
 | Component | License | Source |
 |---|---|---|
-| sing, sing-tun and other sing-* modules (metacubex forks, via mihomo, and as the TUN layer of the main variant) | GPL-3.0-or-later | https://github.com/MetaCubeX |
+| sing, sing-tun and other sing-* modules (metacubex forks, via mihomo, and as the TUN layer of the main variant) | GPL-3.0-or-later | https://github.com/MetaCubeX (sing-tun: https://github.com/glitch-vpn/sing-tun) |
 | mipstack (via mihomo) | MPL-2.0 | https://github.com/metacubex/mipstack |
 | wireguard-go | MIT | https://git.zx2c4.com/wireguard-go |
 | gVisor (netstack) | Apache-2.0 | https://github.com/google/gvisor |

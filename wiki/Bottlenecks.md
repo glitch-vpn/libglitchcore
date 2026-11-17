@@ -79,9 +79,9 @@ set by the app process would not.
   (`default-nameserver`), not mihomo's own four. A direct app's names do
   reach the proxy on xray, whose router lookups under
   `ipifnonmatch`/`ipondemand` in `proxy-all` precede the route; on mihomo the
-  bridge resolves them through `direct-nameserver` before an address block
-  checks them, so they stay direct, and a name a block names is refused
-  before any lookup. A server's own hostname
+  direct app's flow looks the name up once through `direct-nameserver` and
+  checks the address blocks against what it gets, so the names stay direct,
+  and a name a block names is refused before any lookup. A server's own hostname
   is resolved by the system resolver, from the device, on both engines: it
   has to be reached before anything can travel through it.
 * **A WireGuard or AmneziaWG outbound resolves inside its tunnel** with the
@@ -141,13 +141,14 @@ under an inbound of its own, where every tier's block meets it first. A direct
 app's own DNS queries are not intercepted, so it keeps its own resolver: a
 block by name meets its flows through content sniffing, and through queries it
 sends the system resolver, which answer with fake IPs. On mihomo an address
-block meets a name at every address DIRECT could dial it at: the bridge
-resolves the name through the direct resolvers before the engine sees the
-flow, checks each address against the blocks, and refuses the flow when one
-is blocked or the name cannot be answered. A TCP flow to such a name is dialed
-by the bridge through mihomo's DIRECT outbound, at the addresses that passed,
-in the order the resolvers gave them until one answers; a UDP flow is handed
-to the engine with the first of them. Domain and IP matchers honour tier order
+block meets a name at every address DIRECT could dial it at: the name is
+looked up once through the direct resolvers, each address is checked against
+the blocks, and the flow is refused when one is blocked or the name cannot be
+answered. A TCP flow to such a name is dialed at the addresses that passed, in
+the order the resolvers gave them until one answers, and at no other; a UDP
+flow is sent to the first of them. The main variant does this in an outbound
+of its own in front of mihomo's DIRECT, the tun2socks variant in the bridge
+before the engine sees the flow. Domain and IP matchers honour tier order
 normally.
 
 On mihomo's own TUN (the main variant, Windows included) mihomo reads the app
@@ -155,8 +156,9 @@ behind each flow, and the config writes the process rules ahead of the tiers in
 the same order: a blocked app is refused, an app sent direct meets every tier's
 block and then goes direct, an app sent to the VPN meets them and the local
 networks and then goes to the VPN. An address block meets a name an app sent
-direct arrives as: the core asks the direct resolvers for the name and refuses
-the flow when an address they give is blocked or they cannot answer.
+direct arrives as: the flow's outbound asks the direct resolvers for the name
+once, refuses the flow when an address they give is blocked or they cannot
+answer, and dials only the addresses it checked.
 
 ## Windows
 

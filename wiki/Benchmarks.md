@@ -74,8 +74,8 @@ number is published for a tunnel to one. What the TUN layer itself costs is
 measured with the server on the same machine, a handler that copies bytes in
 place of an engine, and TCP in both directions.
 
-sing-tun's gVisor stack ships with 20 KiB TCP buffers; the tun2socks bridge was
-configured with 4 MiB. On a real Linux TUN (WSL2, one process, loopback
+sing-tun's gVisor stack takes its TCP buffer sizes from the fork; the tun2socks
+bridge sets 4 MiB. On a real Linux TUN (WSL2, one process, loopback
 server, MiB/s, two runs each):
 
 | Buffers | down, 1 flow | down, 8 flows | up, 1 flow | up, 8 flows |

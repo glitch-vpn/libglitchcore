@@ -7,7 +7,7 @@ Rules for agents working in this repository. These override default behaviour.
 libglitchcore is a Go library built as a C shared library (`-buildmode=c-shared`)
 that runs VPN engines behind one FFI surface: **xray** (VLESS / VMess /
 Trojan / Shadowsocks / SOCKS5 / HTTP) and **mihomo**
-(Hysteria2, TUIC, AnyTLS, WireGuard and AmneziaWG, plus the bridge paths). It is
+(Hysteria2, TUIC, AnyTLS, WireGuard and AmneziaWG). It is
 consumed by the Flutter plugin
 `glitch-vpn/glitch_vpn_core_plugin`, which downloads release binaries pinned by
 version + sha256. Platforms: Android, Windows, Linux.
@@ -21,7 +21,7 @@ under `internal/`. One `CoreController`, one engine at a time.
 |---|---|
 | FFI surface | **Frozen by default.** New data flows ride the status port as new event codes; new knobs ride `EngineStart`'s `Opts` map. A new C export is a last resort: it changes `libglitchcore.h`, forces ffigen regen in the plugin (CI fails on drift) and needs a service IPC command on Windows |
 | Engine composition | Negative build tags `no_xray` / `no_mihomo`; the tagless build links everything. `with_gvisor` is always on in real builds and tests |
-| TUN layer | One per binary, never both. The main variant (no tag) runs both engines on our sing-tun fork: mihomo natively, xray fed from sing-tun's gVisor stack into its dispatcher, and links no tun2socks. The tag `with_tun2socks` puts both on the tun2socks bridge instead, with its own Wintun binding. "One Wintun binding" means one binding drives the adapter in a process: a package a build links but never calls (sing-tun's Wintun in the alternative, reached through mihomo's listener; `golang.zx2c4.com/wintun` in the main variant, reached through xray-core's TUN, WireGuard and masque packages, which no config the core builds uses) does not count. `make build TUN_LAYER=tun2socks` builds the alternative. CI builds and tests every composition in both variants |
+| TUN layer | One per binary, never both. The main variant (no tag) runs both engines on our sing-tun fork (`github.com/glitch-vpn/sing-tun`): mihomo natively, xray fed from sing-tun's gVisor stack into its dispatcher, and links no tun2socks; sing-tun's Wintun binding creates the adapter. The tag `with_tun2socks` puts both on the tun2socks bridge instead, with the bridge's own Wintun binding. "One Wintun binding" means one binding drives the adapter in a process: a package a build links but never calls (sing-tun's Wintun in the alternative, reached through mihomo's listener; `golang.zx2c4.com/wintun` in the main variant, reached through xray-core's TUN, WireGuard and masque packages, which no config the core builds uses) does not count. `make build TUN_LAYER=tun2socks` builds the alternative. CI builds and tests every composition in both variants |
 | Licensing | Repo is MIT; compositions with mihomo are GPL-3.0 combined works via `sing`, and so is every main-variant composition with xray, which links sing-tun. Only the xray-only tun2socks variant is GPL-free (the person, 2026-11-05). CI `go list -deps` guards keep excluded engines out of the link, and tun2socks out of the main variant |
 | Deploy builds | `make build` (Docker) only. Local mingw builds are a compile check, never a deliverable |
 | Windows elevation | Client library forwards engine commands to the `GlitchVpnCore` system service over named pipes (`useServiceIPC`); proxy mode stays in-process |
@@ -39,8 +39,8 @@ under `internal/`. One `CoreController`, one engine at a time.
    `notif_stats_android.go`). JNI and other native headers stay in `.c` files.
 3. **Engine-specific code lives in build-tagged files.** A file importing
    `xray-core` or `mihomo` packages carries the matching
-   `//go:build !no_*` tag. The CI matrix (3 compositions) and the license
-   guards must stay green.
+   `//go:build !no_*` tag. The CI matrix (3 compositions, each in both TUN-layer variants) and the
+   license guards must stay green.
 4. **Any test touching `internal/core` engine or stats paths calls
    `core.SetServiceIPC(false)` in `TestMain`.** `useServiceIPC` defaults to
    true on Windows; without this a test process attaches to the user's real
