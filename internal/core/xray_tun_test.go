@@ -203,7 +203,6 @@ func startTunRig(t *testing.T, inst tunInstance, prof routing.Profile, mtu uint3
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.split.rules = routing.ProcessRules(prof)
 	h.split.processName = processName
 	coreSide, appSide := pipe.New("", "", mtu)
 	session, err := startXrayTunStack(&pipeTun{ep: coreSide}, tunTestOptions(mtu), h)
@@ -756,4 +755,37 @@ func TestStopXrayTunLayer_WithoutASessionIsANoOp(t *testing.T) {
 	x := &CoreController{}
 	x.stopXrayTunLayer()
 	x.stopXrayTunLayer()
+}
+
+// An app a rule sends to the proxy by process tunnels even where the mode
+// goes direct, and every other app goes direct.
+func TestXrayTun_TunnelsAProcessARuleSendsToTheProxy(t *testing.T) {
+	prof := routing.Profile{
+		Mode:  routing.ModeDirectAll,
+		Tiers: []routing.Tier{{Proxy: []string{"process:tunneled.exe"}}},
+	}
+	server := tcpEcho(t)
+	proxied := make(chan string, 4)
+	exe := "tunneled.exe"
+	rig := startTunRig(t, startTunInstance(t, prof, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, socksRecorder(t, proxied), server), prof, tunTestMTU,
+		func(string, netip.AddrPort) (string, error) { return filepath.Join(string(filepath.Separator), "apps", exe), nil })
+
+	conn, err := rig.dialTCP(t, 443)
+	if err != nil {
+		t.Fatalf("dial as tunneled.exe: %v", err)
+	}
+	defer conn.Close()
+	_, _ = conn.Write([]byte("x"))
+	select {
+	case <-proxied:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the process a rule sends to the proxy did not reach it")
+	}
+
+	exe = "other.exe"
+	conn, err = rig.dialTCP(t, 443)
+	if err != nil {
+		t.Fatalf("dial as other.exe: %v", err)
+	}
+	requireTunEcho(t, conn, []byte("direct"))
 }
