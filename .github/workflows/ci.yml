@@ -24,18 +24,28 @@ jobs:
   # dispatchCommand-level tests (geo assets crossing the IPC request) only
   # compile with the service+windows tags, so they need a Windows runner.
   service-windows:
-    name: service (windows)
+    name: service (windows, ${{ matrix.layer }})
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - layer: main
+            tags: ''
+          - layer: tun2socks
+            tags: 'with_tun2socks'
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.27.3'
       - name: Test
-        run: go test -tags="service integration with_gvisor" ./internal/core/
+        run: go test -tags="service integration with_gvisor ${{ matrix.tags }}" ./internal/core/
         env:
           CGO_ENABLED: '0'
 
+  # Two variants, one TUN layer each: the main one (no tag, sing-tun) and the tun2socks
+  # bridge (with_tun2socks). Every composition is built and tested in both.
   check:
     name: ${{ matrix.name }}
     runs-on: ubuntu-latest
@@ -44,16 +54,31 @@ jobs:
       matrix:
         include:
           # amneziawg-go is a test-only peer: no composition links it.
-          - name: full (xray+mihomo)
+          - name: full (xray+mihomo), main
             tags: ''
+            race: true
+            forbidden: 'github.com/amnezia-vpn'
+          - name: full (xray+mihomo), tun2socks
+            tags: 'with_tun2socks'
+            race: true
             forbidden: 'github.com/amnezia-vpn'
           # Without mihomo nothing GPL links: no mihomo/sing (either fork) at all.
-          - name: xray-only (no_mihomo)
+          - name: xray-only (no_mihomo), main
             tags: 'no_mihomo'
             forbidden: 'github.com/metacubex|github.com/sagernet/sing|github.com/amnezia-vpn'
-          - name: mihomo-only (no_xray)
+          - name: xray-only (no_mihomo), tun2socks
+            tags: 'with_tun2socks no_mihomo'
+            forbidden: 'github.com/metacubex|github.com/sagernet/sing|github.com/amnezia-vpn'
+          # Without xray no tun2socks bridge links, in either variant: mihomo's
+          # own TUN is the only layer.
+          - name: mihomo-only (no_xray), main
             tags: 'no_xray'
             forbidden: 'github.com/xtls/xray-core|github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
+            wintunForbidden: 'golang.zx2c4.com/wintun'
+          - name: mihomo-only (no_xray), tun2socks
+            tags: 'with_tun2socks no_xray'
+            forbidden: 'github.com/xtls/xray-core|github.com/amnezia-vpn|github.com/xjasonlyu/tun2socks'
+            wintunForbidden: 'golang.zx2c4.com/wintun'
     steps:
       - uses: actions/checkout@v4
 
@@ -77,18 +102,32 @@ jobs:
           DART_SDK=$(dirname "$(dirname "$(which dart)")")
           CGO_CFLAGS="-I$DART_SDK/include" go vet -tags="${{ matrix.tags }} with_gvisor no_tailscale no_easytier no_zerotier" ./ ./internal/...
 
+      # The Windows-tagged files compile in every composition and variant.
+      - name: Vet (windows target)
+        run: GOOS=windows CGO_ENABLED=0 go vet -tags="${{ matrix.tags }} with_gvisor" ./internal/...
+
       - name: Test
         run: CGO_ENABLED=0 go test -tags="${{ matrix.tags }} with_gvisor" ./internal/...
 
       # -race needs cgo. The tests that run a live mihomo skip themselves
       # under it (internal/core/race_test.go).
       - name: Test (race detector)
-        if: matrix.tags == ''
-        run: CGO_ENABLED=1 go test -race -tags="with_gvisor" ./internal/...
+        if: matrix.race
+        run: CGO_ENABLED=1 go test -race -tags="${{ matrix.tags }} with_gvisor" ./internal/...
 
       - name: License guard (excluded engines stay out of the link)
         if: matrix.forbidden != ''
         run: |
           count=$(CGO_ENABLED=0 go list -tags="${{ matrix.tags }} with_gvisor" -deps ./internal/core/ ./internal/pinger/ ./internal/linkrelay/ | grep -cE "${{ matrix.forbidden }}" || true)
+          echo "forbidden packages linked: $count"
+          [ "$count" = "0" ]
+
+      # Wintun has one binding per binary. Without xray the only TUN layer is
+      # mihomo's sing-tun, which carries its own: the one tun2socks and xray's
+      # WireGuard bring must not link beside it.
+      - name: Wintun guard (windows target)
+        if: matrix.wintunForbidden != ''
+        run: |
+          count=$(GOOS=windows CGO_ENABLED=0 go list -tags="${{ matrix.tags }} with_gvisor" -deps ./internal/core/ ./internal/pinger/ ./internal/linkrelay/ | grep -cE "${{ matrix.wintunForbidden }}" || true)
           echo "forbidden packages linked: $count"
           [ "$count" = "0" ]
