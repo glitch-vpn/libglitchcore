@@ -88,6 +88,7 @@ internal/
   smoke/                   # end-to-end self-verification (integration tag)
   loopbackport/            # loopback ports free on TCP and UDP, for the tests
   routing/ dnsconfig/ logfmt/ conninspect/ procname/
+tools/gonotices/           # writes THIRD_PARTY_GO_MODULES.txt (make notices)
 Makefile, Dockerfile       # deploy builds (Docker)
 .github/workflows/         # ci (tag matrix + license guards), release
 wiki/                      # user-facing docs (GitHub wiki page names);
@@ -180,6 +181,8 @@ break it.
 ```bash
 make build [ENGINES=xray]           # deploy build, Docker
 make test                            # tests in the build container
+make notices                         # rewrite THIRD_PARTY_GO_MODULES.txt after a dependency change
+make notices-check                   # CI: that file is current and go.mod is tidy
 
 CGO_ENABLED=0 go test -tags=with_gvisor ./internal/...
 CGO_ENABLED=0 go test -tags="integration with_gvisor" ./internal/smoke/ -v

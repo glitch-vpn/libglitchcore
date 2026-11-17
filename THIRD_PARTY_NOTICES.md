@@ -38,7 +38,8 @@ guards.
 | wireguard-go | MIT | https://git.zx2c4.com/wireguard-go |
 | gVisor (netstack) | Apache-2.0 | https://github.com/google/gvisor |
 
-[`THIRD_PARTY_GO_MODULES.txt`](THIRD_PARTY_GO_MODULES.txt) lists every Go module a release links, with its license text; it ships in the release zip.
+[`THIRD_PARTY_GO_MODULES.txt`](THIRD_PARTY_GO_MODULES.txt) lists every Go module
+a release links, with its license text; it ships in the release zip.
 
 ## Prebuilt binaries
 

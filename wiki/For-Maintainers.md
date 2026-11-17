@@ -36,7 +36,11 @@ make test                     # unit + smoke in the container
 5. Windows service tests: `go test -tags="service integration with_gvisor"
    ./internal/core/`. They call the IPC dispatcher directly, so no SCM and no
    installed service are involved. CI runs this row on a Windows runner.
-6. The two review agents in `.claude/agents/` over the diff.
+6. After a dependency change: `make notices`, then commit `THIRD_PARTY_GO_MODULES.txt`
+   (the licence text of every Go module the release links; CI runs
+   `make notices-check`, which also fails on an untidy `go.mod`). The generator
+   is `tools/gonotices`; the release's tags come from the Makefile variables.
+7. The two review agents in `.claude/agents/` over the diff.
 
 ## Traps that have cost us time
 
