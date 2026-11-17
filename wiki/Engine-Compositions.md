@@ -40,7 +40,10 @@ More numbers, and how they were taken: [Benchmarks](Benchmarks).
   The build tag `with_tun2socks` selects the tun2socks bridge for mihomo on
   Windows (and, with the Android switch, on Android) instead. xray is on the
   bridge in both variants, so a build with xray links it. A mihomo-only build
-  never links the bridge and comes out noticeably smaller.
+  never links the bridge and comes out noticeably smaller. One layer drives the
+  adapter in a process: in the tun2socks variant sing-tun's Wintun binding is
+  linked through mihomo's listener and never loaded. `make build
+  TUN_LAYER=tun2socks` builds that variant.
 * **Runtime discovery.** `CoreCapabilities()` reports the engines a given
   binary actually has, so one UI can drive several compositions without
   guessing.
