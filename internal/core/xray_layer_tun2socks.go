@@ -12,7 +12,7 @@ import (
 
 // startXrayTunLayer puts the tun2socks bridge in front of the instance: one
 // bridge proxy per inbound tag a flow can enter by.
-func (x *CoreController) startXrayTunLayer(p xrayTunParams) error {
+func (x *CoreController) startXrayTunLayer(fdCopy *tunCopy, p xrayTunParams) error {
 	newProxy := func(tag string) (t2sproxy.Proxy, error) {
 		in, err := newXrayInbound(p.instance, tag, p.sniffing)
 		if err != nil {
@@ -35,6 +35,7 @@ func (x *CoreController) startXrayTunLayer(p xrayTunParams) error {
 			return err
 		}
 	}
+	p.tunFd = fdCopy.take()
 	return x.startTun2socks(tun2socksParams{
 		proxy:       appProxy,
 		forceProxy:  forceProxy,

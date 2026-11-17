@@ -275,12 +275,11 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		return fmt.Errorf("[Xray] sniffing: %w", err)
 	}
 	log.Println("[Xray] Starting the TUN layer")
-	if err := x.startXrayTunLayer(xrayTunParams{
+	if err := x.startXrayTunLayer(tun, xrayTunParams{
 		instance:    x.xrayCoreInstance,
 		sniffing:    sniffing,
 		routing:     routing,
 		mark:        mark,
-		tunFd:       tun.take(),
 		serverHosts: serverDialIPv4s,
 		dnsServer:   dnsServer,
 		logLevel:    logLevel,

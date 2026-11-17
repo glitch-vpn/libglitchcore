@@ -147,12 +147,15 @@ func lookupIPv4(ctx context.Context, host string) ([]net.IP, error) {
 }
 
 // startXrayTunLayer opens the platform TUN through sing-tun and runs the
-// gVisor stack on it, handing every flow to the instance.
-func (x *CoreController) startXrayTunLayer(p xrayTunParams) error {
+// gVisor stack on it, handing every flow to the instance. It takes the start's
+// copy of the platform's fd once the inbounds are built, so a start that fails
+// before then still closes it.
+func (x *CoreController) startXrayTunLayer(fdCopy *tunCopy, p xrayTunParams) error {
 	handler, err := x.newXrayTunHandler(p)
 	if err != nil {
 		return err
 	}
+	p.tunFd = fdCopy.take()
 	var servers []netip.Addr
 	if runtime.GOOS == "windows" {
 		servers = serverAddresses(p.serverHosts, lookupIPv4)

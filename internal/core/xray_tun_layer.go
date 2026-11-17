@@ -17,7 +17,8 @@ type xrayTunParams struct {
 	sniffing session.SniffingRequest
 	routing  routing.Profile
 	mark     int64
-	// tunFd is the start's own copy of the platform's TUN fd; unused on Windows.
+	// tunFd is the platform's TUN fd, taken from the start's own copy by the
+	// layer; unused on Windows.
 	tunFd int
 	// serverHosts are the proxy servers' addresses or names, kept off the TUN
 	// on Windows.

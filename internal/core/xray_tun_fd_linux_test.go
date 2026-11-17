@@ -57,7 +57,7 @@ func TestXrayTunLayer_CarriesTCPOverThePlatformsFd(t *testing.T) {
 	inst := startTunInstance(t, prof, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, 0, tcpEcho(t))
 	x := &CoreController{}
 	tunEnd, appEnd := fdPair(t)
-	if err := x.startXrayTunLayer(xrayTunParams{instance: inst.Instance, sniffing: session.SniffingRequest{}, routing: prof, mark: x.sessionGen.Load(), tunFd: tunEnd}); err != nil {
+	if err := x.startXrayTunLayer(&tunCopy{fd: tunEnd}, xrayTunParams{instance: inst.Instance, sniffing: session.SniffingRequest{}, routing: prof, mark: x.sessionGen.Load()}); err != nil {
 		t.Fatalf("start the layer: %v", err)
 	}
 	t.Cleanup(x.stopXrayTunLayer)
@@ -98,7 +98,7 @@ func TestXrayTunLayer_LeavesNoEventfdsOrFdsAcrossSessions(t *testing.T) {
 	session := func() {
 		tunEnd, appEnd := fdPair(t)
 		defer unix.Close(appEnd)
-		if err := x.startXrayTunLayer(xrayTunParams{instance: inst.Instance, routing: prof, mark: x.sessionGen.Load(), tunFd: tunEnd}); err != nil {
+		if err := x.startXrayTunLayer(&tunCopy{fd: tunEnd}, xrayTunParams{instance: inst.Instance, routing: prof, mark: x.sessionGen.Load()}); err != nil {
 			t.Fatalf("start the layer: %v", err)
 		}
 		x.stopXrayTunLayer()
