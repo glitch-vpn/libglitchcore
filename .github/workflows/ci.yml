@@ -155,6 +155,15 @@ jobs:
           echo "forbidden packages linked: $count"
           [ "$count" = "0" ]
 
+      # The main variant links xray-core's Wintun binding only as the stub
+      # in third_party/wintun: sing-tun is the one that loads a wintun.dll.
+      - name: Wintun binding is the stub (main variant, windows target)
+        if: matrix.mainVariant
+        run: |
+          lines=$(GOOS=windows CGO_ENABLED=0 go list -tags="${{ matrix.tags }} with_gvisor" -deps -f '{{.ImportPath}} {{.GoFiles}}' ./internal/core/ ./internal/pinger/ ./internal/linkrelay/ | grep '^golang.zx2c4.com/wintun ' || true)
+          echo "$lines"
+          [ -z "$lines" ] || [ "$lines" = "golang.zx2c4.com/wintun [stub_windows.go]" ]
+
       # The main variant links no tun2socks on any target, so no second
       # TUN layer and no bridge Wintun binding comes with it.
       - name: TUN layer guard (main variant, every target)
@@ -167,9 +176,8 @@ jobs:
           done
 
       # Only sing-tun's binding drives a Windows adapter in the main variant:
-      # the built binary holds no tun2socks symbol. golang.zx2c4.com/wintun
-      # stays linked through xray-core's TUN, WireGuard and masque packages;
-      # TestXrayTun_NeverLoadsTheWintunLibraryOnDisk shows it is never loaded.
+      # the built binary holds no tun2socks symbol, and the Wintun binding
+      # xray-core links is the stub (the step above).
       - name: Wintun symbols (windows binary, main full)
         if: matrix.name == 'full (xray+mihomo), main'
         run: |

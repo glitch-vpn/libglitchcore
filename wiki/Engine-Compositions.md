@@ -46,9 +46,11 @@ More numbers, and how they were taken: [Benchmarks](Benchmarks).
   comes out noticeably smaller. One layer drives the adapter in a process: in
   the tun2socks variant sing-tun's Wintun binding is linked through mihomo's
   listener and never loaded; in the main variant
-  `golang.zx2c4.com/wintun` is linked through xray-core's TUN, WireGuard and
-  masque packages, none of which a config the core builds reaches, and never
-  loaded. `make build TUN_LAYER=tun2socks` builds the bridge variant.
+  xray-core's TUN, WireGuard and masque packages link `golang.zx2c4.com/wintun`,
+  which `third_party/wintun` replaces with a stub that refuses every call.
+  Windows builds load Wintun from the `wintun.dll` beside the core: sing-tun
+  looks in the directory of the module that holds it, by full path, and the
+  release ships the file there. `make build TUN_LAYER=tun2socks` builds the bridge variant.
 * **Runtime discovery.** `CoreCapabilities()` reports the engines a given
   binary actually has, so one UI can drive several compositions without
   guessing.

@@ -59,6 +59,7 @@ WORKDIR /app
 # download step reads.
 COPY go.mod go.sum ./
 COPY third_party/nolzo/go.mod third_party/nolzo/go.mod
+COPY third_party/wintun/go.mod third_party/wintun/go.mod
 RUN go mod download
 COPY . .
 
