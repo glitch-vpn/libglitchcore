@@ -336,7 +336,7 @@ func TestXrayTun_SplitsByProcess(t *testing.T) {
 			if network != "tcp" || src.Addr() != tunTestApp {
 				return "", errors.New("unexpected flow")
 			}
-			return `C:\Program Files\App\` + exe, nil
+			return filepath.Join(string(filepath.Separator), "apps", exe), nil
 		})
 
 	conn, err := rig.dialTCP(t, 443)
