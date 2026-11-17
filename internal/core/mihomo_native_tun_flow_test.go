@@ -5,17 +5,20 @@ package core
 import (
 	"net"
 	"net/netip"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/metacubex/mihomo/adapter"
 	"github.com/metacubex/mihomo/component/process"
+	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub/executor"
 	mihomoLog "github.com/metacubex/mihomo/log"
 	mihomoTunnel "github.com/metacubex/mihomo/tunnel"
 
 	"github.com/glitch-vpn/libglitchcore/internal/dnsconfig"
+	"github.com/glitch-vpn/libglitchcore/internal/loopbackport"
 	"github.com/glitch-vpn/libglitchcore/internal/mihomoconfig"
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
 )
@@ -107,6 +110,82 @@ func TestMihomoNativeTun_RoutesByAppAndByName(t *testing.T) {
 			}
 			nativeTunFlow(t, f.dst, 443, f.app)
 			if got := flowOutcome(t, f.remote, 443, proxied, direct, routed); got != f.want {
+				t.Fatalf("went %s, want %s", got, f.want)
+			}
+		})
+	}
+}
+
+// An address block meets a name an app sent direct arrives as: the name is
+// looked up at the direct resolvers and the flow is refused when an address
+// they give is blocked, or when they cannot answer. A name whose addresses are
+// all open is dialled direct at them.
+func TestMihomoNativeTun_DirectAppNamedFlowMeetsAddressBlocks(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	mihomoTestHome(t)
+	t.Cleanup(mihomoTeardown)
+
+	proxied := make(chan string, 8)
+	socksPort := socksRecorder(t, proxied)
+	direct := make(chan string, 8)
+	openHost := net.ParseIP("127.0.0.6")
+	listenDirect(t, openHost, 443, direct, nil)
+	resolverPort, err := loopbackport.Pick()
+	if err != nil {
+		t.Fatal(err)
+	}
+	listenDirect(t, net.IPv4(127, 0, 0, 2), resolverPort, nil, answerOverTCP(map[string][]net.IP{
+		"blocked-address.test": {net.ParseIP("203.0.113.7")},
+		"mixed-address.test":   {openHost, net.ParseIP("203.0.113.8")},
+		"open-address.test":    {openHost},
+	}))
+
+	prof := routing.Profile{
+		Mode: routing.ModeProxyAll,
+		Tiers: []routing.Tier{
+			{Direct: []string{"process:direct.exe"}},
+			{Block: []string{"203.0.113.0/24"}},
+		},
+	}
+	dns := dnsconfig.Config{
+		Mode:          dnsconfig.ModeFakeIP,
+		Servers:       []string{"127.0.0.1:1"},
+		DirectServers: []string{"tcp://127.0.0.2:" + strconv.Itoa(resolverPort)},
+	}
+	cfg, err := mihomoconfig.BuildConfig([]string{bridgeTestVlessLink},
+		mihomoconfig.Inbound{Tun: mihomoTunInbound(dns, -1)}, mihomoconfig.Options{}, prof)
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	cfg.General.Tun.Enable = false
+	cfg.General.FindProcessMode = process.FindProcessOff
+	target := mihomoconfig.Target([]string{bridgeTestVlessLink})
+	recorder, err := adapter.ParseProxy(map[string]any{"name": target, "type": "socks5", "server": "127.0.0.1", "port": socksPort})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg.Proxies[target] = recorder
+	guardDirectAppAddressBlocks(cfg.SubRules, &mihomoDirectLookup)
+	executor.ApplyConfig(cfg, true)
+	mihomoDirectLookup.set(resolver.DirectHostResolver)
+
+	routed := mihomoLog.Subscribe()
+	t.Cleanup(func() { mihomoLog.UnSubscribe(routed) })
+
+	for _, f := range []struct{ name, want string }{
+		{"blocked-address.test", "block"},
+		{"mixed-address.test", "block"},
+		{"unresolvable.test", "block"},
+		{"open-address.test", "direct:" + openHost.String()},
+	} {
+		t.Run(f.name, func(t *testing.T) {
+			drain(proxied)
+			drain(direct)
+			for len(routed) > 0 {
+				<-routed
+			}
+			nativeTunFlow(t, fakeIPFor(t, f.name), 443, "direct.exe")
+			if got := flowOutcome(t, f.name, 443, proxied, direct, routed); got != f.want {
 				t.Fatalf("went %s, want %s", got, f.want)
 			}
 		})
