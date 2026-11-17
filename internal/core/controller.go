@@ -67,17 +67,17 @@ const (
 // CoreController: one engine at a time. Engine-typed fields live in embedded
 // xrayState/tunLayerState so an excluded engine links none of its packages.
 type CoreController struct {
-	coreMutex         sync.Mutex
-	xraySession       engineSession
-	mihomoSession     engineSession
+	coreMutex     sync.Mutex
+	xraySession   engineSession
+	mihomoSession engineSession
 	// Releases desktopAdapterGate for the adapter mihomo's native TUN or the
 	// tun2socks bridge holds; guarded by coreMutex.
 	desktopAdapterRelease func()
-	statsMu           sync.Mutex
-	statsTicker       *time.Ticker
-	statsQuit         chan struct{}
-	statsDone         chan struct{}
-	connectedAtUnixMs atomic.Int64
+	statsMu               sync.Mutex
+	statsTicker           *time.Ticker
+	statsQuit             chan struct{}
+	statsDone             chan struct{}
+	connectedAtUnixMs     atomic.Int64
 	// atomic.Int32 holding a liveness.State.
 	linkState   atomic.Int32
 	linkProbeMs atomic.Int64
