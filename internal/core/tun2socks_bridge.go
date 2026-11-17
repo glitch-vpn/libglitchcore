@@ -69,7 +69,7 @@ func setBridgeProxy(p t2sproxy.Proxy) {
 func (x *CoreController) startTun2socks(p tun2socksParams) error {
 	var devURI string
 	if runtime.GOOS == "windows" {
-		devURI = "tun://GlitchVPN"
+		devURI = "tun://" + desktopAdapterName
 	} else {
 		if p.tunFd < 0 {
 			return errors.New("no TUN fd")
@@ -104,7 +104,7 @@ func (x *CoreController) startTun2socks(p tun2socksParams) error {
 	log.Println("[tun2socks] started")
 
 	if runtime.GOOS == "windows" {
-		if err := configureTunV3("GlitchVPN", p.serverIPv4s, p.dnsServer, planTun(!p.routing.DisableIPv6, p.routing.LocalNetworks)); err != nil {
+		if err := configureTunV3(desktopAdapterName, p.serverIPv4s, p.dnsServer, planTun(!p.routing.DisableIPv6, p.routing.LocalNetworks)); err != nil {
 			return fmt.Errorf("configure tun: %w", err)
 		}
 	}
@@ -133,6 +133,6 @@ func (x *CoreController) stopTun2socks() {
 	tunnel.T().SetProxy(&reject.Reject{})
 	setBridgeProxy(nil)
 	if runtime.GOOS == "windows" {
-		cleanupTun("GlitchVPN")
+		cleanupTun(desktopAdapterName)
 	}
 }

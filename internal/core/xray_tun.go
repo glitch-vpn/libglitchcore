@@ -18,9 +18,6 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/xrayconfig"
 )
 
-// xrayTunName is the adapter's name on Windows.
-const xrayTunName = "GlitchVPN"
-
 // The TUN's own addresses, the pair mihomo's native TUN takes.
 var (
 	xrayTunPrefix4 = netip.MustParsePrefix("198.18.0.1/30")
@@ -73,7 +70,7 @@ func startXrayTunStack(device tun.Tun, options tun.Options, handler *xrayTunHand
 func xrayTunOptions(goos string, p xrayTunParams, servers []netip.Addr) (tun.Options, error) {
 	mtu, _ := currentTun2SocksConfig()
 	options := tun.Options{
-		Name:         xrayTunName,
+		Name:         desktopAdapterName,
 		MTU:          uint32(mtu),
 		Inet4Address: []netip.Prefix{xrayTunPrefix4},
 	}

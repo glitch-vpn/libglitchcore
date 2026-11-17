@@ -26,7 +26,7 @@ func processFirstProfile() routing.Profile {
 
 func desktopTun(processFirst bool) Inbound {
 	return Inbound{Tun: &TunInbound{
-		Device:       "GlitchVPNMeta",
+		Device:       "GlitchVPN",
 		ProcessFirst: processFirst,
 		DNS:          dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}},
 	}}
@@ -122,14 +122,14 @@ func TestProcessFirstRules_SortsNamesAndSkipsEmptyOutcomes(t *testing.T) {
 func TestBuildConfig_TunKeepsDNSInsideTheAdapter(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=none"
 	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
-	strict, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPNMeta", StrictRoute: true, DNS: dns}}, Options{}, routing.Profile{})
+	strict, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPN", StrictRoute: true, DNS: dns}}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if tun := strict.General.Tun; !tun.StrictRoute || tun.DNSMode != "hijack" || !tun.AutoRoute {
 		t.Fatalf("strict route %v, dns mode %q, auto-route %v, want strict, hijack and auto-routed", tun.StrictRoute, tun.DNSMode, tun.AutoRoute)
 	}
-	open, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPNMeta", DNS: dns}}, Options{}, routing.Profile{})
+	open, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPN", DNS: dns}}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,14 +148,14 @@ func TestBuildConfig_TunKeepsDNSInsideTheAdapter(t *testing.T) {
 func TestBuildConfig_TunUDPTimeout(t *testing.T) {
 	link := "vless://49c8fb89-9418-4ff4-8505-7a2772fc4b71@1.2.3.4:443?type=tcp&security=none"
 	dns := dnsconfig.Config{Mode: dnsconfig.ModeFakeIP, Servers: []string{"1.1.1.1"}}
-	set, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPNMeta", MTU: 1380, UDPTimeoutSec: 45, DNS: dns}}, Options{}, routing.Profile{})
+	set, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPN", MTU: 1380, UDPTimeoutSec: 45, DNS: dns}}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if set.General.Tun.UDPTimeout != 45 || set.General.Tun.MTU != 1380 {
 		t.Fatalf("udp timeout %d, mtu %d, want 45 and 1380", set.General.Tun.UDPTimeout, set.General.Tun.MTU)
 	}
-	unset, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPNMeta", DNS: dns}}, Options{}, routing.Profile{})
+	unset, err := BuildConfig([]string{link}, Inbound{Tun: &TunInbound{Device: "GlitchVPN", DNS: dns}}, Options{}, routing.Profile{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -181,7 +181,7 @@ func TestBuildConfig_TunKeepsLocalNetworksOffItsRoutes(t *testing.T) {
 		}
 		return out
 	}
-	desktop := &TunInbound{Device: "GlitchVPNMeta", DNS: dns}
+	desktop := &TunInbound{Device: "GlitchVPN", DNS: dns}
 	if got := excluded(desktop, true); !slices.Equal(got, []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}) {
 		t.Errorf("local networks direct excluded %v, want the three private ranges", got)
 	}

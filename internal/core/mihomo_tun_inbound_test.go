@@ -19,7 +19,7 @@ func TestMihomoTunInbound_AdapterTakesTheUserSettings(t *testing.T) {
 	t.Setenv("GLITCH_TUN2SOCKS_MTU", "1380")
 	t.Setenv("GLITCH_TUN2SOCKS_UDP_TIMEOUT_SEC", "45")
 	tin := mihomoTunInbound(dnsconfig.Config{}, -1)
-	if tin.Device != mihomoDesktopAdapterName || tin.FileDescriptor != 0 {
+	if tin.Device != desktopAdapterName || tin.FileDescriptor != 0 {
 		t.Fatalf("device %q, fd %d, want the desktop adapter and no fd", tin.Device, tin.FileDescriptor)
 	}
 	if tin.MTU != 1380 || tin.UDPTimeoutSec != 45 {
@@ -69,7 +69,7 @@ func TestMihomoTunInbound_BuildsANativeTunThatKeepsServersOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	tun := cfg.General.Tun
-	if !tun.Enable || tun.Device != mihomoDesktopAdapterName {
+	if !tun.Enable || tun.Device != desktopAdapterName {
 		t.Errorf("tun enabled %v on %q, want the desktop adapter", tun.Enable, tun.Device)
 	}
 	if !tun.AutoRoute || !tun.AutoDetectInterface {

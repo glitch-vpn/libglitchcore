@@ -87,7 +87,7 @@ func (t channelTun) NewEndpoint() (stack.LinkEndpoint, stack.NICOptions, error) 
 }
 
 func tunTestOptions(mtu uint32) tun.Options {
-	return tun.Options{Name: xrayTunName, MTU: mtu, Inet4Address: []netip.Prefix{xrayTunPrefix4}}
+	return tun.Options{Name: desktopAdapterName, MTU: mtu, Inet4Address: []netip.Prefix{xrayTunPrefix4}}
 }
 
 // tunApps is the app side of the TUN: a gVisor stack whose every packet

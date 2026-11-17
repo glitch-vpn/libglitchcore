@@ -295,10 +295,6 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 	return glitchCoreResultSuccess
 }
 
-// mihomoDesktopAdapterName is the adapter mihomo creates where no platform
-// hands it a TUN (Windows through Wintun, Linux).
-const mihomoDesktopAdapterName = "GlitchVPNMeta"
-
 // mihomoTunInbound is mihomo's own TUN. An fd is a platform's VpnService TUN
 // (Android), left as that platform sets it up. Without one mihomo creates the
 // adapter on any platform that has none from its caller, and the user's MTU
@@ -319,7 +315,7 @@ func mihomoTunInbound(dns dnsconfig.Config, fd int) *mihomoconfig.TunInbound {
 		tin.FileDescriptor = fd
 		return tin
 	}
-	tin.Device = mihomoDesktopAdapterName
+	tin.Device = desktopAdapterName
 	tin.MTU, tin.UDPTimeoutSec = currentTun2SocksConfig()
 	tin.ProcessFirst = true
 	tin.StrictRoute = runtime.GOOS == "windows"
