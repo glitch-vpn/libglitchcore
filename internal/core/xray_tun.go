@@ -86,6 +86,7 @@ func xrayTunOptions(goos string, p xrayTunParams, servers []netip.Addr) (tun.Opt
 	}
 	options.AutoRoute = true
 	options.StrictRoute = true
+	options.StrictRouteLocalNetworksDirect = p.routing.LocalNetworks
 	if !p.routing.DisableIPv6 {
 		options.Inet6Address = []netip.Prefix{xrayTunPrefix6}
 	}

@@ -674,6 +674,9 @@ func TestXrayTunOptions_WindowsLetSingTunOwnTheAdapterRoutesAndDNS(t *testing.T)
 	if len(options.Inet6Address) != 1 {
 		t.Errorf("IPv6 on: addresses %v, want the TUN's IPv6 one", options.Inet6Address)
 	}
+	if !options.StrictRouteLocalNetworksDirect {
+		t.Error("local networks direct, and the strict route does not let local IPv6 pass")
+	}
 	if options.FileDescriptor != 0 {
 		t.Errorf("a Windows TUN carries fd %d", options.FileDescriptor)
 	}
@@ -711,6 +714,9 @@ func TestXrayTunOptions_WindowsKeepsLocalNetworksOnTheTUNUnlessTheProfileSaysOth
 	}
 	if len(options.Inet6Address) != 0 {
 		t.Errorf("IPv6 off: addresses %v; strict route blocks IPv6 only while the TUN has none", options.Inet6Address)
+	}
+	if options.StrictRouteLocalNetworksDirect {
+		t.Error("local networks proxied, and the strict route lets local IPv6 pass")
 	}
 }
 
