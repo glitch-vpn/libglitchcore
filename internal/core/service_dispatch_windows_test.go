@@ -22,3 +22,22 @@ func TestServiceDispatch_SetConnInspector(t *testing.T) {
 		}
 	}
 }
+
+// Off with nothing ever turned on is a request the service answers without
+// touching a connection, with the result code in data.
+func TestServiceDispatch_SetHotspotSharingOff(t *testing.T) {
+	Initialize()
+	payload, _ := json.Marshal(map[string]string{"request": `{"on":false,"blockWhileTunnelDown":true,"blockedClients":[]}`})
+	resp := dispatchCommand(pipeCommand{Action: "set_hotspot_sharing", Payload: payload})
+	if !resp.OK {
+		t.Fatalf("set_hotspot_sharing: %s", resp.Error)
+	}
+	if data, _ := resp.Data.(map[string]int32); data["result"] != ResultSuccess {
+		t.Fatalf("result = %v, want %d", resp.Data, ResultSuccess)
+	}
+
+	bad, _ := json.Marshal(map[string]string{"request": `{`})
+	if resp := dispatchCommand(pipeCommand{Action: "set_hotspot_sharing", Payload: bad}); resp.OK {
+		t.Error("a request that is not JSON was accepted")
+	}
+}

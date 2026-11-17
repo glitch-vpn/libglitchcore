@@ -62,6 +62,10 @@ const (
 	EngineAlreadyRunning         = 505
 	EngineConflictOtherCore      = 506
 	EngineStopRejectedNotRunning = 507
+
+	// JSON hotspotSharingEvent: what the shared connection of a Windows
+	// hotspot is, and whether its clients are blocked.
+	HotspotSharingEvent = 600
 )
 
 // CoreController: one engine at a time. Engine-typed fields live in embedded
@@ -120,6 +124,10 @@ type CoreController struct {
 	selWatchQuit    chan struct{}
 	selWatchDone    chan struct{}
 
+	// The order that moves a hotspot's shared connection with the tunnel;
+	// nil until a client asks for it.
+	hotspot atomic.Pointer[hotspotSharing]
+
 	xrayState
 	tunLayerState
 }
@@ -134,6 +142,9 @@ func normalizedVersion(v string) string {
 
 func (x *CoreController) emitStatus(code int32, message string) {
 	x.updateConnectedAt(code)
+	if sharing := x.hotspot.Load(); sharing != nil {
+		sharing.notify(code)
+	}
 	if carriesErrorText(code) {
 		message = logfmt.Scrub(message)
 	}

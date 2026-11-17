@@ -36,6 +36,7 @@ func (x *CoreController) setServerSelection(sel *serverinfo.Selection) {
 // state) and (re)starts stats - a fresh client restores without connect().
 // False when no engine runs in this process.
 func (x *CoreController) replaySession() bool {
+	x.replayHotspot()
 	id := x.localRunningEngineID()
 	if id == "" {
 		return false

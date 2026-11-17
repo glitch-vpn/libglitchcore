@@ -244,6 +244,16 @@ func SetUseServiceIPC(enabled C.int) {
 	core.SetServiceIPC(enabled != 0)
 }
 
+//export PrepareHotspot
+func PrepareHotspot() C.int {
+	return C.int(core.PrepareHotspot())
+}
+
+//export SetHotspotSharing
+func SetHotspotSharing(cRequestJSON *C.char) C.int {
+	return C.int(core.SetHotspotSharing(C.GoString(cRequestJSON)))
+}
+
 //export ListenStats
 func ListenStats(delayMs C.int) C.int {
 	return C.int(core.StartStats(time.Duration(delayMs) * time.Millisecond))

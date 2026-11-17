@@ -769,6 +769,21 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 	case "replay_session":
 		globalController.replaySession()
 		return pipeResponse{OK: true}
+	case "prepare_hotspot":
+		return pipeResponse{OK: true, Data: map[string]int32{"result": prepareHotspot()}}
+	case "set_hotspot_sharing":
+		var payload struct {
+			Request string `json:"request"`
+		}
+		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
+			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid payload: %v", err)}
+		}
+		var request hotspotSharingRequest
+		if err := json.Unmarshal([]byte(payload.Request), &request); err != nil {
+			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid request: %v", err)}
+		}
+		result := runFFICall(func() int32 { return globalController.setHotspotSharing(request) })
+		return pipeResponse{OK: true, Data: map[string]int32{"result": result}}
 	default:
 		return pipeResponse{OK: false, Error: fmt.Sprintf("unknown action: %s", cmd.Action)}
 	}

@@ -352,6 +352,10 @@ func coreCapabilities() string {
 	}
 	sort.Strings(ids)
 
+	features := []string{"serverEvent", "ipEvent", "routeTargets", "linkRelay"}
+	if hotspotSupported {
+		features = append(features, "hotspotSharing")
+	}
 	payload := struct {
 		Engines  []string          `json:"engines"`
 		Versions map[string]string `json:"versions"`
@@ -359,7 +363,7 @@ func coreCapabilities() string {
 	}{
 		Engines:  ids,
 		Versions: engineVersions(),
-		Features: []string{"serverEvent", "ipEvent", "routeTargets", "linkRelay"},
+		Features: features,
 	}
 	b, err := json.Marshal(payload)
 	if err != nil {

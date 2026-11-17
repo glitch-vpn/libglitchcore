@@ -298,3 +298,29 @@ func serviceReplaySession() error {
 	_, err := callService("replay_session", nil)
 	return err
 }
+
+// A hotspot command answers with its result code in Data, since an elevated
+// refusal is not a transport failure.
+func serviceHotspotResult(action string, payload map[string]any) (int32, error) {
+	resp, err := callService(action, payload)
+	if err != nil {
+		return 0, err
+	}
+	var data struct {
+		Result int32 `json:"result"`
+	}
+	if len(resp.Data) > 0 {
+		if err := json.Unmarshal(resp.Data, &data); err != nil {
+			return 0, err
+		}
+	}
+	return data.Result, nil
+}
+
+func servicePrepareHotspot() (int32, error) {
+	return serviceHotspotResult("prepare_hotspot", nil)
+}
+
+func serviceSetHotspotSharing(request string) (int32, error) {
+	return serviceHotspotResult("set_hotspot_sharing", map[string]any{"request": request})
+}

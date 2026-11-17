@@ -25,3 +25,7 @@ func serviceListenStats(interval time.Duration) error { return nil }
 func serviceStopStats() error { return nil }
 
 func serviceReplaySession() error { return nil }
+
+func servicePrepareHotspot() (int32, error) { return 0, nil }
+
+func serviceSetHotspotSharing(request string) (int32, error) { return 0, nil }
