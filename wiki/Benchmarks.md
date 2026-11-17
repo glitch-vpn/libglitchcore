@@ -74,27 +74,30 @@ number is published for a tunnel to one. What the TUN layer itself costs is
 measured with the server on the same machine, a handler that copies bytes in
 place of an engine, and TCP in both directions.
 
-sing-tun's gVisor stack takes its TCP buffer sizes from the fork; the tun2socks
-bridge sets 4 MiB. On a real Linux TUN (WSL2, one process, loopback
-server, MiB/s, two runs each):
+The main variant's sing-tun fork gives each TCP flow a 256 KiB send buffer and a
+20 KiB receive buffer; stock sing-tun uses 20 KiB for both, and the tun2socks
+bridge sets 4 MiB. On a real Linux TUN (WSL2, one process, loopback server,
+MiB/s, three runs each):
 
 | Buffers | down, 1 flow | down, 8 flows | up, 1 flow | up, 8 flows |
 |---|---|---|---|---|
-| 20 KiB (sing-tun's own) | 113, 118 | 427, 433 | 196, 202 | 279, 279 |
-| 256 KiB | 271, 247 | 539, 518 | 181, 178 | 260, 243 |
-| 1 MiB | 239, 239 | 561, 530 | 175, 177 | 258, 256 |
-| 4 MiB | 240, 254 | 534, 534 | 166, 166 | 259, 244 |
+| 20 KiB both (stock) | 142, 119, 137 | 436, 441, 436 | 213, 213, 235 | 290, 269, 261 |
+| 256 KiB send, 20 KiB receive (the fork) | 258, 276, 289 | 584, 474, 484 | 217, 219, 224 | 264, 252, 300 |
 
-A download over one flow is half as fast at 20 KiB, and any buffer from 256 KiB
-up levels it; the other three columns are within noise or a little faster at
-20 KiB. Against a pipe standing in for the TUN, with no delay, the two stacks
-are level (66 MiB/s one flow down, 212 for eight, against the bridge's 50 and
-200); with a delay of 1 ms one way in front of each stack the 20 KiB window
-caps a flow near 7 MiB/s, where 4 MiB reaches 54 and the bridge 28.
+A download over one flow runs 2.0 to 2.4 times as fast as with stock buffers;
+eight flows gain 8 to 34 percent, and uploads are within noise. The gain comes
+from the send buffer: raising only the receive buffer leaves a download at the
+stock speed and costs an upload about 15 percent. The price is memory, at a
+peak heap of about 3.7 MiB per downloading flow against 1 MiB with stock
+buffers, measured over 20 flows. Against a pipe standing in for the TUN, with
+no delay, stock sing-tun and the bridge are level (66 MiB/s one flow down, 212
+for eight, against the bridge's 50 and 200); with a delay of 1 ms one way in
+front of each stack a 20 KiB window caps a flow near 7 MiB/s, where 4 MiB
+reaches 54 and the bridge 28.
 
 Method: `go build -tags with_gvisor` of a scratch program that opens
 `tun.New` with a /30 and a route for a test range, runs the stack with
 `tun.NewStack` (20 KiB) or with `tun.NewGVisorStackWithOptions` and
-`SetTransportProtocolOption` for the larger sizes, and dials the test range
+`SetTransportProtocolOption` for the other sizes, and dials the test range
 with plain sockets. A tunnel to a real server is bounded by that path; to
 size one, measure through proxy mode against your own exit.
