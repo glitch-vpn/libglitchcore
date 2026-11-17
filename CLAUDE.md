@@ -112,11 +112,30 @@ mode the same pairs traverse the event pipe unmodified. The registry:
 | 400/401 | LogEvent/LogError | logfmt JSON `{ts,level,component,message}`; 401 is level error or fatal; the only codes gated by verbosity |
 | 402 | ConnEvent | connection inspector record |
 | 500–507 | Engine lifecycle | text; `[<engine>] <what>` |
+| 600 | HotspotSharingEvent | `{"shared":"tunnel"\|"wifi"\|"none","blocked","error","restartOn":""\|"tunnel"\|"wifi"}` — Windows only, see *Hotspot sharing* |
 
 Adding a code means: const in `controller.go`, the same value in the plugin's
 `GlitchVpnCoreFfiEventCode`, payload struct with json tags, and a smoke
 subtest. Payload fields are add-only — the plugin parses leniently but renames
 break it.
+
+### Hotspot sharing (Windows)
+
+`PrepareHotspot()` and `SetHotspotSharing(json)` (`{"on","blockWhileTunnelDown","blockedClients":[IPv4…]}`,
+the whole wanted state, idempotent) are the two exports the plugin's hotspot uses; both answer 3 off
+Windows and go over the service pipe (`prepare_hotspot`, `set_hotspot_sharing`, a result code in `data`).
+`hotspot_sharing.go` is the order over a `hotspotOS` interface (tested over fakes); the Windows calls are
+`hotspot_windows.go` (HNetCfgClient.dll's undocumented sharing exports, loaded from System32; forwarding
+through winipcfg), `hotspot_wfp_windows.go` (the per-client block) and `hotspot_ics_windows.go` (the repair).
+The order follows the controller's own lifecycle events from `emitStatus`; proxy mode has no
+«GlitchVPN» adapter, so it is always "down".
+
+- ICS shares the physical connection, not the tunnel's adapter, while the tunnel is down: sharing the
+  tunnel's turns the hotspot off when it goes.
+- Every `HNetCfgStartSharing` turns forwarding on again, so the block is set after each, and a periodic
+  check puts it back when ICS resumes by itself.
+- Never restart `SharedAccess` while a hotspot runs: it turns the hotspot off. `PrepareHotspot` refuses.
+- `INetSharingManager` answers an elevated caller only; the repair needs the service or an elevated process.
 
 ### Controller concurrency
 
