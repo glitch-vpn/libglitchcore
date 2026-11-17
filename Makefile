@@ -7,6 +7,7 @@
 # Host targets (run these):
 #   make build                     full composition (xray+mihomo), all platforms
 #   make build ENGINES=xray         any engine subset (comma/space separated)
+#   make build TUN_LAYER=tun2socks  the variant on the tun2socks bridge (default: singtun)
 #   make test                      unit + integration smoke tests (in the container)
 #   make image                     (re)build the Docker toolchain image only
 #   make clean                     remove build_output
@@ -27,6 +28,9 @@ WINTUN_VERSION := 0.14.1
 # Engine composition (comma/space separated subset of: xray mihomo).
 ENGINES ?= xray,mihomo
 
+# TUN layer variant: singtun (the main one) or tun2socks (build tag with_tun2socks).
+TUN_LAYER ?= singtun
+
 # The release tag stamped into the library; the release workflow passes it.
 CORE_VERSION ?= $(or $(shell git describe --tags --always 2>/dev/null),unknown)
 
@@ -44,6 +48,7 @@ help:
 	@echo "libglitchcore build:"
 	@echo "  make build                     full native libs (all platforms, via Docker)"
 	@echo "  make build ENGINES=xray         any engine subset"
+	@echo "  make build TUN_LAYER=tun2socks  the tun2socks-bridge variant"
 	@echo "  make test                      unit + smoke tests (via Docker)"
 	@echo "  make image                     rebuild the Docker toolchain image"
 	@echo "  make clean                     remove build_output"
@@ -63,6 +68,7 @@ build: image
 	  -v "$(CURDIR):/app" \
 	  -v "$(CURDIR)/build_output:/app/build_output" \
 	  -e GLITCH_ENGINES="$(ENGINES)" \
+	  -e GLITCH_TUN_LAYER="$(TUN_LAYER)" \
 	  -e GLITCH_CORE_VERSION="$(CORE_VERSION)" \
 	  $(IMAGE) ffi
 
@@ -71,6 +77,7 @@ test: image
 	  -v "$(CURDIR):/app" \
 	  -v "$(CURDIR)/build_output:/app/build_output" \
 	  -e GLITCH_ENGINES="$(ENGINES)" \
+	  -e GLITCH_TUN_LAYER="$(TUN_LAYER)" \
 	  $(IMAGE) run-tests
 
 clean:
@@ -107,6 +114,11 @@ ffi:
 	if [ -z "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_mihomo"; fi
 	# mihomo outbounds no share link reaches; easytier alone embeds a ~7 MB WASM core.
 	if [ -n "$$HAS_MIHOMO" ]; then NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier"; fi
+	case "$${GLITCH_TUN_LAYER:-singtun}" in
+	  singtun) ;;
+	  tun2socks) NO_TAGS="$$NO_TAGS with_tun2socks" ;;
+	  *) echo "[ERR] unknown TUN layer $${GLITCH_TUN_LAYER} (valid: singtun tun2socks)"; exit 1 ;;
+	esac
 	# cmfa gates mihomo's Android package reader; only meaningful with mihomo in.
 	CMFA=""
 	if [ -n "$$HAS_MIHOMO" ]; then CMFA="cmfa"; fi
@@ -156,6 +168,11 @@ run-tests:
 	NO_TAGS=""
 	case " $$ENGINE_SET " in *" xray "*) ;; *) NO_TAGS="$$NO_TAGS no_xray" ;; esac
 	case " $$ENGINE_SET " in *" mihomo "*) NO_TAGS="$$NO_TAGS no_tailscale no_easytier no_zerotier" ;; *) NO_TAGS="$$NO_TAGS no_mihomo" ;; esac
+	case "$${GLITCH_TUN_LAYER:-singtun}" in
+	  singtun) ;;
+	  tun2socks) NO_TAGS="$$NO_TAGS with_tun2socks" ;;
+	  *) echo "[ERR] unknown TUN layer $${GLITCH_TUN_LAYER} (valid: singtun tun2socks)"; exit 1 ;;
+	esac
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=gcc CGO_CFLAGS="-I$$DART_SDK/include" \
 	  go test -tags="with_gvisor $$NO_TAGS" -count=1 -timeout 120s ./...
 	echo "[OK] Tests passed"
