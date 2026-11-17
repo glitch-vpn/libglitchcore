@@ -171,8 +171,17 @@ func checkReplacement(m *module) error {
 	return fmt.Errorf("%s is linked from upstream (replaced by %q); go.mod must replace it with %s", m.path, m.replacePath, want)
 }
 
+// carriesUpstreamCode lists modules replaced by a local directory that holds
+// another project's code in some build, so their licence is listed anyway.
+var carriesUpstreamCode = map[string]string{
+	"golang.zx2c4.com/wintun": "the release binaries link only third_party/wintun's stub, which refuses every call; its tun2socks variant builds WireGuard LLC's binding, copied there under this licence",
+}
+
 // isOwnCode reports whether go.mod replaces the module with a local directory.
 func isOwnCode(m *module) bool {
+	if _, ok := carriesUpstreamCode[m.path]; ok {
+		return false
+	}
 	replacement := filepath.ToSlash(m.replacePath)
 	return strings.HasPrefix(replacement, "./") || strings.HasPrefix(replacement, "../")
 }
@@ -244,6 +253,9 @@ func render(m *module) (string, error) {
 		fmt.Fprintf(&b, "Replaced by: %s\n", strings.TrimSpace(m.replacePath+" "+m.replaceVer))
 	}
 	fmt.Fprintf(&b, "Licence: %s\n", strings.Join(names, ", "))
+	if note, ok := carriesUpstreamCode[m.path]; ok {
+		fmt.Fprintf(&b, "Note:    %s\n", note)
+	}
 	for _, note := range notes {
 		fmt.Fprintf(&b, "Note:    %s\n", note)
 	}

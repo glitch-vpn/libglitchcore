@@ -165,3 +165,10 @@ func TestHeaderNamesOwnCodeInsteadOfListingIt(t *testing.T) {
 		t.Errorf("header =\n%s\nwant\n%s", got, want)
 	}
 }
+
+func TestReplacementCarryingUpstreamCodeIsListed(t *testing.T) {
+	wintun := &module{path: "golang.zx2c4.com/wintun", replacePath: "./third_party/wintun"}
+	if isOwnCode(wintun) {
+		t.Fatal("a replacement that holds upstream code is listed, not named as own code")
+	}
+}
