@@ -17,8 +17,12 @@ const hotspotUnsupported = 3
 
 // Sharing turned on, with no hotspot on this machine, says "none" and touches
 // no connection; a proxy-mode session beside it has no tunnel and moves
-// nothing; turning it off says so again.
+// nothing; turning it off says so again. A machine whose hotspot runs is left
+// alone: the test would share, block and stop it.
 func TestSmoke_HotspotSharingOnBesideProxySession(t *testing.T) {
+	if core.HotspotRunning() {
+		t.Skip("a hotspot runs on this machine")
+	}
 	core.Initialize()
 	ev := captureEvents(t)
 
@@ -43,7 +47,7 @@ func TestSmoke_HotspotSharingOnBesideProxySession(t *testing.T) {
 		t.Fatal(err)
 	}
 	if first.Shared != "none" {
-		t.Skip("a hotspot runs on this machine")
+		t.Fatalf("shared = %q with no hotspot running", first.Shared)
 	}
 	const off = `{"on":false,"blockWhileTunnelDown":false,"blockedClients":[]}`
 	turnedOff := false

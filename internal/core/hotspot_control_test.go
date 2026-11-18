@@ -2,19 +2,24 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
+	"math"
 	"sync"
 	"testing"
 	"time"
 )
 
-// A controller with a hotspot order over a fake OS answers the engine's
-// lifecycle events by itself, and its event reaches the status sink.
-func TestControllerMovesTheHotspotWithEngineEvents(t *testing.T) {
-	os := newFakeHotspotOS()
-	x := &CoreController{}
-	var mu sync.Mutex
-	var received []hotspotSharingEvent
-	arrived := make(chan struct{}, 16)
+// hotspotEvents collects the sharing events the status sink receives.
+type hotspotEvents struct {
+	t        *testing.T
+	mu       sync.Mutex
+	received []hotspotSharingEvent
+	arrived  chan struct{}
+}
+
+func captureHotspotEvents(t *testing.T) *hotspotEvents {
+	t.Helper()
+	events := &hotspotEvents{t: t, arrived: make(chan struct{}, 64)}
 	setStatusSink(func(code int32, message string) {
 		if code != HotspotSharingEvent {
 			return
@@ -24,59 +29,75 @@ func TestControllerMovesTheHotspotWithEngineEvents(t *testing.T) {
 			t.Errorf("event %q is not JSON: %v", message, err)
 			return
 		}
-		mu.Lock()
-		received = append(received, event)
-		mu.Unlock()
-		arrived <- struct{}{}
+		events.mu.Lock()
+		events.received = append(events.received, event)
+		events.mu.Unlock()
+		events.arrived <- struct{}{}
 	})
 	t.Cleanup(func() { setStatusSink(nil) })
+	return events
+}
+
+func (e *hotspotEvents) wait(want hotspotSharingEvent) {
+	e.t.Helper()
+	select {
+	case <-e.arrived:
+	case <-time.After(5 * time.Second):
+		e.t.Fatalf("no event; wanted %+v", want)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if got := e.received[len(e.received)-1]; got != want {
+		e.t.Fatalf("event = %+v, want %+v", got, want)
+	}
+}
+
+func (e *hotspotEvents) expectNone(within time.Duration) bool {
+	select {
+	case <-e.arrived:
+		return false
+	case <-time.After(within):
+		return true
+	}
+}
+
+// A controller with a hotspot order over a fake OS answers the engine's
+// lifecycle events by itself, and its event reaches the status sink.
+func TestControllerMovesTheHotspotWithEngineEvents(t *testing.T) {
+	os := newFakeHotspotOS()
+	x := &CoreController{}
+	events := captureHotspotEvents(t)
 
 	sharing := newHotspotSharing(os, func(payload string) { x.emitStatus(HotspotSharingEvent, payload) }, tunnelPhase(x.enginePhase.Load()))
 	sharing.useWorker(0)
 	t.Cleanup(sharing.close)
 	x.hotspot.Store(sharing)
 
-	waitEvent := func(want hotspotSharingEvent) {
-		t.Helper()
-		select {
-		case <-arrived:
-		case <-time.After(5 * time.Second):
-			t.Fatalf("no event; wanted %+v", want)
-		}
-		mu.Lock()
-		defer mu.Unlock()
-		if got := received[len(received)-1]; got != want {
-			t.Fatalf("event = %+v, want %+v", got, want)
-		}
-	}
-
 	if err := sharing.set(hotspotSharingRequest{On: true, BlockWhileTunnelDown: true}); err != nil {
 		t.Fatal(err)
 	}
-	waitEvent(hotspotSharingEvent{Shared: hotspotSharedWiFi, Blocked: true})
+	events.wait(hotspotSharingEvent{Shared: hotspotSharedNone, Blocked: true})
 
 	os.mu.Lock()
 	os.tunnel = testTunnel
 	os.mu.Unlock()
 	x.emitStatus(EngineConnected, "[Xray] Connected")
-	waitEvent(hotspotSharingEvent{Shared: hotspotSharedTunnel})
+	events.wait(hotspotSharingEvent{Shared: hotspotSharedTunnel})
 
 	x.emitStatus(EngineDisconnecting, "[Xray] Disconnecting")
 	os.mu.Lock()
 	os.tunnel = 0
 	os.mu.Unlock()
 	x.emitStatus(EngineDisconnected, "[Xray] Disconnected")
-	waitEvent(hotspotSharingEvent{Shared: hotspotSharedTunnel, Blocked: true})
+	events.wait(hotspotSharingEvent{Shared: hotspotSharedTunnel, Blocked: true})
 
 	x.emitStatus(StatsEvent, "{}")
-	select {
-	case <-arrived:
+	if !events.expectNone(100 * time.Millisecond) {
 		t.Error("a stats event moved the hotspot")
-	case <-time.After(100 * time.Millisecond):
 	}
 
 	x.replayHotspot()
-	waitEvent(hotspotSharingEvent{Shared: hotspotSharedTunnel, Blocked: true})
+	events.wait(hotspotSharingEvent{Shared: hotspotSharedTunnel, Blocked: true})
 }
 
 func TestSetHotspotSharingRejectsABadRequest(t *testing.T) {
@@ -90,6 +111,98 @@ func TestSetHotspotSharingRejectsABadRequest(t *testing.T) {
 		if got := SetHotspotSharing(request); got != hotspotResultBadRequest {
 			t.Errorf("SetHotspotSharing(%s) = %d, want %d", request, got, hotspotResultBadRequest)
 		}
+	}
+}
+
+// useFakeHotspotOS makes the controller's hotspot orders run over a fake, and
+// closes the order a test left.
+func useFakeHotspotOS(t *testing.T, x *CoreController) *fakeHotspotOS {
+	t.Helper()
+	os := newFakeHotspotOS()
+	previous := hotspotOSFactory
+	hotspotOSFactory = func() hotspotOS { return os }
+	t.Cleanup(func() {
+		hotspotOSFactory = previous
+		if sharing := x.hotspot.Swap(nil); sharing != nil {
+			sharing.close()
+		}
+	})
+	return os
+}
+
+// setHotspotSharing builds the order from what the controller knows: the phase
+// the engine's events last said.
+func TestSetHotspotSharingStartsFromTheEnginePhase(t *testing.T) {
+	x := &CoreController{}
+	os := useFakeHotspotOS(t, x)
+	events := captureHotspotEvents(t)
+	os.tunnel = testTunnel
+	os.present[testTunnel] = true
+
+	x.emitStatus(EngineConnecting, "[Xray] Connecting")
+	x.emitStatus(EngineConnected, "[Xray] Connected")
+	if got := x.setHotspotSharing(hotspotSharingRequest{On: true, BlockWhileTunnelDown: true}); got != ResultSuccess {
+		t.Fatalf("setHotspotSharing = %d", got)
+	}
+	// The tunnel is up when the hotspot is asked for: it shares the tunnel.
+	events.wait(hotspotSharingEvent{Shared: hotspotSharedTunnel})
+	if got := os.callsMatching("share 7 9"); got != 1 {
+		t.Errorf("shared the tunnel %d times: %v", got, os.calls)
+	}
+}
+
+// A session started in proxy mode has no tunnel: the order sees it through the
+// controller's flag, which engineStart sets. Without it a session that says it
+// is up and has no adapter is a tunnel that has not come, and forwards nothing.
+func TestSetHotspotSharingKnowsAProxySession(t *testing.T) {
+	for name, tc := range map[string]struct {
+		opts map[string]string
+		want hotspotSharingEvent
+	}{
+		"proxy mode": {opts: map[string]string{"proxyPort": "1080"}, want: hotspotSharingEvent{Shared: hotspotSharedWiFi}},
+		"tunnel":     {opts: map[string]string{}, want: hotspotSharingEvent{Shared: hotspotSharedNone, Blocked: true}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			x := &CoreController{}
+			useFakeHotspotOS(t, x)
+			events := captureHotspotEvents(t)
+
+			registerEngine(refusingEngine{})
+			t.Cleanup(func() { delete(engineRegistry, refusingEngine{}.ID()) })
+			x.engineStart(refusingEngine{}.ID(), EngineStartRequest{Opts: tc.opts})
+			x.emitStatus(EngineConnected, "connected")
+
+			if got := x.setHotspotSharing(hotspotSharingRequest{On: true}); got != ResultSuccess {
+				t.Fatalf("setHotspotSharing = %d", got)
+			}
+			events.wait(tc.want)
+		})
+	}
+}
+
+// refusingEngine starts nothing: engineStart records the session's mode before
+// it asks the engine.
+type refusingEngine struct{}
+
+func (refusingEngine) ID() string                                      { return "hotspot-refusing" }
+func (refusingEngine) Start(*CoreController, EngineStartRequest) int32 { return glitchCoreResultError }
+func (refusingEngine) Stop(*CoreController) int32                      { return glitchCoreResultError }
+func (refusingEngine) IsRunning(*CoreController) int32                 { return glitchCoreResultError }
+func (refusingEngine) Traffic(*CoreController) (uint64, uint64, bool)  { return 0, 0, false }
+
+// An order created later reads the phase inside its own lock, so an event that
+// arrives through setPhase meanwhile is not overwritten by an older reading.
+func TestAdoptPhaseReadsTheEngineUnderTheOrdersLock(t *testing.T) {
+	sharing := newHotspotSharing(newFakeHotspotOS(), func(string) {}, tunnelDown)
+	sharing.adoptPhase(func() tunnelPhase {
+		if sharing.mu.TryLock() {
+			sharing.mu.Unlock()
+			t.Error("the engine's phase was read outside the order's lock")
+		}
+		return tunnelUp
+	})
+	if sharing.phase != tunnelUp {
+		t.Errorf("phase = %v, want up", sharing.phase)
 	}
 }
 
@@ -107,8 +220,7 @@ func TestControllerTracksTheEnginePhaseForALaterHotspot(t *testing.T) {
 	os := newFakeHotspotOS()
 	os.tunnel = testTunnel
 	os.present[testTunnel] = true
-	var payloads []string
-	sharing := newHotspotSharing(os, func(payload string) { payloads = append(payloads, payload) }, tunnelPhase(x.enginePhase.Load()))
+	sharing := newHotspotSharing(os, func(string) {}, tunnelPhase(x.enginePhase.Load()))
 	if err := sharing.set(hotspotSharingRequest{On: true}); err != nil {
 		t.Fatal(err)
 	}
@@ -236,5 +348,44 @@ func TestPollPrepareHotspotDoesNotStartASecondRepairBesideTheFirst(t *testing.T)
 	awaitPrepareAnswer(t, "first")
 	if result := awaitPrepareAnswer(t, "second"); result != ResultSuccess {
 		t.Errorf("result = %d", result)
+	}
+}
+
+// A hotspot that starts after the repair began is not restarted with ICS.
+func TestRestartUnlessHotspotRunsLeavesAHotspotThatStarted(t *testing.T) {
+	os := newFakeHotspotOS()
+	os.hotspotUp = false
+	restarted := 0
+	restart := func() error { restarted++; return nil }
+
+	if err := restartUnlessHotspotRuns(os, restart); err != nil || restarted != 1 {
+		t.Fatalf("with no hotspot: err %v, restarted %d times", err, restarted)
+	}
+	os.hotspotUp = true
+	if err := restartUnlessHotspotRuns(os, restart); err != errHotspotStarted || restarted != 1 {
+		t.Errorf("with a hotspot up: err %v, restarted %d times", err, restarted)
+	}
+}
+
+// A hotspot runs when its adapter is up. A list of adapters that cannot be read
+// does not say that none does, and what ICS reports says nothing either way.
+func TestHotspotRunningIsTheAdapterBeingUp(t *testing.T) {
+	os := newFakeHotspotOS()
+	if !hotspotRunning(os) {
+		t.Error("a hotspot adapter that is up was not seen")
+	}
+	os.public, os.private = math.MaxUint32, math.MaxUint32
+	if !hotspotRunning(os) {
+		t.Error("an adapter that is up read as no hotspot because ICS reports no pair")
+	}
+	os.hotspotUp = false
+	os.public, os.private = testWiFi, testHotspot
+	os.forged = &[2]uint32{testWiFi, testLAN}
+	if hotspotRunning(os) {
+		t.Error("a pair that ICS reports read as a hotspot with its adapter down")
+	}
+	os.hotspotErr = errors.New("cannot list adapters")
+	if !hotspotRunning(os) {
+		t.Error("adapters that cannot be listed read as no hotspot")
 	}
 }

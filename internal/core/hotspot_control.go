@@ -2,6 +2,7 @@ package core
 
 import (
 	"encoding/json"
+	"errors"
 	"sync"
 
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
@@ -70,6 +71,31 @@ func pollPrepareHotspot(token string) (done bool, result int32) {
 	return false, 0
 }
 
+// hotspotRunning says that a Mobile hotspot's adapter is up. Restarting
+// SharedAccess then turns the hotspot off.
+func hotspotRunning(os hotspotOS) bool {
+	up, err := os.HotspotAdapters()
+	// An adapter list that cannot be read is no proof that none runs.
+	return len(up) > 0 || err != nil
+}
+
+// HotspotRunning says whether a Mobile hotspot runs on this PC; false off
+// Windows. A test that would act on a hotspot checks it first.
+func HotspotRunning() bool {
+	return hotspotSupported && hotspotRunning(hotspotOSFactory())
+}
+
+var errHotspotStarted = errors.New("a hotspot started while ICS was being repaired")
+
+// restartUnlessHotspotRuns is the last look before ICS is restarted: a hotspot
+// that started since the repair began is left alone.
+func restartUnlessHotspotRuns(os hotspotOS, restart func() error) error {
+	if hotspotRunning(os) {
+		return errHotspotStarted
+	}
+	return restart()
+}
+
 // SetHotspotSharing takes the whole wanted state of the hotspot's sharing, as
 // the JSON of hotspotSharingRequest.
 func SetHotspotSharing(requestJSON string) int32 {
@@ -97,17 +123,22 @@ func SetHotspotSharing(requestJSON string) int32 {
 	return runFFICall(func() int32 { return globalController.setHotspotSharing(request) })
 }
 
+// hotspotOSFactory makes the operating-system side of a hotspot order; a test
+// replaces it with a fake.
+var hotspotOSFactory = newHotspotOS
+
 func (x *CoreController) setHotspotSharing(request hotspotSharingRequest) int32 {
 	sharing := x.hotspot.Load()
 	if sharing == nil {
-		fresh := newHotspotSharing(newHotspotOS(), func(payload string) {
+		currentPhase := func() tunnelPhase { return tunnelPhase(x.enginePhase.Load()) }
+		fresh := newHotspotSharing(hotspotOSFactory(), func(payload string) {
 			x.emitStatus(HotspotSharingEvent, payload)
-		}, tunnelPhase(x.enginePhase.Load()))
+		}, currentPhase())
 		fresh.proxySession = x.proxySession.Load
 		fresh.useWorker(hotspotReconcileEvery)
 		if x.hotspot.CompareAndSwap(nil, fresh) {
-			// An event between reading the phase and publishing the order.
-			fresh.setPhase(tunnelPhase(x.enginePhase.Load()))
+			// Events between reading the phase and publishing the order missed it.
+			fresh.adoptPhase(currentPhase)
 			sharing = fresh
 		} else {
 			sharing = x.hotspot.Load()

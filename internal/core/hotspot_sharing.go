@@ -20,6 +20,10 @@ import (
 // One rule closes every gap: forwarding on the hotspot's interface is on only
 // while ICS's public side is the connection the tunnel's phase wants. Anything
 // else, unknown or refused or a tunnel still going away, is forwarding off.
+//
+// What the order knows about the pair is what it did itself, a successful
+// share of a public side with the hotspot's adapter. What ICS reports can only
+// take that knowledge away.
 
 const (
 	hotspotSharedTunnel = "tunnel"
@@ -50,8 +54,8 @@ type hotspotSharingRequest struct {
 }
 
 // hotspotSharingEvent is the payload of HotspotSharingEvent. RestartOn names
-// the connection whose profile the hotspot has to be restarted on because the
-// live switch is unavailable.
+// the connection whose share ICS refused, the one the hotspot is to be
+// restarted on.
 type hotspotSharingEvent struct {
 	Shared    string `json:"shared"`
 	Blocked   bool   `json:"blocked"`
@@ -65,13 +69,20 @@ type hotspotOS interface {
 	// SharingAvailable is false when the calls that move ICS between
 	// connections are missing from this Windows.
 	SharingAvailable() bool
-	// SharedPair fails only when ICS's pair cannot be read at all.
+	// SharedPair is what ICS reports, read from a record any local user can
+	// write: it can take a share the order made away, and names the public
+	// side of a pair being stopped. It fails when the pair cannot be read.
 	SharedPair() (public, private uint32, err error)
 	Share(public, private uint32) error
 	Unshare(public, private uint32) error
 	// TunnelIndex is the interface of the tunnel's adapter, found by its GUID.
 	TunnelIndex() (uint32, bool)
-	// IsPhysical says that the interface exists, is up and is not the tunnel's.
+	// HotspotAdapters are the interfaces of the Wi-Fi Direct virtual adapters
+	// that are up, found by the driver's identity; the Mobile hotspot runs on
+	// one of them. It fails when they cannot be listed.
+	HotspotAdapters() ([]uint32, error)
+	// IsPhysical says that the interface exists and is neither the tunnel's
+	// nor a loopback; whether it is up is not its question.
 	IsPhysical(index uint32) bool
 	// PhysicalIndex is the connection the PC reaches the internet through.
 	PhysicalIndex() (uint32, bool)
@@ -114,6 +125,19 @@ const (
 	wishWiFi                      // share the physical connection
 )
 
+// sharedRecord is what the order itself shared and has not had reason to
+// doubt since: the public side of its last successful share, and the hotspot
+// adapter it was shared with.
+type sharedRecord struct {
+	ok      bool
+	public  uint32
+	hotspot uint32
+}
+
+func (r sharedRecord) holds(public, hotspot uint32) bool {
+	return r.ok && r.public == public && r.hotspot == hotspot
+}
+
 type hotspotSharing struct {
 	os   hotspotOS
 	emit func(payload string)
@@ -129,8 +153,13 @@ type hotspotSharing struct {
 	clients []netip.Addr
 	active  bool // a request turned it on and none has turned it off since
 	phase   tunnelPhase
-	// shareAgain asks for a share even where ICS already points at the tunnel.
+	// shareAgain asks for a share even where the record already holds it:
+	// after every request and every tunnel-up.
 	shareAgain bool
+	// publishNext makes the next reconcile publish its state even if it did not
+	// change: a client that just set the state wants to hear it.
+	publishNext bool
+	lastEvent   string
 
 	// worker settings, set before the first request; zero leaves reconciles
 	// to the callers.
@@ -144,28 +173,38 @@ type hotspotSharing struct {
 	wake    chan struct{}
 
 	// Owned by reconcile (workMu).
-	physical       uint32
-	private        uint32
+	shared         sharedRecord
+	hotspot        uint32 // the hotspot's adapter at the last reconcile; 0 when none was up
+	forwardingOff  uint32 // the adapter this order turned forwarding off on; 0 when none
+	physical       uint32 // the connection this order last shared as the physical one
 	tunnelIndex    uint32 // the tunnel's interface when it was last seen
 	appliedClients []netip.Addr
 	clientsApplied bool
-	lastEvent      string
 }
 
 // newHotspotSharing makes the order, starting from the phase the engine is
 // in now.
 func newHotspotSharing(os hotspotOS, emit func(string), phase tunnelPhase) *hotspotSharing {
 	return &hotspotSharing{
-		os:         os,
-		emit:       emit,
-		phase:      phase,
-		shareAgain: phase == tunnelUp,
-		wake:       make(chan struct{}, 1),
+		os:    os,
+		emit:  emit,
+		phase: phase,
+		wake:  make(chan struct{}, 1),
 	}
 }
 
-// useWorker lets the order apply notify's events by itself and check a running
-// hotspot every `every` (0: only on events). The worker lives while sharing is on.
+// adoptPhase takes the engine's phase as read inside the order's own lock, so
+// an event delivered through setPhase meanwhile is never overwritten by an
+// older reading.
+func (h *hotspotSharing) adoptPhase(current func() tunnelPhase) {
+	h.mu.Lock()
+	h.phase = current()
+	h.mu.Unlock()
+}
+
+// useWorker lets the order apply requests and notify's events by itself, off
+// the caller, and check a running hotspot every `every` (0: only on events).
+// The worker lives while sharing is on and ends once it has applied an off.
 func (h *hotspotSharing) useWorker(every time.Duration) {
 	h.worker, h.every = true, every
 }
@@ -185,9 +224,9 @@ func (h *hotspotSharing) close() {
 	h.mu.Lock()
 	h.closed = true
 	quit, done := h.quit, h.done
-	running := h.running
+	h.quit, h.done = nil, nil
 	h.mu.Unlock()
-	if running {
+	if quit != nil {
 		close(quit)
 		<-done
 	}
@@ -208,20 +247,24 @@ func (h *hotspotSharing) run(quit <-chan struct{}, done chan<- struct{}) {
 		case <-h.wake:
 		case <-tick:
 		}
-		h.mu.Lock()
-		on := h.request.On
-		if !on {
-			h.running = false
+		if h.reconcile() {
+			continue
 		}
-		h.mu.Unlock()
-		if !on {
+		// An off was applied. A request that turned it on since has sent its
+		// own wake.
+		h.mu.Lock()
+		if !h.request.On {
+			h.running = false
+			h.mu.Unlock()
 			return
 		}
-		h.reconcile(false)
+		h.mu.Unlock()
 	}
 }
 
-// set stores the whole wanted state and applies it before returning.
+// set stores the whole wanted state. With a worker it hands the state over and
+// returns, so a caller holding a lock of its own never waits behind a
+// reconcile; without one it applies the state before returning.
 func (h *hotspotSharing) set(request hotspotSharingRequest) error {
 	clients, err := parseBlockedClients(request.BlockedClients)
 	if err != nil {
@@ -230,18 +273,21 @@ func (h *hotspotSharing) set(request hotspotSharingRequest) error {
 	h.mu.Lock()
 	h.request = request
 	h.clients = clients
+	h.publishNext = true
 	if request.On {
 		h.active = true
+		h.shareAgain = true
 	}
 	h.mu.Unlock()
-	if request.On {
-		h.ensureWorker()
+	if !h.worker {
+		h.reconcile()
+		return nil
 	}
+	h.ensureWorker()
 	select {
-	case h.wake <- struct{}{}: // lets a worker of a request now off end
+	case h.wake <- struct{}{}:
 	default:
 	}
-	h.reconcile(true)
 	return nil
 }
 
@@ -288,14 +334,17 @@ func (h *hotspotSharing) setPhase(phase tunnelPhase) {
 	}
 }
 
-// reconcile publishes the state it ends in when it changed, or whatever it
-// is when force is set: a client that just set the state wants to hear it.
-func (h *hotspotSharing) reconcile(force bool) {
+// reconcile applies the stored state and publishes the state it ends in when
+// it changed, or whatever it is after a set. It returns whether the state it
+// applied was on.
+func (h *hotspotSharing) reconcile() (appliedOn bool) {
 	h.workMu.Lock()
 	defer h.workMu.Unlock()
 
 	h.mu.Lock()
 	request, clients, active, phase, again := h.request, h.clients, h.active, h.phase, h.shareAgain
+	publishNext := h.publishNext
+	h.publishNext, h.shareAgain = false, false
 	h.mu.Unlock()
 
 	var event hotspotSharingEvent
@@ -309,23 +358,40 @@ func (h *hotspotSharing) reconcile(force bool) {
 	if len(problems) > 0 {
 		event.Error = errors.Join(problems...).Error()
 	}
-	h.publish(event, force)
+	h.publish(event, publishNext)
+	return request.On
 }
 
-// tearDown ends sharing. A pair this order turned on is stopped whatever it
-// points at. On a fresh core a pair is stopped only when its public side is
-// the tunnel's adapter or one that is gone, what an earlier run left behind;
-// a pair on a physical connection is the user's own hotspot.
+// tearDown ends sharing, on the hotspot's own adapter and nowhere else. A pair
+// this order shared is stopped whatever it points at. A pair it did not share,
+// one that ICS reports for the hotspot's adapter, is stopped only when its
+// public side is the tunnel's adapter or one that is gone, what an earlier run
+// left behind; a pair on a physical connection is the user's own hotspot.
 func (h *hotspotSharing) tearDown(active bool) (problems []error) {
-	public, private, err := h.os.SharedPair()
-	if err == nil && validInterfaceIndex(private) {
-		ours := active || !h.os.IsPhysical(public)
+	hotspot, found, problem := h.findHotspot(false)
+	if problem != nil {
+		problems = append(problems, problem)
+	}
+	if found {
+		stopped := false
+		public, ours := h.shared.public, h.shared.ok && h.shared.hotspot == hotspot
+		if !ours {
+			reported, private, pairErr := h.os.SharedPair()
+			if pairErr == nil && private == hotspot {
+				public = reported
+				ours = !h.os.IsPhysical(public)
+			}
+		}
 		if ours {
-			if err := h.os.Unshare(public, private); err != nil {
+			stopped = true
+			if err := h.os.Unshare(public, hotspot); err != nil {
 				problems = append(problems, fmt.Errorf("stop sharing: %w", err))
 			}
-			// The block is lifted with the pair; the interface may be gone by now.
-			_ = h.os.SetForwarding(private, true)
+		}
+		// What this order turned off, or ended the pair of, is given back; the
+		// interface may be gone by now.
+		if stopped || h.forwardingOff == hotspot {
+			_ = h.os.SetForwarding(hotspot, true)
 		}
 	}
 	if active {
@@ -334,10 +400,14 @@ func (h *hotspotSharing) tearDown(active bool) (problems []error) {
 		}
 	}
 	h.appliedClients, h.clientsApplied = nil, false
-	h.physical, h.private, h.tunnelIndex = 0, 0, 0
+	h.shared, h.hotspot, h.forwardingOff = sharedRecord{}, 0, 0
+	h.physical, h.tunnelIndex = 0, 0
 	h.mu.Lock()
-	h.active = false
-	h.shareAgain = false
+	// A request that turned sharing on since this one was read keeps its flags.
+	if !h.request.On {
+		h.active = false
+		h.shareAgain = false
+	}
 	h.mu.Unlock()
 	return problems
 }
@@ -373,25 +443,32 @@ func (h *hotspotSharing) apply(request hotspotSharingRequest, clients []netip.Ad
 		}
 	}
 
-	public, private, err := h.os.SharedPair()
-	if err != nil {
-		problems = append(problems, fmt.Errorf("read the shared connection: %w", err))
-		public, private = math.MaxUint32, h.private
+	hotspot, found, problem := h.findHotspot(true)
+	if problem != nil {
+		problems = append(problems, problem)
 	}
-	if validInterfaceIndex(private) {
-		h.private = private
-	} else if err == nil {
+	if !found {
+		// A share of an adapter that is gone is not trusted when one comes back.
+		h.shared, h.hotspot, h.forwardingOff = sharedRecord{}, 0, 0
+		h.shareAgainLater(again)
 		return hotspotSharingEvent{Shared: hotspotSharedNone}, problems
+	}
+	if hotspot != h.hotspot {
+		h.shared, h.forwardingOff = sharedRecord{}, 0
+		h.hotspot = hotspot
+	}
+	if h.shared.ok {
+		// ICS says it is not where this order left it: something else moved it.
+		// The report is believed only that way.
+		if public, private, err := h.os.SharedPair(); err == nil && (public != h.shared.public || private != h.shared.hotspot) {
+			h.shared = sharedRecord{}
+		}
 	}
 
 	tunnel, tunnelPresent := h.os.TunnelIndex()
 	if tunnelPresent {
 		h.tunnelIndex = tunnel
 	}
-	if validInterfaceIndex(public) && (!tunnelPresent || public != tunnel) && h.os.IsPhysical(public) {
-		h.physical = public
-	}
-
 	wish := h.wishFor(request, phase, tunnelPresent)
 	var want uint32
 	kind := ""
@@ -406,85 +483,144 @@ func (h *hotspotSharing) apply(request hotspotSharingRequest, clients []netip.Ad
 		}
 	}
 
-	if validInterfaceIndex(want) && (public != want || (wish == wishTunnel && again && h.os.SharingAvailable())) {
-		if shareErr := h.share(public, want, private); shareErr != nil {
+	// ICS may stand on the physical connection: nothing is forwarded while it
+	// moves to the tunnel.
+	if wish == wishTunnel && !h.shared.holds(want, hotspot) {
+		if err := h.settleForwarding(hotspot, false); err != nil {
+			problems = append(problems, err)
+		}
+	}
+
+	if validInterfaceIndex(want) && (again || !h.shared.holds(want, hotspot)) {
+		if shareErr := h.share(want, hotspot); shareErr != nil {
+			h.shared = sharedRecord{}
 			problems = append(problems, fmt.Errorf("share the %s connection: %w", kind, shareErr))
-			if !h.os.SharingAvailable() || validInterfaceIndex(private) {
+			if h.os.SharingAvailable() {
 				event.RestartOn = kind
 			}
 		} else {
-			h.mu.Lock()
-			h.shareAgain = false
-			h.mu.Unlock()
+			h.shared = sharedRecord{ok: true, public: want, hotspot: hotspot}
+			if wish == wishWiFi {
+				h.physical = want
+			}
 		}
+	} else {
+		h.shareAgainLater(again)
 	}
 
-	now, nowPrivate, nowErr := h.os.SharedPair()
-	if nowErr == nil && validInterfaceIndex(nowPrivate) {
-		private = nowPrivate
-		h.private = nowPrivate
-	}
-	forwardingOn := validInterfaceIndex(want) && nowErr == nil && now == want
-	if validInterfaceIndex(private) {
-		if err := h.settleForwarding(private, forwardingOn); err != nil {
-			problems = append(problems, err)
-		} else {
-			event.Blocked = !forwardingOn
-		}
+	forwardingOn := validInterfaceIndex(want) && h.shared.holds(want, hotspot)
+	if err := h.settleForwarding(hotspot, forwardingOn); err != nil {
+		problems = append(problems, err)
+	} else {
+		event.Blocked = !forwardingOn
 	}
 
 	event.Shared = hotspotSharedNone
-	if nowErr == nil && validInterfaceIndex(now) {
+	if h.shared.ok && h.shared.hotspot == hotspot {
 		event.Shared = hotspotSharedWiFi
-		if now == h.tunnelIndex {
+		if h.shared.public == h.tunnelIndex {
 			event.Shared = hotspotSharedTunnel
 		}
 	}
 	return event, problems
 }
 
-// physicalConnection is the connection to share while the tunnel is down. An
-// index of an adapter that is gone is never it.
+// findHotspot is the hotspot's interface: the one Wi-Fi Direct adapter that is
+// up. With several up (a hotspot beside a wireless display) which is the
+// hotspot's cannot be told, and with the adapters unlisted nothing is known:
+// nothing is shared or stopped on a guess, and with block set forwarding is
+// turned off on every adapter that might be it.
+func (h *hotspotSharing) findHotspot(block bool) (index uint32, found bool, problem error) {
+	up, err := h.os.HotspotAdapters()
+	switch {
+	case err != nil:
+		problem = fmt.Errorf("find the hotspot's interface: %w", err)
+		if block && validInterfaceIndex(h.hotspot) {
+			up = []uint32{h.hotspot}
+		} else {
+			up = nil
+		}
+	case len(up) == 1:
+		return up[0], true, nil
+	case len(up) > 1:
+		problem = fmt.Errorf("find the hotspot's interface: %d Wi-Fi Direct adapters are up", len(up))
+	}
+	if block {
+		for _, candidate := range up {
+			if err := h.settleForwarding(candidate, false); err != nil {
+				problem = errors.Join(problem, err)
+			}
+		}
+	}
+	return 0, false, problem
+}
+
+// shareAgainLater keeps a request for a share that had nothing to share yet.
+func (h *hotspotSharing) shareAgainLater(again bool) {
+	if !again {
+		return
+	}
+	h.mu.Lock()
+	h.shareAgain = true
+	h.mu.Unlock()
+}
+
+// physicalConnection is the connection to share while the tunnel is down: the
+// one this order shared last, while it exists, else the PC's own. An index of
+// an adapter that is gone is never it.
 func (h *hotspotSharing) physicalConnection() uint32 {
 	if validInterfaceIndex(h.physical) && h.os.IsPhysical(h.physical) {
 		return h.physical
 	}
+	h.physical = 0
 	if index, ok := h.os.PhysicalIndex(); ok {
-		h.physical = index
 		return index
 	}
-	h.physical = 0
 	return 0
 }
 
-// share moves ICS to public: by a start alone, and, when ICS refuses that with
-// a pair standing, by stopping the pair first. It does not need a private side
-// to report that the live switch is missing.
-func (h *hotspotSharing) share(current, public, private uint32) error {
+// share moves ICS to public, with the hotspot's adapter as the private side: by
+// a start alone, and, when ICS refuses that with a pair standing, by stopping
+// the pair first.
+func (h *hotspotSharing) share(public, hotspot uint32) error {
 	if !h.os.SharingAvailable() {
 		return errors.New("the live switch is unavailable on this Windows")
 	}
-	if !validInterfaceIndex(private) {
-		return errors.New("no hotspot interface")
+	err := h.os.Share(public, hotspot)
+	if err == nil {
+		return nil
 	}
-	err := h.os.Share(public, private)
-	if err != nil && validInterfaceIndex(current) {
-		if stopErr := h.os.Unshare(current, private); stopErr == nil {
-			err = h.os.Share(public, private)
+	if current, ok := h.standingPublic(hotspot); ok {
+		if stopErr := h.os.Unshare(current, hotspot); stopErr == nil {
+			err = h.os.Share(public, hotspot)
 		}
 	}
 	return err
 }
 
+// standingPublic is the public side of the pair that stands with the hotspot's
+// adapter: the one this order shared, else the one ICS reports.
+func (h *hotspotSharing) standingPublic(hotspot uint32) (uint32, bool) {
+	if h.shared.ok && h.shared.hotspot == hotspot {
+		return h.shared.public, true
+	}
+	public, private, err := h.os.SharedPair()
+	return public, err == nil && private == hotspot && validInterfaceIndex(public)
+}
+
 // settleForwarding makes forwarding on the hotspot's interface what it should
 // be. A forwarding state that cannot be read is set anyway.
-func (h *hotspotSharing) settleForwarding(private uint32, on bool) error {
-	current, readErr := h.os.Forwarding(private)
-	if readErr == nil && current == on {
-		return nil
+func (h *hotspotSharing) settleForwarding(hotspot uint32, on bool) error {
+	current, readErr := h.os.Forwarding(hotspot)
+	if readErr != nil || current != on {
+		if err := h.os.SetForwarding(hotspot, on); err != nil {
+			return fmt.Errorf("set forwarding: %w", err)
+		}
 	}
-	if err := h.os.SetForwarding(private, on); err != nil {
-		return fmt.Errorf("set forwarding: %w", err)
+	if on {
+		h.forwardingOff = 0
+	} else {
+		h.forwardingOff = hotspot
 	}
 	return nil
 }
@@ -495,16 +631,19 @@ func (h *hotspotSharing) publish(event hotspotSharingEvent, force bool) {
 		return
 	}
 	text := string(payload)
-	if text == h.lastEvent && !force {
+	h.mu.Lock()
+	unchanged := text == h.lastEvent
+	h.lastEvent = text
+	h.mu.Unlock()
+	if unchanged && !force {
 		return
 	}
-	h.lastEvent = text
 	h.emit(text)
 }
 
 // lastPublished is the event to replay to a client that attaches later.
 func (h *hotspotSharing) lastPublished() string {
-	h.workMu.Lock()
-	defer h.workMu.Unlock()
+	h.mu.Lock()
+	defer h.mu.Unlock()
 	return h.lastEvent
 }

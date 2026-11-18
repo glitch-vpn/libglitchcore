@@ -65,7 +65,8 @@ func (s icsSnapshot) stale() bool {
 }
 
 func prepareHotspot() int32 {
-	if hotspotRunning(&windowsHotspotOS{}) {
+	os := hotspotOSFactory()
+	if hotspotRunning(os) {
 		return hotspotResultRunning
 	}
 	var snapshot icsSnapshot
@@ -83,22 +84,14 @@ func prepareHotspot() int32 {
 	if !windows.GetCurrentProcessToken().IsElevated() {
 		return hotspotResultNeedsAdmin
 	}
-	if err := withCOM(func() error { return repairICS(snapshot) }); err != nil {
+	if err := withCOM(func() error { return repairICS(snapshot, os) }); err != nil {
+		if errors.Is(err, errHotspotStarted) {
+			return hotspotResultRunning
+		}
 		logfmt.Warnf("[hotspot] repair ICS failed: %v", err)
 		return hotspotResultRepairFailed
 	}
 	return ResultSuccess
-}
-
-// hotspotRunning: ICS shares a pair whose private side is an adapter that
-// is up. Restarting SharedAccess then turns the hotspot off, so a pair that
-// cannot be read counts as running.
-func hotspotRunning(os hotspotOS) bool {
-	_, private, err := os.SharedPair()
-	if err != nil {
-		return true
-	}
-	return validInterfaceIndex(private) && os.IsPhysical(private)
 }
 
 func withCOM(run func() error) error {
@@ -213,7 +206,7 @@ func preferredPublicInterface() string {
 // mark it as ICS's public or private side, and a preferred public side. A
 // share of an adapter that exists is left as it is. SharedAccess is started
 // afresh to read the cleared store.
-func repairICS(snapshot icsSnapshot) error {
+func repairICS(snapshot icsSnapshot, os hotspotOS) error {
 	var problems []error
 	if err := forEachHomeNetRow(func(row *ole.IDispatch) error {
 		public, private, err := homeNetRowFlags(row)
@@ -247,7 +240,7 @@ func repairICS(snapshot icsSnapshot) error {
 	if len(problems) > 0 {
 		return errors.Join(problems...)
 	}
-	return restartSharedAccess()
+	return restartUnlessHotspotRuns(os, restartSharedAccess)
 }
 
 func dropPreferredPublicInterface() error {

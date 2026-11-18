@@ -24,10 +24,15 @@ func TestServiceDispatch_SetConnInspector(t *testing.T) {
 	}
 }
 
-// Off with nothing ever turned on is a request the service answers without
-// touching a connection, with the result code in data.
+// Off with nothing ever turned on is a request the service answers with the
+// result code in data, and then applies off its command: the worker's answer is
+// the event. The operating system behind it is a fake, so a run of this test
+// with administrator rights never stops a hotspot that runs on the machine.
 func TestServiceDispatch_SetHotspotSharingOff(t *testing.T) {
 	Initialize()
+	os := useFakeHotspotOS(t, globalController)
+	events := captureHotspotEvents(t)
+
 	payload, _ := json.Marshal(map[string]string{"request": `{"on":false,"blockWhileTunnelDown":true,"blockedClients":[]}`})
 	resp := dispatchCommand(pipeCommand{Action: "set_hotspot_sharing", Payload: payload})
 	if !resp.OK {
@@ -35,6 +40,10 @@ func TestServiceDispatch_SetHotspotSharingOff(t *testing.T) {
 	}
 	if data, _ := resp.Data.(map[string]int32); data["result"] != ResultSuccess {
 		t.Fatalf("result = %v, want %d", resp.Data, ResultSuccess)
+	}
+	events.wait(hotspotSharingEvent{Shared: hotspotSharedNone})
+	if os.callsMatching("unshare") != 0 || os.callsMatching("forwarding") != 0 {
+		t.Errorf("off touched the user's own hotspot: %v", os.calls)
 	}
 
 	bad, _ := json.Marshal(map[string]string{"request": `{`})

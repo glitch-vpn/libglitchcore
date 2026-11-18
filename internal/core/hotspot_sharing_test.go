@@ -10,28 +10,37 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
 	testWiFi      = 4
 	testTunnel    = 7
 	testHotspot   = 9
+	testLAN       = 12 // another connection of the PC, with no part in the hotspot
 	testGoneIndex = 30
 )
 
 // fakeHotspotOS behaves as ICS does: a share sets the pair and turns
-// forwarding on for the private side. It records every state in which
-// forwarding was on while ICS pointed somewhere the step does not allow.
+// forwarding on for the private side. public and private are the pair ICS
+// really holds; what SharedPair reports is that, unless forged is set, as a
+// local user can make it. It records every state in which forwarding was on
+// while the real pair pointed somewhere the step does not allow.
 type fakeHotspotOS struct {
 	mu sync.Mutex
 
 	available  bool
 	public     uint32
 	private    uint32
-	tunnel     uint32 // 0: no adapter
+	forged     *[2]uint32 // what SharedPair reports instead of the real pair
+	tunnel     uint32     // 0: no adapter
 	present    map[uint32]bool
 	physical   uint32
 	pairErr    error
+	hotspot    uint32 // the hotspot's adapter
+	hotspotUp  bool
+	otherWFD   []uint32 // other Wi-Fi Direct adapters that are up
+	hotspotErr error
 	forwarding map[uint32]bool
 	clients    []netip.Addr
 
@@ -49,7 +58,9 @@ func newFakeHotspotOS() *fakeHotspotOS {
 		public:     testWiFi,
 		private:    testHotspot,
 		physical:   testWiFi,
-		present:    map[uint32]bool{testWiFi: true, 12: true, testHotspot: true},
+		present:    map[uint32]bool{testWiFi: true, testLAN: true, testHotspot: true},
+		hotspot:    testHotspot,
+		hotspotUp:  true,
 		forwarding: map[uint32]bool{testHotspot: true},
 	}
 }
@@ -89,6 +100,9 @@ func (f *fakeHotspotOS) SharedPair() (uint32, uint32, error) {
 	if f.pairErr != nil {
 		return math.MaxUint32, math.MaxUint32, f.pairErr
 	}
+	if f.forged != nil {
+		return f.forged[0], f.forged[1], nil
+	}
 	return f.public, f.private, nil
 }
 
@@ -113,6 +127,9 @@ func (f *fakeHotspotOS) Unshare(public, private uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("unshare %d %d", public, private)
+	if public != f.public || private != f.private {
+		return errors.New("no such pair")
+	}
 	f.public, f.private = math.MaxUint32, math.MaxUint32
 	return nil
 }
@@ -121,6 +138,19 @@ func (f *fakeHotspotOS) TunnelIndex() (uint32, bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.tunnel, f.tunnel != 0
+}
+
+func (f *fakeHotspotOS) HotspotAdapters() ([]uint32, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.hotspotErr != nil {
+		return nil, f.hotspotErr
+	}
+	var up []uint32
+	if f.hotspotUp {
+		up = append(up, f.hotspot)
+	}
+	return append(up, f.otherWFD...), nil
 }
 
 func (f *fakeHotspotOS) IsPhysical(index uint32) bool {
@@ -221,7 +251,7 @@ func (f *hotspotFixture) engineEvent(code int32) {
 	}
 	f.os.mu.Unlock()
 	f.sharing.notify(code)
-	f.sharing.reconcile(false)
+	f.sharing.reconcile()
 }
 
 func (f *hotspotFixture) last() hotspotSharingEvent {
@@ -255,23 +285,26 @@ func (f *hotspotFixture) wantPair(public uint32, forwarding bool) {
 }
 
 func TestHotspotSharingStartedWithTunnelDown(t *testing.T) {
-	for _, block := range []bool{true, false} {
-		t.Run(fmt.Sprintf("block=%t", block), func(t *testing.T) {
-			f := newHotspotFixture(t)
-			if block {
-				f.allow()
-			} else {
-				f.allow(testWiFi)
-			}
-			f.set(true, block)
-			// The hotspot starts on the Wi-Fi's profile with forwarding on; the block
-			// goes on at once, and without it nothing is touched.
-			f.wantState(hotspotSharedWiFi, block, testWiFi, !block)
-			if f.os.callsMatching("share") != 0 {
-				t.Errorf("shared with the tunnel down: %v", f.os.calls)
-			}
-		})
-	}
+	t.Run("block=true", func(t *testing.T) {
+		f := newHotspotFixture(t)
+		f.allow()
+		f.set(true, true)
+		// Windows started the hotspot on the Wi-Fi with forwarding on; the block
+		// goes on at once and nothing is shared.
+		f.wantState(hotspotSharedNone, true, testWiFi, false)
+		if f.os.callsMatching("share") != 0 {
+			t.Errorf("shared with the tunnel down and the block on: %v", f.os.calls)
+		}
+	})
+	t.Run("block=false", func(t *testing.T) {
+		f := newHotspotFixture(t)
+		f.allow(testWiFi)
+		f.set(true, false)
+		f.wantState(hotspotSharedWiFi, false, testWiFi, true)
+		if got := f.os.callsMatching("share 4 9"); got != 1 {
+			t.Errorf("shared the Wi-Fi %d times: %v", got, f.os.calls)
+		}
+	})
 }
 
 func TestHotspotSharingFollowsTheTunnel(t *testing.T) {
@@ -285,9 +318,14 @@ func TestHotspotSharingFollowsTheTunnel(t *testing.T) {
 			}
 			f.set(true, block)
 
+			// While the tunnel comes up, what was shared stays and forwards nothing.
+			shared := hotspotSharedWiFi
+			if block {
+				shared = hotspotSharedNone
+			}
 			f.allow()
 			f.engineEvent(EngineConnecting)
-			f.wantState(hotspotSharedWiFi, true, testWiFi, false)
+			f.wantState(shared, true, testWiFi, false)
 
 			f.allow(testTunnel)
 			f.engineEvent(EngineConnected)
@@ -361,7 +399,7 @@ func TestHotspotSharingBlockSurvivesAnotherStart(t *testing.T) {
 
 	// The plugin starts the hotspot again, and ICS turns forwarding on with it.
 	f.os.forwarding[testHotspot] = true
-	f.sharing.reconcile(false)
+	f.sharing.reconcile()
 	f.wantState(hotspotSharedTunnel, true, testTunnel, false)
 }
 
@@ -371,7 +409,7 @@ func TestHotspotSharingConnectErrorWithBlockStaysBlocked(t *testing.T) {
 	f.set(true, true)
 	f.engineEvent(EngineConnecting)
 	f.engineEvent(EngineError)
-	f.wantState(hotspotSharedWiFi, true, testWiFi, false)
+	f.wantState(hotspotSharedNone, true, testWiFi, false)
 	f.allow(testTunnel)
 	f.engineEvent(EngineConnected)
 	f.wantState(hotspotSharedTunnel, false, testTunnel, true)
@@ -395,18 +433,19 @@ func TestHotspotSharingSharesTheWiFiOnlyAfterTheTunnelIsGone(t *testing.T) {
 	f := newHotspotFixture(t)
 	f.allow(testWiFi)
 	f.set(true, false)
+	sharedAtStart := f.os.callsMatching("share 4 9")
 	f.allow(testTunnel)
 	f.engineEvent(EngineConnected)
 
 	f.allow()
 	f.engineEvent(EngineDisconnecting)
-	if got := f.os.callsMatching("share 4 9"); got != 0 {
+	if got := f.os.callsMatching("share 4 9"); got != sharedAtStart {
 		t.Errorf("shared the Wi-Fi at Disconnecting: %v", f.os.calls)
 	}
 	f.wantState(hotspotSharedTunnel, true, testTunnel, false)
 
 	f.engineEvent(EngineError) // "Failed to stop", adapter still present
-	if got := f.os.callsMatching("share 4 9"); got != 0 {
+	if got := f.os.callsMatching("share 4 9"); got != sharedAtStart {
 		t.Errorf("a failed stop with the adapter present counted as down: %v", f.os.calls)
 	}
 	f.wantState(hotspotSharedTunnel, true, testTunnel, false)
@@ -414,8 +453,8 @@ func TestHotspotSharingSharesTheWiFiOnlyAfterTheTunnelIsGone(t *testing.T) {
 	f.allow(testWiFi)
 	f.engineEvent(EngineDisconnected)
 	f.wantState(hotspotSharedWiFi, false, testWiFi, true)
-	if got := f.os.callsMatching("share 4 9"); got != 1 {
-		t.Errorf("shared the Wi-Fi %d times: %v", got, f.os.calls)
+	if got := f.os.callsMatching("share 4 9"); got != sharedAtStart+1 {
+		t.Errorf("shared the Wi-Fi %d times, want %d: %v", got, sharedAtStart+1, f.os.calls)
 	}
 }
 
@@ -431,9 +470,16 @@ func TestHotspotSharingProxyModeIsAlwaysDown(t *testing.T) {
 				f.allow(testWiFi)
 			}
 			f.set(true, block)
-			f.wantState(hotspotSharedWiFi, block, testWiFi, !block)
-			if f.os.callsMatching("share") != 0 {
-				t.Errorf("shared without a tunnel: %v", f.os.calls)
+			if block {
+				f.wantState(hotspotSharedNone, true, testWiFi, false)
+				if f.os.callsMatching("share") != 0 {
+					t.Errorf("shared without a tunnel and with the block on: %v", f.os.calls)
+				}
+			} else {
+				f.wantState(hotspotSharedWiFi, false, testWiFi, true)
+				if f.os.callsMatching("share 7") != 0 {
+					t.Errorf("shared a tunnel there is none of: %v", f.os.calls)
+				}
 			}
 		})
 	}
@@ -445,23 +491,9 @@ func TestHotspotSharingUpWithoutAdapterForwardsNothing(t *testing.T) {
 	f := newHotspotFixtureAt(t, tunnelUp)
 	f.allow()
 	f.set(true, false)
-	f.wantState(hotspotSharedWiFi, true, testWiFi, false)
+	f.wantState(hotspotSharedNone, true, testWiFi, false)
 	if f.os.callsMatching("share") != 0 {
 		t.Errorf("shared without an adapter: %v", f.os.calls)
-	}
-}
-
-func TestHotspotSharingNeverTakesAGonePairForTheWiFi(t *testing.T) {
-	f := newHotspotFixture(t)
-	f.os.public = testGoneIndex // a pair left on a tunnel that is gone
-	f.allow(testWiFi)
-	f.set(true, false)
-	f.wantState(hotspotSharedWiFi, false, testWiFi, true)
-	if got := f.os.callsMatching("share 30"); got != 0 {
-		t.Errorf("shared the gone index: %v", f.os.calls)
-	}
-	if got := f.os.callsMatching("share 4 9"); got != 1 {
-		t.Errorf("did not move ICS to the physical connection: %v", f.os.calls)
 	}
 }
 
@@ -471,15 +503,15 @@ func TestHotspotSharingUsesTheRememberedConnectionWhenTunnelGoes(t *testing.T) {
 	f.set(true, false)
 	f.allow(testTunnel)
 	f.engineEvent(EngineConnected)
-	// The physical connection's index changed while the hotspot rode the tunnel.
-	f.os.physical = 12
+	// The PC's own connection ranks differently while the hotspot rides the tunnel.
+	f.os.physical = testLAN
 	f.allow()
 	f.engineEvent(EngineDisconnecting)
 	f.allow(testWiFi)
 	f.engineEvent(EngineDisconnected)
 	f.wantState(hotspotSharedWiFi, false, testWiFi, true)
 
-	// A core that never saw the hotspot on the physical connection asks the OS.
+	// A core that never shared the Wi-Fi asks the OS.
 	g := newHotspotFixture(t)
 	g.os.public = testTunnel
 	g.os.tunnel = testTunnel
@@ -489,74 +521,91 @@ func TestHotspotSharingUsesTheRememberedConnectionWhenTunnelGoes(t *testing.T) {
 	g.os.tunnel = 0
 	delete(g.os.present, testTunnel)
 	g.allow(testWiFi)
-	g.sharing.reconcile(false)
+	g.sharing.reconcile()
 	g.wantState(hotspotSharedWiFi, false, testWiFi, true)
 }
 
-// With the sharing exports missing the block still goes on, and the restart
-// is asked for.
-func TestHotspotSharingWithoutExportsStillBlocksAndAsksForARestart(t *testing.T) {
+// A remembered connection that has gone is not shared again.
+func TestHotspotSharingRechecksTheRememberedConnection(t *testing.T) {
+	f := newHotspotFixture(t)
+	f.allow(testWiFi)
+	f.set(true, false)
+	f.allow(testTunnel)
+	f.engineEvent(EngineConnected)
+	f.allow()
+	f.engineEvent(EngineDisconnecting)
+
+	// The Wi-Fi went away and the PC is on the other connection now.
+	delete(f.os.present, testWiFi)
+	f.os.physical = testLAN
+	f.allow(testLAN)
+	f.engineEvent(EngineDisconnected)
+	if got := f.os.callsMatching("share 4 9"); got != 1 {
+		t.Errorf("shared the Wi-Fi that is gone again: %v", f.os.calls)
+	}
+	f.wantPair(testLAN, true)
+}
+
+// A Windows without the live-switch exports cannot share anything, so nothing
+// is forwarded: the block stays and the error says why. No restart is asked
+// for, since nothing could confirm the pair it gave.
+func TestHotspotSharingWithoutExportsNeverForwards(t *testing.T) {
 	f := newHotspotFixture(t)
 	f.os.available = false
 	f.allow()
 	f.set(true, false)
-	f.allow()
-	f.engineEvent(EngineConnected)
 	event := f.last()
-	if event.RestartOn != hotspotSharedTunnel || event.Error == "" || !event.Blocked {
-		t.Errorf("event = %+v, want blocked, restartOn tunnel with an error", event)
+	if !event.Blocked || event.Error == "" || event.RestartOn != "" || event.Shared != hotspotSharedNone {
+		t.Errorf("event = %+v, want blocked, none, an error and no restart", event)
+	}
+	f.engineEvent(EngineConnected)
+	event = f.last()
+	if !event.Blocked || event.Error == "" || event.RestartOn != "" {
+		t.Errorf("event = %+v, want blocked with an error and no restart", event)
 	}
 	if f.os.callsMatching("share") != 0 || f.os.callsMatching("unshare") != 0 {
 		t.Errorf("called the unavailable exports: %v", f.os.calls)
 	}
-	f.wantPair(testWiFi, false)
 
-	// The plugin restarted the hotspot on the tunnel's profile.
+	// The plugin restarted the hotspot on the tunnel's profile, and whatever
+	// ICS reports is a record any local user can write: nothing forwards.
 	f.os.public = testTunnel
-	f.allow(testTunnel)
-	f.sharing.reconcile(false)
-	f.wantState(hotspotSharedTunnel, false, testTunnel, true)
-
-	f.allow()
-	f.engineEvent(EngineDisconnecting)
-	f.allow(testWiFi)
-	f.engineEvent(EngineDisconnected)
-	if event := f.last(); event.RestartOn != hotspotSharedWiFi {
-		t.Errorf("event = %+v, want restartOn wifi", event)
-	}
+	f.os.forwarding[testHotspot] = true
+	f.sharing.reconcile()
 	f.wantPair(testTunnel, false)
+	if event := f.last(); !event.Blocked {
+		t.Errorf("event = %+v, want blocked", event)
+	}
 }
 
-func TestHotspotSharingPairUnreadableFailsClosed(t *testing.T) {
-	f := newHotspotFixture(t)
+// With no exports and no readable pair the hotspot is still found, so the
+// block still goes on from the first look.
+func TestHotspotSharingWithoutExportsAndWithoutAPairStillBlocks(t *testing.T) {
+	f := newHotspotFixtureAt(t, tunnelUp)
 	f.os.available = false
-	f.allow(testWiFi)
-	f.set(true, false)
-	f.allow(testTunnel)
-	f.engineEvent(EngineConnected)
-
 	f.os.pairErr = errors.New("unreadable")
-	f.os.forwarding[testHotspot] = true
+	f.os.tunnel = testTunnel
+	f.os.present[testTunnel] = true
 	f.allow()
-	f.sharing.reconcile(false)
+	f.set(true, true)
 	event := f.last()
-	if event.Error == "" || event.RestartOn != hotspotSharedTunnel {
-		t.Errorf("event = %+v, want an error and restartOn tunnel", event)
+	if !event.Blocked || event.Error == "" {
+		t.Errorf("event = %+v, want blocked with an error", event)
 	}
 	if f.os.forwarding[testHotspot] {
-		t.Error("forwarding stayed on with the pair unreadable")
+		t.Error("forwarding stayed on")
 	}
+}
 
-	// From the first read on, with nothing known of the hotspot's interface.
-	g := newHotspotFixtureAt(t, tunnelUp)
-	g.os.available = false
-	g.os.pairErr = errors.New("unreadable")
-	g.os.tunnel = testTunnel
-	g.os.present[testTunnel] = true
-	g.set(true, true)
-	if event := g.last(); event.RestartOn != hotspotSharedTunnel || event.Error == "" {
-		t.Errorf("event = %+v, want an error and restartOn tunnel", event)
-	}
+// What ICS reports is never needed to share, nor to block.
+func TestHotspotSharingNeedsNoReadablePair(t *testing.T) {
+	f := newHotspotFixtureAt(t, tunnelUp)
+	f.os.pairErr = errors.New("unreadable")
+	f.os.tunnel = testTunnel
+	f.os.present[testTunnel] = true
+	f.allow(testTunnel)
+	f.set(true, true)
+	f.wantState(hotspotSharedTunnel, false, testTunnel, true)
 }
 
 // A refused share leaves forwarding off.
@@ -565,6 +614,9 @@ func TestHotspotSharingRefusedShareKeepsForwardingOff(t *testing.T) {
 	f.os.shareErr = errors.New("denied")
 	f.allow()
 	f.set(true, false)
+	if event := f.last(); event.RestartOn != hotspotSharedWiFi || event.Error == "" || !event.Blocked {
+		t.Errorf("event = %+v, want blocked, restartOn wifi with an error", event)
+	}
 	f.allow()
 	f.engineEvent(EngineConnected)
 	event := f.last()
@@ -600,20 +652,22 @@ func TestHotspotSharingStopsThePairBeforeSharingAgainWhenRefused(t *testing.T) {
 
 func TestHotspotSharingWaitsForTheHotspotsInterface(t *testing.T) {
 	f := newHotspotFixture(t)
+	f.os.hotspotUp = false
 	f.os.public, f.os.private = math.MaxUint32, math.MaxUint32
 	f.allow()
 	f.set(true, true)
 	f.engineEvent(EngineConnected)
-	if event := f.last(); event.Shared != hotspotSharedNone || event.Blocked {
-		t.Errorf("event = %+v, want none and not blocked", event)
+	if event := f.last(); event.Shared != hotspotSharedNone || event.Blocked || event.Error != "" {
+		t.Errorf("event = %+v, want none, not blocked and no error", event)
 	}
 	if f.os.callsMatching("share") != 0 || f.os.callsMatching("forwarding") != 0 {
 		t.Errorf("acted without a hotspot: %v", f.os.calls)
 	}
 
+	f.os.hotspotUp = true
 	f.os.public, f.os.private = testWiFi, testHotspot
 	f.allow(testTunnel)
-	f.sharing.reconcile(false)
+	f.sharing.reconcile()
 	f.wantState(hotspotSharedTunnel, false, testTunnel, true)
 }
 
@@ -644,9 +698,26 @@ func TestHotspotSharingOffLeavesNoPairAndNoBlock(t *testing.T) {
 
 	// A tunnel-up after off shares nothing.
 	f.engineEvent(EngineConnected)
-	f.sharing.reconcile(false)
+	f.sharing.reconcile()
 	if validInterfaceIndex(f.os.public) {
 		t.Errorf("an event after off shared again: %v", f.os.calls)
+	}
+}
+
+// Off gives back the forwarding a block turned off, though nothing was ever
+// shared.
+func TestHotspotSharingOffGivesBackAForwardingItTurnedOff(t *testing.T) {
+	f := newHotspotFixture(t)
+	f.set(true, true)
+	if f.os.forwarding[testHotspot] {
+		t.Fatal("the block did not turn forwarding off")
+	}
+	f.set(false, true)
+	if !f.os.forwarding[testHotspot] {
+		t.Error("forwarding on the hotspot's interface was not given back")
+	}
+	if f.os.callsMatching("share") != 0 || f.os.callsMatching("unshare") != 0 {
+		t.Errorf("a pair nobody shared was touched: %v", f.os.calls)
 	}
 }
 
@@ -695,7 +766,7 @@ func TestHotspotSharingBlockedClients(t *testing.T) {
 	if !slices.Equal(f.os.clients, want) {
 		t.Errorf("blocked = %v, want %v", f.os.clients, want)
 	}
-	f.sharing.reconcile(false)
+	f.sharing.reconcile()
 	f.set(true, false, "192.168.137.30", "192.168.137.20")
 	if got := f.os.callsMatching("clients"); got != 1 {
 		t.Errorf("the same set was applied %d times", got)
@@ -734,7 +805,7 @@ func TestHotspotSharingPublishesChangesAndAnswersASet(t *testing.T) {
 	f := newHotspotFixture(t)
 	f.set(true, true)
 	count := len(f.events)
-	f.sharing.reconcile(false)
+	f.sharing.reconcile()
 	if len(f.events) != count {
 		t.Errorf("an unchanged state was published again")
 	}
@@ -751,6 +822,7 @@ func TestHotspotSharingPublishesChangesAndAnswersASet(t *testing.T) {
 func TestHotspotSharingWorkerEndsWithOff(t *testing.T) {
 	f := newHotspotFixture(t)
 	f.sharing.useWorker(hotspotReconcileEvery)
+	t.Cleanup(f.sharing.close)
 	isRunning := func() (bool, chan struct{}) {
 		f.sharing.mu.Lock()
 		defer f.sharing.mu.Unlock()
@@ -762,7 +834,11 @@ func TestHotspotSharingWorkerEndsWithOff(t *testing.T) {
 		t.Fatal("no worker while sharing is on")
 	}
 	f.set(false, false)
-	<-done
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the worker did not end after off")
+	}
 	if running, _ := isRunning(); running {
 		t.Error("the worker outlived on:false")
 	}
@@ -770,7 +846,77 @@ func TestHotspotSharingWorkerEndsWithOff(t *testing.T) {
 	if running, _ := isRunning(); !running {
 		t.Error("the worker did not come back with on:true")
 	}
-	f.sharing.close()
+}
+
+// gatedHotspotOS holds the hotspot lookup, the first call a reconcile makes,
+// until released.
+type gatedHotspotOS struct {
+	*fakeHotspotOS
+	entered chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func (g *gatedHotspotOS) HotspotAdapters() ([]uint32, error) {
+	g.once.Do(func() {
+		close(g.entered)
+		<-g.release
+	})
+	return g.fakeHotspotOS.HotspotAdapters()
+}
+
+// A caller of set holds a lock of its own (the service's pipe, the FFI call),
+// so it must not wait behind a reconcile that is under way, nor the replay of
+// the last event.
+func TestHotspotSharingSetDoesNotWaitForAReconcile(t *testing.T) {
+	gated := &gatedHotspotOS{fakeHotspotOS: newFakeHotspotOS(), entered: make(chan struct{}), release: make(chan struct{})}
+	var mu sync.Mutex
+	var payloads []string
+	sharing := newHotspotSharing(gated, func(payload string) {
+		mu.Lock()
+		payloads = append(payloads, payload)
+		mu.Unlock()
+	}, tunnelDown)
+	sharing.useWorker(0)
+	t.Cleanup(sharing.close)
+
+	returned := make(chan struct{})
+	go func() {
+		defer close(returned)
+		if err := sharing.set(hotspotSharingRequest{On: true, BlockWhileTunnelDown: true}); err != nil {
+			t.Error(err)
+		}
+		<-gated.entered
+		// The worker is inside a reconcile now.
+		if err := sharing.set(hotspotSharingRequest{On: true}); err != nil {
+			t.Error(err)
+		}
+		sharing.lastPublished()
+	}()
+	select {
+	case <-returned:
+	case <-time.After(5 * time.Second):
+		close(gated.release)
+		t.Fatal("set or lastPublished waited for the reconcile")
+	}
+	close(gated.release)
+
+	// The state handed over last is the one applied.
+	deadline := time.After(5 * time.Second)
+	for {
+		published := sharing.lastPublished()
+		gated.fakeHotspotOS.mu.Lock()
+		forwarding := gated.fakeHotspotOS.forwarding[testHotspot]
+		gated.fakeHotspotOS.mu.Unlock()
+		if published != "" && forwarding {
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("the state handed over last was not applied: %q", published)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
 }
 
 func TestTunnelPhaseOf(t *testing.T) {

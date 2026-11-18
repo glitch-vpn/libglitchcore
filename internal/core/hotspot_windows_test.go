@@ -3,11 +3,12 @@
 package core
 
 import (
-	"errors"
-	"math"
 	"net/netip"
+	"strings"
 	"testing"
 	"unsafe"
+
+	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
 func TestWFPStructSizesMatchTheHeaders(t *testing.T) {
@@ -89,20 +90,87 @@ func TestWindowsHotspotOSReadsWithoutElevation(t *testing.T) {
 	}
 }
 
-func TestSharedPairFallsBackToTheHotspotServicesRecord(t *testing.T) {
-	if _, _, err := sharedPairFromRegistry(); err != nil {
-		t.Skipf("the hotspot service's record is not readable here: %v", err)
+// The tunnel's adapter is found by a GUID its name fixes: the same two the sing-tun
+// fork's own generator gives these names.
+func TestAdapterGUIDIsFixedByTheName(t *testing.T) {
+	for name, want := range map[string]string{
+		"GlitchVPNMeta": "{6098DEC3-A4BD-A2DD-A2B5-486DD6EB6315}",
+		"GlitchVPN":     "{A7DD3E51-E109-8B19-9263-C9109EB82BF5}",
+	} {
+		if got := adapterGUID(name).String(); !strings.EqualFold(got, want) {
+			t.Errorf("adapterGUID(%q) = %s, want %s", name, got, want)
+		}
+	}
+	if desktopAdapterName != "GlitchVPN" {
+		t.Errorf("the desktop adapter is %q, and the vector above is for GlitchVPN", desktopAdapterName)
 	}
 }
 
-// The tunnel's adapter is found by a GUID its name fixes.
-func TestAdapterGUIDIsFixedByTheName(t *testing.T) {
-	first, second := adapterGUID(desktopAdapterName), adapterGUID(desktopAdapterName)
-	if *first != *second {
-		t.Error("the GUID changes between calls")
+// The hotspot's adapters are named by the driver's component, from a key only
+// an administrator can change, and each is an interface that exists.
+func TestWifiDirectAdaptersAreFoundByTheirDriversComponent(t *testing.T) {
+	guids, err := wifiDirectAdapterGUIDs()
+	if err != nil {
+		t.Fatalf("the network class's key is not readable: %v", err)
 	}
-	if *first == *adapterGUID("Other") {
-		t.Error("two names share a GUID")
+	adapters, err := allAdapters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for guid := range guids {
+		found := false
+		for _, adapter := range adapters {
+			if strings.EqualFold(adapter.AdapterName(), guid) {
+				found = true
+				if adapter.IfType != winipcfg.IfTypeIEEE80211 {
+					t.Errorf("%s is of type %d, not Wi-Fi", guid, adapter.IfType)
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s is a Wi-Fi Direct adapter in the registry and no interface", guid)
+		}
+	}
+	up, err := (&windowsHotspotOS{}).HotspotAdapters()
+	if err != nil {
+		t.Fatalf("HotspotAdapters: %v", err)
+	}
+	if len(up) > 0 && len(guids) == 0 {
+		t.Error("a hotspot adapter was found with no Wi-Fi Direct adapter installed")
+	}
+}
+
+// IsPhysical says that an interface exists and is neither the tunnel's nor a
+// loopback; whether it is up is not its question.
+func TestIsPhysicalIsExistsAndNotTheTunnelOrALoopback(t *testing.T) {
+	adapters, err := allAdapters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	tunnel := adapterGUID(desktopAdapterName).String()
+	os := &windowsHotspotOS{}
+	sawLoopback, sawDown := false, false
+	for _, adapter := range adapters {
+		if adapter.IfIndex == 0 {
+			continue
+		}
+		want := adapter.IfType != winipcfg.IfTypeSoftwareLoopback && !strings.EqualFold(adapter.AdapterName(), tunnel)
+		if got := os.IsPhysical(adapter.IfIndex); got != want {
+			t.Errorf("IsPhysical(%d, %s, type %d) = %t, want %t", adapter.IfIndex, adapter.AdapterName(), adapter.IfType, got, want)
+		}
+		sawLoopback = sawLoopback || adapter.IfType == winipcfg.IfTypeSoftwareLoopback
+		sawDown = sawDown || adapter.OperStatus != winipcfg.IfOperStatusUp
+	}
+	if !sawLoopback {
+		t.Log("no loopback interface here: that half is not exercised")
+	}
+	if !sawDown {
+		t.Log("no interface that is down here: that half is not exercised")
+	}
+	for _, index := range []uint32{0, 4000000000} {
+		if os.IsPhysical(index) {
+			t.Errorf("IsPhysical(%d) is true for an interface that does not exist", index)
+		}
 	}
 }
 
@@ -114,26 +182,5 @@ func TestICSRepairTouchesOnlyNamesOfGoneAdapters(t *testing.T) {
 	}
 	if !snapshot.namesGoneAdapter("{X}") {
 		t.Error("a gone adapter was not found")
-	}
-}
-
-// A pair that cannot be read is not "no hotspot": SharedAccess stays alone.
-func TestHotspotRunningIsTrueWhenThePairCannotBeRead(t *testing.T) {
-	os := newFakeHotspotOS()
-	if !hotspotRunning(os) {
-		t.Error("a hotspot on an adapter that is up was not seen")
-	}
-	os.pairErr = errors.New("unreadable")
-	if !hotspotRunning(os) {
-		t.Error("an unreadable pair read as no hotspot")
-	}
-	os.pairErr = nil
-	os.public, os.private = math.MaxUint32, math.MaxUint32
-	if hotspotRunning(os) {
-		t.Error("no pair read as a hotspot")
-	}
-	os.public, os.private = testWiFi, testGoneIndex
-	if hotspotRunning(os) {
-		t.Error("a pair on a gone adapter read as a hotspot")
 	}
 }
