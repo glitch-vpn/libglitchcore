@@ -6688,7 +6688,7 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 ==============================================================================
 Module:  github.com/metacubex/sing-tun v0.4.28
-Replaced by: github.com/glitch-vpn/sing-tun v0.4.28-glitch.8
+Replaced by: github.com/glitch-vpn/sing-tun v0.4.28-glitch.9
 Licence: GPL-3.0-or-later
 
 --- LICENSE ---
