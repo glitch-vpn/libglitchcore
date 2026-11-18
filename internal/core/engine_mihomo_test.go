@@ -42,12 +42,13 @@ func TestMihomoLogBridge_KeepsMihomosLevel(t *testing.T) {
 		{LogError, "error", "mihomo", "[Config] started"},
 	}
 	// mihomo's goroutines and finalizers from earlier tests log too, at any
-	// moment, so only the four lines this test wrote are compared.
+	// moment, so only the lines carrying this test's four messages are
+	// compared, at whatever level they arrived.
 	ownLines := func() []capturedLog {
 		var own []capturedLog
 		for _, entry := range logs() {
 			for _, line := range want {
-				if entry == line {
+				if entry.Message == line.Message {
 					own = append(own, entry)
 				}
 			}
@@ -58,7 +59,32 @@ func TestMihomoLogBridge_KeepsMihomosLevel(t *testing.T) {
 	for len(ownLines()) < len(want) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	assertLogs(t, ownLines(), want)
+	if got := ownLines(); len(got) != len(want) || !equalLogSets(got, want) {
+		t.Errorf("mihomo lines at the sink = %+v, want %+v; every mihomo line captured: %+v", got, want, logs())
+	}
+}
+
+func equalLogSets(got, want []capturedLog) bool {
+	for _, line := range want {
+		found := false
+		for _, entry := range got {
+			if entry == line {
+				found = true
+			}
+		}
+		if !found {
+			return false
+		}
+	}
+	return true
+}
+
+// The core writes mihomo's printer level once, in init, and the package's
+// tests do not run in parallel, so nothing else is writing it here.
+func TestMihomoPrinter_IsSilentFromInit(t *testing.T) {
+	if mihomoLog.Level() != mihomoLog.SILENT {
+		t.Errorf("mihomo's own printer is at %v, want silent", mihomoLog.Level())
+	}
 }
 
 // ApplyConfig sets mihomo's printer from the config it is given.

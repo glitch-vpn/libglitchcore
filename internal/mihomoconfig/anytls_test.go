@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/glitch-vpn/libglitchcore/internal/routing"
+	mihomoLog "github.com/metacubex/mihomo/log"
 )
 
 func TestAnytlsProxy(t *testing.T) {
@@ -109,5 +110,18 @@ func TestBuildConfig_AnytlsThroughMihomoParser(t *testing.T) {
 	applyProxyFingerprint(p, "safari")
 	if p["client-fingerprint"] != "safari" {
 		t.Fatalf("the fingerprint option must reach an anytls proxy, got %v", p["client-fingerprint"])
+	}
+}
+
+// mihomo's ApplyConfig writes its global log level from the config, and the
+// core keeps that printer silent.
+func TestBuildConfig_KeepsMihomoPrinterSilent(t *testing.T) {
+	link := "anytls://pw@anytls.example.com:443?sni=anytls.example.com&fp=chrome#a"
+	cfg, err := BuildConfig([]string{link}, Inbound{MixedPort: 17890}, Options{}, routing.Profile{})
+	if err != nil {
+		t.Fatalf("BuildConfig: %v", err)
+	}
+	if cfg.General.LogLevel != mihomoLog.SILENT {
+		t.Errorf("config log level = %v, want silent", cfg.General.LogLevel)
 	}
 }
