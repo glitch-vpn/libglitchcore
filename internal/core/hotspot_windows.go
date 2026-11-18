@@ -252,6 +252,6 @@ func (o *windowsHotspotOS) SetForwarding(index uint32, on bool) error {
 	return row.Set()
 }
 
-func (o *windowsHotspotOS) BlockClients(macs []net.HardwareAddr) error {
-	return o.wfp.set(macs)
+func (o *windowsHotspotOS) BlockClients(hotspot uint32, macs []net.HardwareAddr) error {
+	return o.wfp.set(hotspot, macs)
 }

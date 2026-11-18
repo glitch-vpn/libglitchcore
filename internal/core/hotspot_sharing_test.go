@@ -45,6 +45,7 @@ type fakeHotspotOS struct {
 	hotspotErr error
 	forwarding map[uint32]bool
 	clients    []net.HardwareAddr
+	clientsOn  uint32 // the interface the block is held on
 
 	shareErr   error
 	shareFails int // how many Share calls still fail
@@ -189,11 +190,11 @@ func (f *fakeHotspotOS) SetForwarding(index uint32, on bool) error {
 	return nil
 }
 
-func (f *fakeHotspotOS) BlockClients(macs []net.HardwareAddr) error {
+func (f *fakeHotspotOS) BlockClients(hotspot uint32, macs []net.HardwareAddr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("clients %v", macs)
-	f.clients = slices.Clone(macs)
+	f.record("clients %d %v", hotspot, macs)
+	f.clients, f.clientsOn = slices.Clone(macs), hotspot
 	return nil
 }
 
@@ -789,6 +790,52 @@ func TestHotspotSharingBlockedClients(t *testing.T) {
 		if err == nil {
 			t.Errorf("%q was accepted", bad)
 		}
+	}
+}
+
+// The block holds on the hotspot's adapter and follows it: none while no
+// adapter is up, added when one is found, held again when its index changes,
+// lifted when sharing is turned off.
+func TestHotspotSharingBlocksOnTheHotspotsAdapter(t *testing.T) {
+	const device = "02:00:00:00:00:20"
+	f := newHotspotFixture(t)
+	f.os.hotspotUp = false
+	f.os.public, f.os.private = math.MaxUint32, math.MaxUint32
+	f.allow()
+	f.set(true, true, device)
+	if len(f.os.clients) != 0 {
+		t.Errorf("blocked with no hotspot adapter: %v on %d", f.os.clients, f.os.clientsOn)
+	}
+
+	f.os.hotspotUp = true
+	f.sharing.reconcile()
+	if len(f.os.clients) != 1 || f.os.clientsOn != testHotspot {
+		t.Errorf("block = %v on %d, want one on %d", f.os.clients, f.os.clientsOn, testHotspot)
+	}
+
+	const moved = 21
+	f.os.hotspot = moved
+	f.os.present[moved] = true
+	f.os.forwarding[moved] = true
+	f.sharing.reconcile()
+	if len(f.os.clients) != 1 || f.os.clientsOn != moved {
+		t.Errorf("block = %v on %d, want one on %d", f.os.clients, f.os.clientsOn, moved)
+	}
+
+	f.os.hotspotUp = false
+	f.sharing.reconcile()
+	if len(f.os.clients) != 0 {
+		t.Errorf("blocked after the adapter went: %v on %d", f.os.clients, f.os.clientsOn)
+	}
+
+	f.os.hotspotUp = true
+	f.sharing.reconcile()
+	if len(f.os.clients) != 1 || f.os.clientsOn != moved {
+		t.Errorf("block = %v on %d, want one on %d", f.os.clients, f.os.clientsOn, moved)
+	}
+	f.set(false, true)
+	if len(f.os.clients) != 0 {
+		t.Errorf("blocked after an off: %v", f.os.clients)
 	}
 }
 

@@ -15,6 +15,7 @@ import (
 func TestWFPKeysMatchTheHeaders(t *testing.T) {
 	for name, got := range map[string][2]string{
 		"FWPM_LAYER_INBOUND_MAC_FRAME_ETHERNET": {layerInboundMACFrameEthernet.String(), "{EFFB7EDB-0055-4F9A-A231-4FF8131AD191}"},
+		"FWPM_CONDITION_INTERFACE_INDEX":        {conditionInterfaceIndex.String(), "{667FD755-D695-434A-8AF5-D3835A1259BC}"},
 		"FWPM_CONDITION_MAC_REMOTE_ADDRESS":     {conditionMACRemoteAddress.String(), "{408F2ED4-3A70-4B4D-92A6-415AC20E2F12}"},
 	} {
 		if got[0] != got[1] {
@@ -23,12 +24,27 @@ func TestWFPKeysMatchTheHeaders(t *testing.T) {
 	}
 }
 
+// FWP_DATA_TYPE of fwptypes.h: FWP_UINT32 follows FWP_EMPTY, FWP_UINT8 and
+// FWP_UINT16, and FWP_BYTE_ARRAY6_TYPE follows FWP_UNICODE_STRING_TYPE.
+func TestWFPValueTypesMatchTheHeaders(t *testing.T) {
+	for name, got := range map[string][2]uint32{
+		"FWP_UINT32":           {fwpUint32Type, 3},
+		"FWP_BYTE_ARRAY6_TYPE": {fwpByteArray6Type, 18},
+	} {
+		if got[0] != got[1] {
+			t.Errorf("%s = %d, fwptypes.h says %d", name, got[0], got[1])
+		}
+	}
+}
+
 func TestWFPStructSizesMatchTheHeaders(t *testing.T) {
 	for name, got := range map[string][2]uintptr{
-		"FWPM_SESSION0":          {unsafe.Sizeof(fwpmSession{}), 72},
-		"FWPM_SUBLAYER0":         {unsafe.Sizeof(fwpmSubLayer{}), 72},
-		"FWPM_FILTER_CONDITION0": {unsafe.Sizeof(fwpmFilterCondition{}), 40},
-		"FWPM_FILTER0":           {unsafe.Sizeof(fwpmFilter{}), 200},
+		"FWPM_SESSION0":                   {unsafe.Sizeof(fwpmSession{}), 72},
+		"FWPM_SUBLAYER0":                  {unsafe.Sizeof(fwpmSubLayer{}), 72},
+		"FWPM_FILTER_CONDITION0":          {unsafe.Sizeof(fwpmFilterCondition{}), 40},
+		"FWPM_FILTER_CONDITION0 (uint32)": {unsafe.Sizeof(fwpmFilterConditionUint32{}), 40},
+		"two conditions":                  {unsafe.Sizeof(macFrameConditions{}), 80},
+		"FWPM_FILTER0":                    {unsafe.Sizeof(fwpmFilter{}), 200},
 	} {
 		if got[0] != got[1] {
 			t.Errorf("%s is %d bytes, want %d", name, got[0], got[1])
@@ -53,10 +69,10 @@ func TestWFPStructSizesMatchTheHeaders(t *testing.T) {
 
 func TestClientBlockerWithoutDevicesOpensNothing(t *testing.T) {
 	var blocker clientBlocker
-	if err := blocker.set(nil); err != nil {
+	if err := blocker.set(0, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := blocker.set([]net.HardwareAddr{}); err != nil {
+	if err := blocker.set(9, []net.HardwareAddr{}); err != nil {
 		t.Fatal(err)
 	}
 	if blocker.engine != 0 {

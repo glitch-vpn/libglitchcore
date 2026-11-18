@@ -94,8 +94,9 @@ type hotspotOS interface {
 	Forwarding(index uint32) (bool, error)
 	SetForwarding(index uint32, on bool) error
 	// BlockClients drops every frame the devices with exactly these MAC
-	// addresses send to the hotspot.
-	BlockClients(macs []net.HardwareAddr) error
+	// addresses send in on the hotspot's interface; none, or no interface (0),
+	// lifts the block.
+	BlockClients(hotspot uint32, macs []net.HardwareAddr) error
 }
 
 type tunnelPhase int
@@ -194,6 +195,7 @@ type hotspotSharing struct {
 	physical       uint32    // the connection this order last shared as the physical one
 	tunnelIndex    uint32    // the tunnel's interface when it was last seen
 	appliedClients []net.HardwareAddr
+	appliedOn      uint32 // the interface the block was applied on; 0 for none
 	clientsApplied bool
 }
 
@@ -417,11 +419,11 @@ func (h *hotspotSharing) tearDown(active bool) (problems []error) {
 		_ = h.os.SetForwarding(hotspot, true)
 	}
 	if active {
-		if err := h.os.BlockClients(nil); err != nil {
+		if err := h.os.BlockClients(0, nil); err != nil {
 			problems = append(problems, fmt.Errorf("lift the client block: %w", err))
 		}
 	}
-	h.appliedClients, h.clientsApplied = nil, false
+	h.appliedClients, h.appliedOn, h.clientsApplied = nil, 0, false
 	h.shared, h.lastShared, h.hotspot, h.forwardingOff = sharedRecord{}, sharedRecord{}, 0, 0
 	h.noAdapterSince = time.Time{}
 	h.physical, h.tunnelIndex = 0, 0
@@ -458,17 +460,13 @@ func (h *hotspotSharing) wishFor(request hotspotSharingRequest, phase tunnelPhas
 }
 
 func (h *hotspotSharing) apply(request hotspotSharingRequest, clients []net.HardwareAddr, phase tunnelPhase, again bool) (event hotspotSharingEvent, problems []error) {
-	if !h.clientsApplied || !slices.EqualFunc(h.appliedClients, clients, func(a, b net.HardwareAddr) bool { return bytes.Equal(a, b) }) {
-		if err := h.os.BlockClients(clients); err != nil {
-			problems = append(problems, fmt.Errorf("block clients: %w", err))
-		} else {
-			h.appliedClients, h.clientsApplied = slices.Clone(clients), true
-		}
-	}
-
 	hotspot, found, problem := h.findHotspot(true)
 	if problem != nil {
 		problems = append(problems, problem)
+	} else {
+		// Where the hotspot's adapter is unknown, the block stays as it was;
+		// where none is up there are no clients to block.
+		problems = append(problems, h.settleBlock(hotspot, clients)...)
 	}
 	if !found {
 		// A share of an adapter that is gone is not trusted when one comes back.
@@ -585,6 +583,23 @@ func (h *hotspotSharing) findHotspot(block bool) (index uint32, found bool, prob
 		}
 	}
 	return 0, false, problem
+}
+
+// settleBlock holds the block on the hotspot's interface, or lifts it where
+// there is none (0).
+func (h *hotspotSharing) settleBlock(hotspot uint32, clients []net.HardwareAddr) []error {
+	if hotspot == 0 {
+		clients = nil
+	}
+	same := slices.EqualFunc(h.appliedClients, clients, func(a, b net.HardwareAddr) bool { return bytes.Equal(a, b) })
+	if h.clientsApplied && h.appliedOn == hotspot && same {
+		return nil
+	}
+	if err := h.os.BlockClients(hotspot, clients); err != nil {
+		return []error{fmt.Errorf("block clients: %w", err)}
+	}
+	h.appliedClients, h.appliedOn, h.clientsApplied = slices.Clone(clients), hotspot, true
+	return nil
 }
 
 // waitForAdapter is quiet while a hotspot that should run has no adapter up for

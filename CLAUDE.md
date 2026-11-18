@@ -129,7 +129,7 @@ answer 3 off Windows and go over the service pipe (`set_hotspot_sharing` with a 
 until done, so no command holds the pipe while ICS restarts).
 `hotspot_sharing.go` is the order over a `hotspotOS` interface (tested over fakes); the Windows calls are
 `hotspot_windows.go` (HNetCfgClient.dll's undocumented sharing exports, loaded from System32; finding the
-hotspot's adapter; forwarding through winipcfg), `hotspot_wfp_windows.go` (the per-device block, a filter on the MAC at the inbound Ethernet frame layer) and
+hotspot's adapter; forwarding through winipcfg), `hotspot_wfp_windows.go` (the per-device block, a filter on the MAC and the hotspot's interface at the inbound Ethernet frame layer) and
 `hotspot_ics_windows.go` (the repair).
 The order follows the controller's own lifecycle events from `emitStatus` (the controller tracks the
 phase from the start, so a hotspot turned on under a running tunnel begins from it) and the tunnel's
