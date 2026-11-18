@@ -5,8 +5,10 @@ package core
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -140,5 +142,77 @@ func TestServiceProcessIDIsReadableWithQueryStatusAccess(t *testing.T) {
 	}
 	if err != nil && !errors.Is(err, errServiceNotRunning) {
 		t.Fatal(err)
+	}
+}
+
+// A subscription to the service's events says ServiceReattached once when it
+// follows an earlier one, and says nothing the first time or when a dial fails.
+func TestServiceEventLoopSaysReattachedOncePerResubscription(t *testing.T) {
+	previous := globalController
+	globalController = &CoreController{}
+	t.Cleanup(func() { globalController = previous })
+
+	var mu sync.Mutex
+	var reattached []string
+	setStatusSink(func(code int32, message string) {
+		if code == ServiceReattached {
+			mu.Lock()
+			reattached = append(reattached, message)
+			mu.Unlock()
+		}
+	})
+	t.Cleanup(func() { setStatusSink(nil) })
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(reattached)
+	}
+
+	// Each dial answers with a service that takes the subscription and hangs up.
+	quit := make(chan struct{})
+	var seen []int
+	dials := 0
+	dial := func() (net.Conn, error) {
+		dials++
+		// A subscription is announced before the next dial; wait for it to land.
+		want := []int{0, 0, 0, 1, 2}[dials-1]
+		for deadline := time.Now().Add(2 * time.Second); count() < want && time.Now().Before(deadline); {
+			time.Sleep(time.Millisecond)
+		}
+		seen = append(seen, count())
+		switch dials {
+		case 2:
+			return nil, errors.New("the service is not up")
+		case 5:
+			close(quit)
+			return nil, errors.New("end of the test")
+		}
+		client, server := net.Pipe()
+		go func() {
+			_, _ = server.Read(make([]byte, 1))
+			_ = server.Close()
+		}()
+		return client, nil
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runServiceEventLoop(dial, time.Millisecond, quit)
+	}()
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("the loop did not end")
+	}
+
+	// Before dial 1 none; before dial 2 the first subscription had said nothing;
+	// dial 2 failed; dial 3's subscription follows an earlier one and says it
+	// once; so does dial 4's.
+	if want := []int{0, 0, 0, 1, 2}; fmt.Sprint(seen) != fmt.Sprint(want) {
+		t.Errorf("announcements before each dial = %v, want %v", seen, want)
+	}
+	if fmt.Sprint(reattached) != "[[service] Reattached [service] Reattached]" {
+		t.Errorf("messages = %q", reattached)
 	}
 }

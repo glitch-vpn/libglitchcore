@@ -63,6 +63,11 @@ const (
 	EngineConflictOtherCore      = 506
 	EngineStopRejectedNotRunning = 507
 
+	// The client subscribed again to a service it had been subscribed to: the
+	// service may have restarted and lost what was set on it. Text
+	// "[service] Reattached".
+	ServiceReattached = 508
+
 	// JSON hotspotSharingEvent: what the shared connection of a Windows
 	// hotspot is, and whether its clients are blocked.
 	HotspotSharingEvent = 600

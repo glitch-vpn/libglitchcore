@@ -49,21 +49,51 @@ func ensureServiceIPC() {
 }
 
 func serviceEventLoop() {
-	retryDelay := time.Second
+	runServiceEventLoop(func() (net.Conn, error) { return dialService(eventPipeValueName, 2*time.Second) }, time.Second, nil)
+}
+
+// runServiceEventLoop relays the service's events until quit closes (never, in
+// production). Every subscription after the first, once it has been made, says
+// ServiceReattached once: a restarted service has none of what the client set
+// on it, and whoever set it has to set it again. The first subscription says
+// nothing, since the client has set nothing yet.
+func runServiceEventLoop(dial func() (net.Conn, error), retryDelay time.Duration, quit <-chan struct{}) {
+	pause := func() bool {
+		select {
+		case <-quit:
+			return false
+		case <-time.After(retryDelay):
+			return true
+		}
+	}
+	subscribedBefore := false
 	for {
-		conn, err := dialService(eventPipeValueName, 2*time.Second)
+		select {
+		case <-quit:
+			return
+		default:
+		}
+		conn, err := dial()
 		if err != nil {
 			logfmt.Warnf("[IPC] dial event pipe failed: %v", err)
-			time.Sleep(retryDelay)
+			if !pause() {
+				return
+			}
 			continue
 		}
 		// The service reads who subscribes once a byte has arrived.
 		if _, err := conn.Write([]byte{'\n'}); err != nil {
 			logfmt.Warnf("[IPC] event pipe write error: %v", err)
 			_ = conn.Close()
-			time.Sleep(retryDelay)
+			if !pause() {
+				return
+			}
 			continue
 		}
+		if subscribedBefore && globalController != nil {
+			globalController.emitStatus(ServiceReattached, "[service] Reattached")
+		}
+		subscribedBefore = true
 		scanner := bufio.NewScanner(conn)
 		scanner.Buffer(make([]byte, 0, 64*1024), 512*1024)
 		for scanner.Scan() {
@@ -81,7 +111,9 @@ func serviceEventLoop() {
 			logfmt.Warnf("[IPC] event pipe read error: %v", err)
 		}
 		_ = conn.Close()
-		time.Sleep(retryDelay)
+		if !pause() {
+			return
+		}
 	}
 }
 

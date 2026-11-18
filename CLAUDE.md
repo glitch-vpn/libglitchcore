@@ -112,6 +112,7 @@ mode the same pairs traverse the event pipe unmodified. The registry:
 | 400/401 | LogEvent/LogError | logfmt JSON `{ts,level,component,message}`; 401 is level error or fatal; the only codes gated by verbosity |
 | 402 | ConnEvent | connection inspector record |
 | 500–507 | Engine lifecycle | text; `[<engine>] <what>` |
+| 508 | ServiceReattached | text `[service] Reattached`; Windows client builds: emitted once each time the client subscribes again to the service's event pipe after an earlier subscription (never on the first), so the hotspot's whole state is to be sent again |
 | 600 | HotspotSharingEvent | `{"shared":"tunnel"\|"wifi"\|"none","blocked","error"}` — Windows only, see *Hotspot sharing*; a share ICS refused is `shared:"none"` with an `error` |
 
 Adding a code means: const in `controller.go`, the same value in the plugin's

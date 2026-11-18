@@ -151,6 +151,7 @@ Everything the caller needs to render arrives on the status port as
 | Code | Meaning |
 |---|---|
 | 500–507 | engine lifecycle: connecting, connected, error, disconnecting, disconnected, already running, conflict, stop rejected |
+| 508 | `[service] Reattached`: on Windows, the client subscribed again to the service after an earlier subscription, and what was set on the service (the hotspot's state) has to be set again |
 | 300 / 301 | traffic + memory stats (1 Hz), stats error; rx/tx are the session's proxied traffic on every engine, direct-routed traffic excluded |
 | 302 | connected server: name, host, port, protocol, and the whole pool |
 | 303 | external IPv4/IPv6 of the exit, fetched through the proxy whatever the routing tiers say |
