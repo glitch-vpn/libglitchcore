@@ -117,32 +117,86 @@ func TestControllerTracksTheEnginePhaseForALaterHotspot(t *testing.T) {
 	}
 }
 
-func TestPollPrepareHotspotRunsOnceOffTheCaller(t *testing.T) {
-	release := make(chan struct{})
+// resetPrepareFlight forgets an earlier test's repair.
+func resetPrepareFlight() {
+	prepareFlight.mu.Lock()
+	prepareFlight.token, prepareFlight.running, prepareFlight.finished, prepareFlight.result = "", false, false, 0
+	prepareFlight.mu.Unlock()
+}
+
+// replacePrepare makes the repair wait for release, counting its runs.
+func replacePrepare(t *testing.T, result int32) (release func(), runs func() int) {
+	t.Helper()
+	resetPrepareFlight()
+	gate := make(chan struct{})
+	var releaseOnce sync.Once
+	release = func() { releaseOnce.Do(func() { close(gate) }) }
+	t.Cleanup(release)
 	var mu sync.Mutex
-	calls := 0
+	count := 0
 	previous := prepareHotspotFunc
 	prepareHotspotFunc = func() int32 {
 		mu.Lock()
-		calls++
+		count++
 		mu.Unlock()
-		<-release
-		return hotspotResultRunning
+		<-gate
+		return result
 	}
 	t.Cleanup(func() { prepareHotspotFunc = previous })
+	return release, func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return count
+	}
+}
+
+func awaitPrepareAnswer(t *testing.T, token string) int32 {
+	t.Helper()
+	deadline := time.After(5 * time.Second)
+	for {
+		if done, result := pollPrepareHotspot(token); done {
+			return result
+		}
+		select {
+		case <-deadline:
+			t.Fatal("the repair never finished")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+}
+
+func TestPollPrepareHotspotRunsOnceOffTheCaller(t *testing.T) {
+	release, runs := replacePrepare(t, hotspotResultRunning)
 
 	for i := 0; i < 3; i++ {
-		if done, _ := pollPrepareHotspot(); done {
+		if done, _ := pollPrepareHotspot("a"); done {
 			t.Fatal("a repair that has not finished answered done")
 		}
 	}
-	close(release)
+	release()
+	if result := awaitPrepareAnswer(t, "a"); result != hotspotResultRunning {
+		t.Errorf("result = %d", result)
+	}
+	if got := runs(); got != 1 {
+		t.Errorf("the repair ran %d times, want 1", got)
+	}
+}
+
+// A finished repair's answer is its starter's alone: a second caller does not
+// receive it, however soon it asks, and starts its own repair.
+func TestPollPrepareHotspotAnswersOnlyTheSequenceThatStarted(t *testing.T) {
+	release, runs := replacePrepare(t, hotspotResultRunning)
+	release()
+
+	if done, _ := pollPrepareHotspot("first"); done {
+		t.Fatal("answered before the repair ran")
+	}
 	deadline := time.After(5 * time.Second)
 	for {
-		if done, result := pollPrepareHotspot(); done {
-			if result != hotspotResultRunning {
-				t.Errorf("result = %d", result)
-			}
+		prepareFlight.mu.Lock()
+		finished := prepareFlight.finished
+		prepareFlight.mu.Unlock()
+		if finished {
 			break
 		}
 		select {
@@ -151,9 +205,36 @@ func TestPollPrepareHotspotRunsOnceOffTheCaller(t *testing.T) {
 		case <-time.After(10 * time.Millisecond):
 		}
 	}
-	mu.Lock()
-	defer mu.Unlock()
-	if calls != 1 {
-		t.Errorf("the repair ran %d times, want 1", calls)
+
+	// The first caller never came back. Another does not get its answer.
+	if done, _ := pollPrepareHotspot("second"); done {
+		t.Fatal("the second caller was given the first one's answer")
+	}
+	if result := awaitPrepareAnswer(t, "second"); result != hotspotResultRunning {
+		t.Errorf("result = %d", result)
+	}
+	if got := runs(); got != 2 {
+		t.Errorf("the repair ran %d times, want 2: one per sequence", got)
+	}
+}
+
+// A caller that finds another's repair under way waits for it; it does not
+// start a second one beside it.
+func TestPollPrepareHotspotDoesNotStartASecondRepairBesideTheFirst(t *testing.T) {
+	release, runs := replacePrepare(t, ResultSuccess)
+
+	pollPrepareHotspot("first")
+	for i := 0; i < 3; i++ {
+		if done, _ := pollPrepareHotspot("second"); done {
+			t.Fatal("answered while the first repair runs")
+		}
+	}
+	if got := runs(); got > 1 {
+		t.Errorf("%d repairs started at once", got)
+	}
+	release()
+	awaitPrepareAnswer(t, "first")
+	if result := awaitPrepareAnswer(t, "second"); result != ResultSuccess {
+		t.Errorf("result = %d", result)
 	}
 }

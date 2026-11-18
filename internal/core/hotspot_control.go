@@ -24,13 +24,15 @@ func PrepareHotspot() int32 {
 
 // The repair restarts a service and takes up to a minute, so it is one at a
 // time, and the service runs it off its command pipe: a command there returns
-// promptly, and the client asks again until the repair is done.
+// promptly, and the client asks again, with the token it started with, until
+// the repair is done.
 var (
 	// prepareHotspotFunc is what the repair runs; a test replaces it.
 	prepareHotspotFunc = prepareHotspot
 	prepareMu          sync.Mutex
 	prepareFlight      struct {
 		mu       sync.Mutex
+		token    string // the poll sequence that started the current or last repair
 		running  bool
 		finished bool
 		result   int32
@@ -43,24 +45,28 @@ func prepareHotspotOnce() int32 {
 	return prepareHotspotFunc()
 }
 
-// pollPrepareHotspot starts the repair when none is under way, and answers
-// whether it is done and with what; an answer is given once.
-func pollPrepareHotspot() (done bool, result int32) {
+// pollPrepareHotspot answers whether the repair that the token's poll sequence
+// started is done and with what, and gives that answer once. A sequence that
+// finds another's repair under way waits for it and then starts its own; a
+// finished answer is only ever its starter's, however late the starter asks,
+// and is dropped when another sequence asks.
+func pollPrepareHotspot(token string) (done bool, result int32) {
 	prepareFlight.mu.Lock()
 	defer prepareFlight.mu.Unlock()
-	if prepareFlight.finished {
+	if prepareFlight.finished && prepareFlight.token == token {
 		prepareFlight.finished = false
 		return true, prepareFlight.result
 	}
-	if !prepareFlight.running {
-		prepareFlight.running = true
-		go func() {
-			result := prepareHotspotOnce()
-			prepareFlight.mu.Lock()
-			prepareFlight.result, prepareFlight.finished, prepareFlight.running = result, true, false
-			prepareFlight.mu.Unlock()
-		}()
+	if prepareFlight.running {
+		return false, 0
 	}
+	prepareFlight.token, prepareFlight.running, prepareFlight.finished = token, true, false
+	go func() {
+		result := prepareHotspotOnce()
+		prepareFlight.mu.Lock()
+		prepareFlight.result, prepareFlight.finished, prepareFlight.running = result, true, false
+		prepareFlight.mu.Unlock()
+	}()
 	return false, 0
 }
 

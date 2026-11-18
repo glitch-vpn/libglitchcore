@@ -770,7 +770,13 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		globalController.replaySession()
 		return pipeResponse{OK: true}
 	case "prepare_hotspot":
-		done, result := pollPrepareHotspot()
+		var payload struct {
+			Token string `json:"token"`
+		}
+		if err := json.Unmarshal(cmd.Payload, &payload); err != nil || payload.Token == "" {
+			return pipeResponse{OK: false, Error: "prepare_hotspot needs a token"}
+		}
+		done, result := pollPrepareHotspot(payload.Token)
 		return pipeResponse{OK: true, Data: map[string]any{"result": result, "done": done}}
 	case "set_hotspot_sharing":
 		var payload struct {

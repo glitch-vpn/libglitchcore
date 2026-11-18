@@ -4,6 +4,8 @@ package core
 
 import (
 	"bufio"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -322,11 +324,17 @@ func serviceHotspotResult(action string, payload map[string]any) (result int32, 
 }
 
 // servicePrepareHotspot asks until the service's repair is done: each command
-// returns at once, so none holds the pipe while ICS restarts.
+// returns at once, so none holds the pipe while ICS restarts. The token names
+// this wait, so the service gives the repair's answer to it alone.
 func servicePrepareHotspot() (int32, error) {
+	var raw [16]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return 0, err
+	}
+	payload := map[string]any{"token": hex.EncodeToString(raw[:])}
 	deadline := time.Now().Add(hotspotPrepareTimeout)
 	for {
-		result, done, err := serviceHotspotResult("prepare_hotspot", nil)
+		result, done, err := serviceHotspotResult("prepare_hotspot", payload)
 		if err != nil || done {
 			return result, err
 		}

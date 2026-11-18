@@ -5,6 +5,7 @@ package core
 import (
 	"encoding/json"
 	"testing"
+	"time"
 )
 
 func TestServiceDispatch_SetConnInspector(t *testing.T) {
@@ -39,5 +40,53 @@ func TestServiceDispatch_SetHotspotSharingOff(t *testing.T) {
 	bad, _ := json.Marshal(map[string]string{"request": `{`})
 	if resp := dispatchCommand(pipeCommand{Action: "set_hotspot_sharing", Payload: bad}); resp.OK {
 		t.Error("a request that is not JSON was accepted")
+	}
+}
+
+// prepare_hotspot starts the repair off the command and answers at once; the
+// client asks again with its token until the repair is done, and the answer is
+// only its own.
+func TestServiceDispatch_PrepareHotspotRunsOffTheCommand(t *testing.T) {
+	release, runs := replacePrepare(t, hotspotResultRunning)
+	ask := func(token string) (done bool, result int32, ok bool) {
+		payload, _ := json.Marshal(map[string]string{"token": token})
+		resp := dispatchCommand(pipeCommand{Action: "prepare_hotspot", Payload: payload})
+		data, _ := resp.Data.(map[string]any)
+		done, _ = data["done"].(bool)
+		result, _ = data["result"].(int32)
+		return done, result, resp.OK
+	}
+
+	started := time.Now()
+	if done, _, ok := ask("a"); !ok || done {
+		t.Fatalf("a repair under way answered done %t, ok %t", done, ok)
+	}
+	if time.Since(started) > 2*time.Second {
+		t.Error("the command waited for the repair")
+	}
+	if done, _, _ := ask("b"); done {
+		t.Error("another caller was answered while the repair runs")
+	}
+	release()
+	deadline := time.After(5 * time.Second)
+	for {
+		if done, result, _ := ask("a"); done {
+			if result != hotspotResultRunning {
+				t.Errorf("result = %d, want %d", result, hotspotResultRunning)
+			}
+			break
+		}
+		select {
+		case <-deadline:
+			t.Fatal("the repair never finished")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if got := runs(); got != 1 {
+		t.Errorf("the repair ran %d times for one caller and a waiting one", got)
+	}
+
+	if resp := dispatchCommand(pipeCommand{Action: "prepare_hotspot"}); resp.OK {
+		t.Error("a request with no token was accepted")
 	}
 }
