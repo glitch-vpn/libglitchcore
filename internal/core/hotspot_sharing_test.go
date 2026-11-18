@@ -276,8 +276,8 @@ func (f *hotspotFixture) wantState(shared string, blocked bool, public uint32, f
 	if event.Shared != shared || event.Blocked != blocked {
 		f.t.Errorf("event = %+v, want shared %q blocked %t", event, shared, blocked)
 	}
-	if event.Error != "" || event.RestartOn != "" {
-		f.t.Errorf("event = %+v, want no error and no restart", event)
+	if event.Error != "" {
+		f.t.Errorf("event = %+v, want no error", event)
 	}
 	f.wantPair(public, forwarding)
 }
@@ -555,21 +555,20 @@ func TestHotspotSharingRechecksTheRememberedConnection(t *testing.T) {
 }
 
 // A Windows without the live-switch exports cannot share anything, so nothing
-// is forwarded: the block stays and the error says why. No restart is asked
-// for, since nothing could confirm the pair it gave.
+// is forwarded: the block stays and the error says why.
 func TestHotspotSharingWithoutExportsNeverForwards(t *testing.T) {
 	f := newHotspotFixture(t)
 	f.os.available = false
 	f.allow()
 	f.set(true, false)
 	event := f.last()
-	if !event.Blocked || event.Error == "" || event.RestartOn != "" || event.Shared != hotspotSharedNone {
-		t.Errorf("event = %+v, want blocked, none, an error and no restart", event)
+	if !event.Blocked || event.Error == "" || event.Shared != hotspotSharedNone {
+		t.Errorf("event = %+v, want blocked, none and an error", event)
 	}
 	f.engineEvent(EngineConnected)
 	event = f.last()
-	if !event.Blocked || event.Error == "" || event.RestartOn != "" {
-		t.Errorf("event = %+v, want blocked with an error and no restart", event)
+	if !event.Blocked || event.Error == "" || event.Shared != hotspotSharedNone {
+		t.Errorf("event = %+v, want blocked, none and an error", event)
 	}
 	if f.os.callsMatching("share") != 0 || f.os.callsMatching("unshare") != 0 {
 		t.Errorf("called the unavailable exports: %v", f.os.calls)
@@ -622,14 +621,14 @@ func TestHotspotSharingRefusedShareKeepsForwardingOff(t *testing.T) {
 	f.os.shareErr = errors.New("denied")
 	f.allow(testWiFi)
 	f.set(true, false)
-	if event := f.last(); event.RestartOn != hotspotSharedWiFi || event.Error == "" || !event.Blocked {
-		t.Errorf("event = %+v, want blocked, restartOn wifi with an error", event)
+	if event := f.last(); event.Shared != hotspotSharedNone || event.Error == "" || !event.Blocked {
+		t.Errorf("event = %+v, want blocked, none with an error", event)
 	}
 	f.allow()
 	f.engineEvent(EngineConnected)
 	event := f.last()
-	if event.RestartOn != hotspotSharedTunnel || event.Error == "" || !event.Blocked {
-		t.Errorf("event = %+v, want blocked, restartOn tunnel with an error", event)
+	if event.Shared != hotspotSharedNone || event.Error == "" || !event.Blocked {
+		t.Errorf("event = %+v, want blocked, none with an error", event)
 	}
 	// ICS refused to move and was stopped for another try: nothing forwards.
 	f.wantPair(math.MaxUint32, false)
@@ -639,8 +638,8 @@ func TestHotspotSharingRefusedShareKeepsForwardingOff(t *testing.T) {
 	f.os.forwarding[testHotspot] = true
 	f.engineEvent(EngineDisconnecting)
 	f.engineEvent(EngineDisconnected)
-	if event := f.last(); event.RestartOn != hotspotSharedWiFi || !event.Blocked {
-		t.Errorf("event = %+v, want blocked, restartOn wifi", event)
+	if event := f.last(); event.Shared != hotspotSharedNone || event.Error == "" || !event.Blocked {
+		t.Errorf("event = %+v, want blocked, none with an error", event)
 	}
 	f.wantPair(math.MaxUint32, false)
 }

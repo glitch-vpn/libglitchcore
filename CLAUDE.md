@@ -112,7 +112,7 @@ mode the same pairs traverse the event pipe unmodified. The registry:
 | 400/401 | LogEvent/LogError | logfmt JSON `{ts,level,component,message}`; 401 is level error or fatal; the only codes gated by verbosity |
 | 402 | ConnEvent | connection inspector record |
 | 500–507 | Engine lifecycle | text; `[<engine>] <what>` |
-| 600 | HotspotSharingEvent | `{"shared":"tunnel"\|"wifi"\|"none","blocked","error","restartOn":""\|"tunnel"\|"wifi"}` — Windows only, see *Hotspot sharing* |
+| 600 | HotspotSharingEvent | `{"shared":"tunnel"\|"wifi"\|"none","blocked","error"}` — Windows only, see *Hotspot sharing*; a share ICS refused is `shared:"none"` with an `error` |
 
 Adding a code means: const in `controller.go`, the same value in the plugin's
 `GlitchVpnCoreFfiEventCode`, payload struct with json tags, and a smoke
@@ -149,8 +149,7 @@ gone. Proxy mode is the session's own flag, always "down".
   forwarding is turned off on every adapter that might be it, and on the last known one at every failed
   listing. With sharing on and none up the event is quiet and `blocked` for 10 s, then carries an error
   (the plugin stops the hotspot). A Windows without the sharing exports
-  shares nothing, so forwarding stays off and `restartOn` is not asked for (nothing could confirm the
-  restart).
+  shares nothing, so forwarding stays off and the event says `none` with an error.
 - ICS shares the physical connection, not the tunnel's adapter, while the tunnel is down: sharing the
   tunnel's turns the hotspot off when it goes. An index of an adapter that no longer exists is never the
   physical connection; the one shared last is looked at again before it is shared again.

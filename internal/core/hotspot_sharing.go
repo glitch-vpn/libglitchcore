@@ -58,14 +58,12 @@ type hotspotSharingRequest struct {
 	BlockedClients       []string `json:"blockedClients"`
 }
 
-// hotspotSharingEvent is the payload of HotspotSharingEvent. RestartOn names
-// the connection whose share ICS refused, the one the hotspot is to be
-// restarted on.
+// hotspotSharingEvent is the payload of HotspotSharingEvent. A share ICS refused
+// is Shared "none" with an Error.
 type hotspotSharingEvent struct {
-	Shared    string `json:"shared"`
-	Blocked   bool   `json:"blocked"`
-	Error     string `json:"error"`
-	RestartOn string `json:"restartOn"`
+	Shared  string `json:"shared"`
+	Blocked bool   `json:"blocked"`
+	Error   string `json:"error"`
 }
 
 // hotspotOS is every call the order makes on the operating system. An index
@@ -526,9 +524,6 @@ func (h *hotspotSharing) apply(request hotspotSharingRequest, clients []netip.Ad
 		if shareErr := h.share(want, hotspot); shareErr != nil {
 			h.shared = sharedRecord{}
 			problems = append(problems, fmt.Errorf("share the %s connection: %w", kind, shareErr))
-			if h.os.SharingAvailable() {
-				event.RestartOn = kind
-			}
 		} else {
 			h.shared = sharedRecord{ok: true, public: want, hotspot: hotspot}
 			h.lastShared = h.shared

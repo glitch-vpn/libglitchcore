@@ -156,7 +156,7 @@ Everything the caller needs to render arrives on the status port as
 | 303 | external IPv4/IPv6 of the exit, fetched through the proxy whatever the routing tiers say |
 | 400 / 401 | structured logs (off by default); 401 carries the error and fatal lines; credentials are redacted and xray masks addresses |
 | 402 | per-connection inspector (opt-in) |
-| 600 | Windows hotspot sharing: `{"shared":"tunnel"\|"wifi"\|"none","blocked","error","restartOn"}`; `shared` is what the core itself shared with the hotspot's adapter; `restartOn` names the connection whose share ICS refused, to restart the hotspot on |
+| 600 | Windows hotspot sharing: `{"shared":"tunnel"\|"wifi"\|"none","blocked","error"}`; `shared` is what the core itself shared with the hotspot's adapter, and a share ICS refused is `none` with an `error` |
 
 The Windows hotspot is driven by two calls. `PrepareHotspot()` repairs ICS's
 stale state before a hotspot starts and answers 0, 1 (the service cannot be

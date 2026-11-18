@@ -35,9 +35,8 @@ func TestHotspotSharingForgedPublicSideNeverForwards(t *testing.T) {
 	for name, tc := range map[string]struct {
 		configure   func(*fakeHotspotOS)
 		wantAttempt bool // the report did not excuse a share
-		wantRestart string
 	}{
-		"share refused": {configure: func(os *fakeHotspotOS) { os.shareErr = errors.New("denied") }, wantAttempt: true, wantRestart: hotspotSharedTunnel},
+		"share refused": {configure: func(os *fakeHotspotOS) { os.shareErr = errors.New("denied") }, wantAttempt: true},
 		"no exports":    {configure: func(os *fakeHotspotOS) { os.available = false }},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -50,11 +49,8 @@ func TestHotspotSharingForgedPublicSideNeverForwards(t *testing.T) {
 			f.set(true, true)
 
 			event := f.last()
-			if !event.Blocked || event.Error == "" || event.RestartOn != tc.wantRestart {
-				t.Errorf("event = %+v, want blocked with an error and restartOn %q", event, tc.wantRestart)
-			}
-			if event.Shared == hotspotSharedTunnel {
-				t.Errorf("event = %+v: reported the tunnel as shared on a forged record", event)
+			if !event.Blocked || event.Error == "" || event.Shared != hotspotSharedNone {
+				t.Errorf("event = %+v, want blocked, none and an error: the tunnel is not shared on a forged record", event)
 			}
 			if f.os.forwarding[testHotspot] {
 				t.Error("forwarding stayed on with ICS really on the Wi-Fi")
@@ -120,8 +116,8 @@ func TestHotspotSharingRefusedShareStopsOnlyThePairOfTheHotspot(t *testing.T) {
 	if f.os.callsMatching("unshare") != 0 {
 		t.Errorf("stopped a pair on a private side that is not the hotspot's: %v", f.os.calls)
 	}
-	if event := f.last(); !event.Blocked || event.RestartOn != hotspotSharedTunnel {
-		t.Errorf("event = %+v, want blocked and a restart on the tunnel", event)
+	if event := f.last(); !event.Blocked || event.Shared != hotspotSharedNone || event.Error == "" {
+		t.Errorf("event = %+v, want blocked, none and an error", event)
 	}
 }
 
