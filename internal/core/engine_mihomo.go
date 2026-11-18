@@ -371,12 +371,23 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 		inbound = mihomoconfig.Inbound{Tun: tin}
 	}
 
+	// The adapter first: a name another process holds fails the start before
+	// any config is built, and the gate is free again.
+	if inbound.Tun != nil && inbound.Tun.Device != "" {
+		release, err := claimDesktopAdapter()
+		if err != nil {
+			return fmt.Errorf("[mihomo] %w", err)
+		}
+		x.desktopAdapterRelease = release
+	}
+
 	// Home dir must be set before BuildConfig - ParseRawConfig loads geo at parse
 	// time for GEOSITE/GEOIP rules. The env snapshot/restore runs here too, or
 	// ensureMihomoHome's env fallback would inherit a previous xray session's
 	// override.
 	applyGeoAssetsDir(o.geoAssetsDir)
 	if err := ensureMihomoHome(o.geoAssetsDir); err != nil {
+		x.releaseDesktopAdapter()
 		return fmt.Errorf("[mihomo] %w", err)
 	}
 	startMihomoLogBridge()
@@ -385,19 +396,12 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 		mihomoconfig.Options{Strategy: o.strategy, DisableSniffing: !o.sniffing, ProbeURL: o.probeURL, Fingerprint: o.fingerprint, HopResolver: hopResolver(dns)}, prof)
 	if err != nil {
 		stopMihomoLogBridge()
+		x.releaseDesktopAdapter()
 		return fmt.Errorf("[mihomo] config build: %w", err)
 	}
 
 	if bridge != nil {
 		bridge.adoptDirectBlocks(cfg, prof)
-	}
-	if inbound.Tun != nil && inbound.Tun.Device != "" {
-		release, err := claimDesktopAdapter()
-		if err != nil {
-			stopMihomoLogBridge()
-			return fmt.Errorf("[mihomo] %w", err)
-		}
-		x.desktopAdapterRelease = release
 	}
 	countMihomoDirect(cfg, &mihomoSessionTraffic)
 	mihomoSessionTraffic.startSession()
