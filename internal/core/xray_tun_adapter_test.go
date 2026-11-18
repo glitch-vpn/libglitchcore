@@ -5,6 +5,7 @@ package core
 import (
 	"bytes"
 	"log"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -101,7 +102,7 @@ func TestXrayTunLayer_NextAdapterWaitsForALateClose(t *testing.T) {
 }
 
 // The layer's start and stop each write their steps' durations to the core's
-// log, with no address or host name in them.
+// log, and the lines hold no address, port or host name.
 func TestXrayTunLayer_LogsTheDurationOfEachStep(t *testing.T) {
 	prevNew := newTunDevice
 	t.Cleanup(func() { newTunDevice = prevNew })
@@ -111,6 +112,7 @@ func TestXrayTunLayer_LogsTheDurationOfEachStep(t *testing.T) {
 	var logged bytes.Buffer
 	prevWriter, prevFlags := log.Writer(), log.Flags()
 	log.SetOutput(&logged)
+	log.SetFlags(0)
 	t.Cleanup(func() { log.SetOutput(prevWriter); log.SetFlags(prevFlags) })
 
 	x := &CoreController{}
@@ -144,5 +146,8 @@ func TestXrayTunLayer_LogsTheDurationOfEachStep(t *testing.T) {
 		if !strings.Contains(out, step) {
 			t.Errorf("log lacks %q:\n%s", step, out)
 		}
+	}
+	if leak := regexp.MustCompile(`\d+\.\d+\.\d+\.\d+|:\d|[A-Za-z0-9-]+\.[A-Za-z]{2,}`).FindString(out); leak != "" {
+		t.Errorf("log holds %q, which reads as an address, port or host name:\n%s", leak, out)
 	}
 }
