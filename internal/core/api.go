@@ -95,7 +95,6 @@ func Initialize() {
 	log.SetFlags(0)
 	log.SetOutput(sinkWriter{})
 	registerCoreLogHandler()
-	silenceMihomoPrinter()
 	controller := &CoreController{}
 	globalController = controller
 }

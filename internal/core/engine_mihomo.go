@@ -53,6 +53,11 @@ func (mihomoEngine) Traffic(x *CoreController) (uint64, uint64, bool) {
 }
 
 func init() {
+	// mihomo's level is a plain package variable its goroutines read on every
+	// event, so it is written here, before any of them can exist, and never
+	// again by the core. mihomo's own ApplyConfig writes it too, from the
+	// config's log-level, which is always silent.
+	mihomoLog.SetLevel(mihomoLog.SILENT)
 	registerEngine(mihomoEngine{})
 	registerEngineVersion("mihomo", func() string { return builtMihomoVersion })
 }
@@ -96,12 +101,6 @@ func stopMihomoLogBridge() {
 		mihomoLog.UnSubscribe(mihomoLogSub) // closes the channel -> goroutine exits
 		mihomoLogSub = nil
 	}
-}
-
-// ApplyConfig sets the printer to the config's level, so every config the core
-// applies says silent too (mihomoconfig.BuildConfig, mihomoTeardown).
-func silenceMihomoPrinter() {
-	mihomoLog.SetLevel(mihomoLog.SILENT)
 }
 
 var mihomoConnQuit chan struct{}

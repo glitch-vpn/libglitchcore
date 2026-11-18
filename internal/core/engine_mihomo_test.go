@@ -24,10 +24,9 @@ func TestEngineRegistry_HasMihomo(t *testing.T) {
 }
 
 // mihomo's events reach the sink at mihomo's own level, through its
-// subscription, while its stdout printer stays off.
+// subscription; the printer is silent from the package's init.
 func TestMihomoLogBridge_KeepsMihomosLevel(t *testing.T) {
 	logs := captureLogs(t, 2)
-	silenceMihomoPrinter()
 	startMihomoLogBridge()
 	t.Cleanup(stopMihomoLogBridge)
 
@@ -42,14 +41,24 @@ func TestMihomoLogBridge_KeepsMihomosLevel(t *testing.T) {
 		{LogEvent, "warn", "mihomo", "[Provider] error in health check"},
 		{LogError, "error", "mihomo", "[Config] started"},
 	}
+	// mihomo's goroutines and finalizers from earlier tests log too, at any
+	// moment, so only the four lines this test wrote are compared.
+	ownLines := func() []capturedLog {
+		var own []capturedLog
+		for _, entry := range logs() {
+			for _, line := range want {
+				if entry == line {
+					own = append(own, entry)
+				}
+			}
+		}
+		return own
+	}
 	deadline := time.Now().Add(5 * time.Second)
-	for len(logs()) < len(want) && time.Now().Before(deadline) {
+	for len(ownLines()) < len(want) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	assertLogs(t, logs(), want)
-	if mihomoLog.Level() != mihomoLog.SILENT {
-		t.Errorf("mihomo's own printer is at %v, want silent", mihomoLog.Level())
-	}
+	assertLogs(t, ownLines(), want)
 }
 
 // ApplyConfig sets mihomo's printer from the config it is given.
