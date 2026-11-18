@@ -3,7 +3,7 @@
 package core
 
 import (
-	"net/netip"
+	"net"
 	"regexp"
 	"strings"
 	"testing"
@@ -14,8 +14,8 @@ import (
 
 func TestWFPKeysMatchTheHeaders(t *testing.T) {
 	for name, got := range map[string][2]string{
-		"FWPM_LAYER_IPFORWARD_V4":               {layerIPForwardV4.String(), "{A82ACC24-4EE1-4EE1-B465-FD1D25CB10A4}"},
-		"FWPM_CONDITION_IP_DESTINATION_ADDRESS": {conditionIPDestinationAddr.String(), "{2D79133B-B390-45C6-8699-ACACEAAFED33}"},
+		"FWPM_LAYER_INBOUND_MAC_FRAME_ETHERNET": {layerInboundMACFrameEthernet.String(), "{EFFB7EDB-0055-4F9A-A231-4FF8131AD191}"},
+		"FWPM_CONDITION_MAC_REMOTE_ADDRESS":     {conditionMACRemoteAddress.String(), "{408F2ED4-3A70-4B4D-92A6-415AC20E2F12}"},
 	} {
 		if got[0] != got[1] {
 			t.Errorf("%s = %s, fwpmu.h says %s", name, got[0], got[1])
@@ -29,7 +29,6 @@ func TestWFPStructSizesMatchTheHeaders(t *testing.T) {
 		"FWPM_SUBLAYER0":         {unsafe.Sizeof(fwpmSubLayer{}), 72},
 		"FWPM_FILTER_CONDITION0": {unsafe.Sizeof(fwpmFilterCondition{}), 40},
 		"FWPM_FILTER0":           {unsafe.Sizeof(fwpmFilter{}), 200},
-		"FWP_V4_ADDR_AND_MASK":   {unsafe.Sizeof(fwpV4AddrAndMask{}), 8},
 	} {
 		if got[0] != got[1] {
 			t.Errorf("%s is %d bytes, want %d", name, got[0], got[1])
@@ -52,16 +51,16 @@ func TestWFPStructSizesMatchTheHeaders(t *testing.T) {
 	}
 }
 
-func TestClientBlockerWithoutAddressesOpensNothing(t *testing.T) {
+func TestClientBlockerWithoutDevicesOpensNothing(t *testing.T) {
 	var blocker clientBlocker
 	if err := blocker.set(nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := blocker.set([]netip.Addr{}); err != nil {
+	if err := blocker.set([]net.HardwareAddr{}); err != nil {
 		t.Fatal(err)
 	}
 	if blocker.engine != 0 {
-		t.Error("an engine session was opened for no addresses")
+		t.Error("an engine session was opened for no devices")
 	}
 }
 

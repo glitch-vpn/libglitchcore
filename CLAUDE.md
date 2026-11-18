@@ -122,14 +122,14 @@ break it.
 
 ### Hotspot sharing (Windows)
 
-`PrepareHotspot()` and `SetHotspotSharing(json)` (`{"on","blockWhileTunnelDown","blockedClients":[IPv4…]}`,
-at most 8 clients, the whole wanted state, idempotent) are the two exports the plugin's hotspot uses; both
+`PrepareHotspot()` and `SetHotspotSharing(json)` (`{"on","blockWhileTunnelDown","blockedClients":[MAC…]}`,
+at most 8 devices (the frames a MAC sends are dropped), the whole wanted state, idempotent) are the two exports the plugin's hotspot uses; both
 answer 3 off Windows and go over the service pipe (`set_hotspot_sharing` with a result code in `data`;
 `prepare_hotspot` starts the repair off the pipe and answers `{"result","done"}` to a token the client sends, asked again
 until done, so no command holds the pipe while ICS restarts).
 `hotspot_sharing.go` is the order over a `hotspotOS` interface (tested over fakes); the Windows calls are
 `hotspot_windows.go` (HNetCfgClient.dll's undocumented sharing exports, loaded from System32; finding the
-hotspot's adapter; forwarding through winipcfg), `hotspot_wfp_windows.go` (the per-client block) and
+hotspot's adapter; forwarding through winipcfg), `hotspot_wfp_windows.go` (the per-device block, a filter on the MAC at the inbound Ethernet frame layer) and
 `hotspot_ics_windows.go` (the repair).
 The order follows the controller's own lifecycle events from `emitStatus` (the controller tracks the
 phase from the start, so a hotspot turned on under a running tunnel begins from it) and the tunnel's

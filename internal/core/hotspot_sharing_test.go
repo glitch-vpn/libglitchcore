@@ -1,11 +1,12 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"net/netip"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -43,7 +44,7 @@ type fakeHotspotOS struct {
 	down       map[uint32]bool // interfaces that exist and are down
 	hotspotErr error
 	forwarding map[uint32]bool
-	clients    []netip.Addr
+	clients    []net.HardwareAddr
 
 	shareErr   error
 	shareFails int // how many Share calls still fail
@@ -188,11 +189,11 @@ func (f *fakeHotspotOS) SetForwarding(index uint32, on bool) error {
 	return nil
 }
 
-func (f *fakeHotspotOS) BlockClients(addresses []netip.Addr) error {
+func (f *fakeHotspotOS) BlockClients(macs []net.HardwareAddr) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.record("clients %v", addresses)
-	f.clients = slices.Clone(addresses)
+	f.record("clients %v", macs)
+	f.clients = slices.Clone(macs)
 	return nil
 }
 
@@ -681,7 +682,7 @@ func TestHotspotSharingWaitsForTheHotspotsInterface(t *testing.T) {
 func TestHotspotSharingOffLeavesNoPairAndNoBlock(t *testing.T) {
 	f := newHotspotFixture(t)
 	f.allow()
-	f.set(true, true, "192.168.137.20")
+	f.set(true, true, "02:00:00:00:00:20")
 	f.allow(testTunnel)
 	f.engineEvent(EngineConnected)
 	f.allow()
@@ -768,13 +769,13 @@ func TestHotspotSharingOffOnAFreshCore(t *testing.T) {
 
 func TestHotspotSharingBlockedClients(t *testing.T) {
 	f := newHotspotFixture(t)
-	f.set(true, false, "192.168.137.30", "192.168.137.20", "192.168.137.30")
-	want := []netip.Addr{netip.MustParseAddr("192.168.137.20"), netip.MustParseAddr("192.168.137.30")}
-	if !slices.Equal(f.os.clients, want) {
+	f.set(true, false, "02:00:00:00:00:30", "02-00-00-00-00-20", "02:00:00:00:00:30")
+	want := []net.HardwareAddr{{2, 0, 0, 0, 0, 0x20}, {2, 0, 0, 0, 0, 0x30}}
+	if !slices.EqualFunc(f.os.clients, want, func(a, b net.HardwareAddr) bool { return bytes.Equal(a, b) }) {
 		t.Errorf("blocked = %v, want %v", f.os.clients, want)
 	}
 	f.sharing.reconcile()
-	f.set(true, false, "192.168.137.30", "192.168.137.20")
+	f.set(true, false, "02:00:00:00:00:30", "02:00:00:00:00:20")
 	if got := f.os.callsMatching("clients"); got != 1 {
 		t.Errorf("the same set was applied %d times", got)
 	}
@@ -783,7 +784,7 @@ func TestHotspotSharingBlockedClients(t *testing.T) {
 		t.Errorf("unblocked clients are still blocked: %v", f.os.clients)
 	}
 
-	for _, bad := range []string{"fe80::1", "not an address", ""} {
+	for _, bad := range []string{"192.168.137.20", "fe80::1", "not an address", "", "02:00:00:00:00:00:00:20", "02:00:00:00"} {
 		err := f.sharing.set(hotspotSharingRequest{On: true, BlockedClients: []string{bad}})
 		if err == nil {
 			t.Errorf("%q was accepted", bad)
@@ -794,16 +795,16 @@ func TestHotspotSharingBlockedClients(t *testing.T) {
 func TestParseBlockedClientsCapsAndDeduplicates(t *testing.T) {
 	var eight []string
 	for i := 1; i <= maxBlockedClients; i++ {
-		eight = append(eight, fmt.Sprintf("192.168.137.%d", i))
+		eight = append(eight, fmt.Sprintf("02:00:00:00:00:%02x", i))
 	}
 	if got, err := parseBlockedClients(eight); err != nil || len(got) != maxBlockedClients {
 		t.Errorf("%d addresses: %v, %v", maxBlockedClients, got, err)
 	}
-	if _, err := parseBlockedClients(append(eight, "192.168.137.99")); err == nil {
+	if _, err := parseBlockedClients(append(eight, "02:00:00:00:00:99")); err == nil {
 		t.Errorf("more than %d addresses were accepted", maxBlockedClients)
 	}
-	got, err := parseBlockedClients([]string{"10.0.0.2", "10.0.0.2", " 10.0.0.1 "})
-	if err != nil || len(got) != 2 || got[0] != netip.MustParseAddr("10.0.0.1") {
+	got, err := parseBlockedClients([]string{"02:00:00:00:00:02", "02-00-00-00-00-02", " 02:00:00:00:00:01 ", "02:00:00:00:00:AA"})
+	if err != nil || len(got) != 3 || got[0].String() != "02:00:00:00:00:01" || got[2].String() != "02:00:00:00:00:aa" {
 		t.Errorf("parse = %v, %v", got, err)
 	}
 }

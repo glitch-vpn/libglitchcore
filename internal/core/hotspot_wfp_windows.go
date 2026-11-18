@@ -3,37 +3,36 @@
 package core
 
 import (
-	"encoding/binary"
 	"errors"
 	"fmt"
-	"net/netip"
+	"net"
 	"runtime"
-	"slices"
 	"sync"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-// A per-client block is a Windows Filtering Platform filter at the IPv4
-// forward layer that blocks what is forwarded to a client's address, in a
-// session whose filters go with it: when the process ends, so do they.
+// A per-client block is a Windows Filtering Platform filter at the inbound
+// Ethernet frame layer that drops every frame a client's MAC address sends to
+// the hotspot, in a session whose filters go with it: when the process ends, so
+// do they. The client reaches nothing beyond the PC, and Android drops its
+// connection to the network.
 //
-// A condition on the client as the source never matches there: the client's
-// packets reach that layer already translated by ICS. The replies the NAT turns
-// back carry the client as the destination, and dropping them leaves it on the
-// hotspot without a connection that needs an answer; what it sends needing none
-// still leaves (measured on Windows 11 23H2 with the tunnel down).
+// The IP layers cannot say it. At the IPv4 forward layer a condition on the
+// client as the source never matches, ICS having translated its packets by
+// then, and one on the client as the destination drops only the replies, not
+// what the client sends needing none.
 
 var (
-	fwpuclnt                   = windows.NewLazySystemDLL("fwpuclnt.dll")
-	procFwpmEngineOpen         = fwpuclnt.NewProc("FwpmEngineOpen0")
-	procFwpmEngineClose        = fwpuclnt.NewProc("FwpmEngineClose0")
-	procFwpmSubLayerAdd        = fwpuclnt.NewProc("FwpmSubLayerAdd0")
-	procFwpmFilterAdd          = fwpuclnt.NewProc("FwpmFilterAdd0")
-	procFwpmFilterDeleteBy     = fwpuclnt.NewProc("FwpmFilterDeleteById0")
-	layerIPForwardV4           = windows.GUID{Data1: 0xa82acc24, Data2: 0x4ee1, Data3: 0x4ee1, Data4: [8]byte{0xb4, 0x65, 0xfd, 0x1d, 0x25, 0xcb, 0x10, 0xa4}}
-	conditionIPDestinationAddr = windows.GUID{Data1: 0x2d79133b, Data2: 0xb390, Data3: 0x45c6, Data4: [8]byte{0x86, 0x99, 0xac, 0xac, 0xea, 0xaf, 0xed, 0x33}}
+	fwpuclnt                     = windows.NewLazySystemDLL("fwpuclnt.dll")
+	procFwpmEngineOpen           = fwpuclnt.NewProc("FwpmEngineOpen0")
+	procFwpmEngineClose          = fwpuclnt.NewProc("FwpmEngineClose0")
+	procFwpmSubLayerAdd          = fwpuclnt.NewProc("FwpmSubLayerAdd0")
+	procFwpmFilterAdd            = fwpuclnt.NewProc("FwpmFilterAdd0")
+	procFwpmFilterDeleteBy       = fwpuclnt.NewProc("FwpmFilterDeleteById0")
+	layerInboundMACFrameEthernet = windows.GUID{Data1: 0xeffb7edb, Data2: 0x0055, Data3: 0x4f9a, Data4: [8]byte{0xa2, 0x31, 0x4f, 0xf8, 0x13, 0x1a, 0xd1, 0x91}}
+	conditionMACRemoteAddress    = windows.GUID{Data1: 0x408f2ed4, Data2: 0x3a70, Data3: 0x4b4d, Data4: [8]byte{0x92, 0xa6, 0x41, 0x5a, 0xc2, 0x0e, 0x2f, 0x12}}
 )
 
 // The layouts are those of fwpmtypes.h and fwptypes.h on a 64-bit Windows;
@@ -42,7 +41,7 @@ const (
 	fwpmSessionFlagDynamic = 0x1
 	rpcAuthnWinNT          = 10
 	fwpMatchEqual          = 0
-	fwpV4AddrMask          = 0x100
+	fwpByteArray6Type      = 18
 	fwpActionBlock         = 0x1001
 	wfpBlockSubLayerWeight = 0xFFFF
 )
@@ -87,11 +86,6 @@ type fwpmFilterCondition struct {
 	Value     uint64
 }
 
-type fwpV4AddrAndMask struct {
-	Address uint32
-	Mask    uint32
-}
-
 type fwpmFilter struct {
 	FilterKey           windows.GUID
 	DisplayData         fwpmDisplayData
@@ -125,7 +119,7 @@ type clientBlocker struct {
 	mu       sync.Mutex
 	engine   windows.Handle
 	subLayer windows.GUID
-	filters  map[netip.Addr]uint64
+	filters  map[string]uint64
 }
 
 func fwpmError(call string, result uintptr) error {
@@ -135,11 +129,11 @@ func fwpmError(call string, result uintptr) error {
 	return fmt.Errorf("%s: 0x%08X", call, uint32(result))
 }
 
-// set makes the blocked addresses exactly these; none closes the session.
-func (b *clientBlocker) set(addresses []netip.Addr) error {
+// set makes the blocked devices exactly these; none closes the session.
+func (b *clientBlocker) set(macs []net.HardwareAddr) error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if len(addresses) == 0 {
+	if len(macs) == 0 {
 		b.close()
 		return nil
 	}
@@ -150,26 +144,30 @@ func (b *clientBlocker) set(addresses []netip.Addr) error {
 		return err
 	}
 	var problems []error
-	for address, id := range b.filters {
-		if !slices.Contains(addresses, address) {
+	wanted := make(map[string]net.HardwareAddr, len(macs))
+	for _, mac := range macs {
+		wanted[mac.String()] = mac
+	}
+	for key, id := range b.filters {
+		if _, keep := wanted[key]; !keep {
 			result, _, _ := procFwpmFilterDeleteBy.Call(uintptr(b.engine), uintptr(id))
 			if err := fwpmError("FwpmFilterDeleteById0", result); err != nil {
 				problems = append(problems, err)
 				continue
 			}
-			delete(b.filters, address)
+			delete(b.filters, key)
 		}
 	}
-	for _, address := range addresses {
-		if _, held := b.filters[address]; held {
+	for key, mac := range wanted {
+		if _, held := b.filters[key]; held {
 			continue
 		}
-		id, err := b.add(address)
+		id, err := b.add(mac)
 		if err != nil {
-			problems = append(problems, fmt.Errorf("%s: %w", address, err))
+			problems = append(problems, fmt.Errorf("%s: %w", key, err))
 			continue
 		}
-		b.filters[address] = id
+		b.filters[key] = id
 	}
 	return errors.Join(problems...)
 }
@@ -196,7 +194,7 @@ func (b *clientBlocker) open() error {
 		procFwpmEngineClose.Call(uintptr(engine))
 		return err
 	}
-	b.engine, b.subLayer, b.filters = engine, key, map[netip.Addr]uint64{}
+	b.engine, b.subLayer, b.filters = engine, key, map[string]uint64{}
 	return nil
 }
 
@@ -209,24 +207,27 @@ func (b *clientBlocker) close() {
 	b.engine, b.filters = 0, nil
 }
 
-func (b *clientBlocker) add(address netip.Addr) (uint64, error) {
-	octets := address.As4()
-	match := &fwpV4AddrAndMask{Address: binary.BigEndian.Uint32(octets[:]), Mask: 0xFFFFFFFF}
+func (b *clientBlocker) add(mac net.HardwareAddr) (uint64, error) {
+	if len(mac) != 6 {
+		return 0, fmt.Errorf("%q is not a 6-byte MAC address", mac.String())
+	}
+	match := new([6]byte)
+	copy(match[:], mac)
 	condition := &fwpmFilterCondition{
-		FieldKey:  conditionIPDestinationAddr,
+		FieldKey:  conditionMACRemoteAddress,
 		MatchType: fwpMatchEqual,
-		ValueType: fwpV4AddrMask,
+		ValueType: fwpByteArray6Type,
 		Value:     uint64(uintptr(unsafe.Pointer(match))),
 	}
 	key, err := windows.GenerateGUID()
 	if err != nil {
 		return 0, err
 	}
-	name, _ := windows.UTF16PtrFromString("Glitch hotspot client block " + address.String())
+	name, _ := windows.UTF16PtrFromString("Glitch hotspot client block " + mac.String())
 	filter := &fwpmFilter{
 		FilterKey:           key,
 		DisplayData:         fwpmDisplayData{Name: name},
-		LayerKey:            layerIPForwardV4,
+		LayerKey:            layerInboundMACFrameEthernet,
 		SubLayerKey:         b.subLayer,
 		NumFilterConditions: 1,
 		FilterCondition:     condition,

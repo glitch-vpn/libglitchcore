@@ -5,7 +5,7 @@ package core
 import (
 	"fmt"
 	"math"
-	"net/netip"
+	"net"
 	"strings"
 	"sync"
 	"unsafe"
@@ -252,6 +252,6 @@ func (o *windowsHotspotOS) SetForwarding(index uint32, on bool) error {
 	return row.Set()
 }
 
-func (o *windowsHotspotOS) BlockClients(addresses []netip.Addr) error {
-	return o.wfp.set(addresses)
+func (o *windowsHotspotOS) BlockClients(macs []net.HardwareAddr) error {
+	return o.wfp.set(macs)
 }

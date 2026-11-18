@@ -1,11 +1,12 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
-	"net/netip"
+	"net"
 	"slices"
 	"strings"
 	"sync"
@@ -92,8 +93,9 @@ type hotspotOS interface {
 	PhysicalIndex() (uint32, bool)
 	Forwarding(index uint32) (bool, error)
 	SetForwarding(index uint32, on bool) error
-	// BlockClients drops what is forwarded to exactly these addresses.
-	BlockClients(addresses []netip.Addr) error
+	// BlockClients drops every frame the devices with exactly these MAC
+	// addresses send to the hotspot.
+	BlockClients(macs []net.HardwareAddr) error
 }
 
 type tunnelPhase int
@@ -156,7 +158,7 @@ type hotspotSharing struct {
 	mu     sync.Mutex
 
 	request hotspotSharingRequest
-	clients []netip.Addr
+	clients []net.HardwareAddr
 	active  bool // a request turned it on and none has turned it off since
 	phase   tunnelPhase
 	// shareAgain asks for a share even where the record already holds it:
@@ -191,7 +193,7 @@ type hotspotSharing struct {
 	forwardingOff  uint32    // the adapter this order turned forwarding off on; 0 when none
 	physical       uint32    // the connection this order last shared as the physical one
 	tunnelIndex    uint32    // the tunnel's interface when it was last seen
-	appliedClients []netip.Addr
+	appliedClients []net.HardwareAddr
 	clientsApplied bool
 }
 
@@ -307,24 +309,26 @@ func (h *hotspotSharing) set(request hotspotSharingRequest) error {
 	return nil
 }
 
-func parseBlockedClients(raw []string) ([]netip.Addr, error) {
+// parseBlockedClients reads the MAC addresses of the blocked devices, sorted
+// and without duplicates.
+func parseBlockedClients(raw []string) ([]net.HardwareAddr, error) {
 	if len(raw) > maxBlockedClients {
 		return nil, fmt.Errorf("blockedClients: %d addresses, at most %d", len(raw), maxBlockedClients)
 	}
-	seen := make(map[netip.Addr]struct{}, len(raw))
-	addresses := make([]netip.Addr, 0, len(raw))
+	seen := make(map[string]struct{}, len(raw))
+	macs := make([]net.HardwareAddr, 0, len(raw))
 	for _, text := range raw {
-		address, err := netip.ParseAddr(strings.TrimSpace(text))
-		if err != nil || !address.Is4() {
-			return nil, fmt.Errorf("blockedClients: %q is not an IPv4 address", text)
+		mac, err := net.ParseMAC(strings.TrimSpace(text))
+		if err != nil || len(mac) != 6 {
+			return nil, fmt.Errorf("blockedClients: %q is not a MAC address", text)
 		}
-		if _, dup := seen[address]; !dup {
-			seen[address] = struct{}{}
-			addresses = append(addresses, address)
+		if _, dup := seen[mac.String()]; !dup {
+			seen[mac.String()] = struct{}{}
+			macs = append(macs, mac)
 		}
 	}
-	slices.SortFunc(addresses, netip.Addr.Compare)
-	return addresses, nil
+	slices.SortFunc(macs, func(a, b net.HardwareAddr) int { return bytes.Compare(a, b) })
+	return macs, nil
 }
 
 // notify tells the order about an engine lifecycle event.
@@ -453,8 +457,8 @@ func (h *hotspotSharing) wishFor(request hotspotSharingRequest, phase tunnelPhas
 	return wishWiFi
 }
 
-func (h *hotspotSharing) apply(request hotspotSharingRequest, clients []netip.Addr, phase tunnelPhase, again bool) (event hotspotSharingEvent, problems []error) {
-	if !h.clientsApplied || !slices.Equal(h.appliedClients, clients) {
+func (h *hotspotSharing) apply(request hotspotSharingRequest, clients []net.HardwareAddr, phase tunnelPhase, again bool) (event hotspotSharingEvent, problems []error) {
+	if !h.clientsApplied || !slices.EqualFunc(h.appliedClients, clients, func(a, b net.HardwareAddr) bool { return bytes.Equal(a, b) }) {
 		if err := h.os.BlockClients(clients); err != nil {
 			problems = append(problems, fmt.Errorf("block clients: %w", err))
 		} else {

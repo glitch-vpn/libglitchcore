@@ -163,7 +163,7 @@ The Windows hotspot is driven by two calls. `PrepareHotspot()` repairs ICS's
 stale state before a hotspot starts and answers 0, 1 (the service cannot be
 reached), 3 (unsupported), 4 (a hotspot runs), 5 (needs elevation) or 6
 (failed). `SetHotspotSharing(json)` takes
-`{"on","blockWhileTunnelDown","blockedClients":[IPv4, …]}` (at most 8 clients;
+`{"on","blockWhileTunnelDown","blockedClients":[MAC, …]}` (at most 8 devices, each blocked by dropping the frames its MAC sends;
 the whole state each call) and answers 0, 1 (not initialised, or the service
 cannot be reached), 2 (a request that does not parse) or 3 (unsupported); the
 state it reaches arrives as event 600. Off Windows both answer 3.
