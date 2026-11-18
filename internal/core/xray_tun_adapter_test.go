@@ -3,6 +3,9 @@
 package core
 
 import (
+	"bytes"
+	"log"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -94,5 +97,52 @@ func TestXrayTunLayer_NextAdapterWaitsForALateClose(t *testing.T) {
 	}
 	if created.Load() != 2 {
 		t.Fatalf("%d adapters created, want 2", created.Load())
+	}
+}
+
+// The layer's start and stop each write their steps' durations to the core's
+// log, with no address or host name in them.
+func TestXrayTunLayer_LogsTheDurationOfEachStep(t *testing.T) {
+	prevNew := newTunDevice
+	t.Cleanup(func() { newTunDevice = prevNew })
+	newTunDevice = func(tun.Options) (tun.Tun, error) {
+		return channelTun{ep: channel.New(8, 1500, "")}, nil
+	}
+	var logged bytes.Buffer
+	prevWriter, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&logged)
+	t.Cleanup(func() { log.SetOutput(prevWriter); log.SetFlags(prevFlags) })
+
+	x := &CoreController{}
+	inst := startTunInstance(t, routing.Profile{Mode: routing.ModeDirectAll}, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, 0, nil)
+	handler, err := x.newXrayTunHandler(xrayTunParams{instance: inst.Instance, routing: routing.Profile{}, mark: x.sessionGen.Load()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := tunTestOptions(1500)
+	device, release, err := openXrayTun(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session, err := startXrayTunStack(device, options, handler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session.device, session.releaseAdapter = device, release
+	x.xrayTun = session
+	x.stopXrayTunLayer()
+
+	out := logged.String()
+	for _, step := range []string{
+		"[tun] adapter gate waited in ",
+		"[tun] adapter created and configured in ",
+		"[tun] stack started in ",
+		"[tun] stack closed in ",
+		"[tun] UDP flows closed in ",
+		"[tun] adapter closed in ",
+	} {
+		if !strings.Contains(out, step) {
+			t.Errorf("log lacks %q:\n%s", step, out)
+		}
 	}
 }

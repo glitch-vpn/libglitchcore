@@ -408,7 +408,9 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 	}
 	// ApplyConfig is void but blocks through TUN creation; a cleared TUN Enable
 	// flag is the only success signal (checked below, native TUN mode only).
+	applyStarted := time.Now()
 	applyMihomoConfig(cfg, inbound, bridge != nil, prof)
+	logTunStep("mihomo config applied", applyStarted)
 	if bridge == nil && proxyPort <= 0 && !listener.GetTunConf().Enable {
 		mihomoTeardown()
 		x.releaseDesktopAdapter()
@@ -526,10 +528,14 @@ func mihomoTeardown() {
 	// The listeners and the TUN close first, so the resolver stands until no
 	// packet can arrive: a query between the two would otherwise be answered
 	// by mihomo's system client, plain.
+	shutdownStarted := time.Now()
 	executor.Shutdown()
+	logTunStep("mihomo listeners and TUN shut down", shutdownStarted)
 	mihomoDirectLookup.set(nil)
 	if empty, err := mihomoCfg.Parse([]byte(mihomoTeardownConfig)); err == nil {
+		emptyStarted := time.Now()
 		executor.ApplyConfig(empty, true)
+		logTunStep("mihomo empty config applied", emptyStarted)
 	}
 	// mihomo's tunnel outlives the session and keeps each flow until its own
 	// timeout; a stopped session ends the flows it opened.

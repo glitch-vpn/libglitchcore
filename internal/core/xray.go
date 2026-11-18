@@ -379,6 +379,7 @@ func (x *CoreController) xrayStopLocked() {
 	if x.xraySession.running.Load() {
 		xraydialer.EndSession(x.xrayCoreInstance)
 		done := make(chan struct{})
+		closeStarted := time.Now()
 		go func() {
 			if cerr := x.xrayCoreInstance.Close(); cerr != nil {
 				logfmt.Errorf("[Xray] Core shutdown error: %v", cerr)
@@ -387,6 +388,7 @@ func (x *CoreController) xrayStopLocked() {
 		}()
 		select {
 		case <-done:
+			logTunStep("xray instance closed", closeStarted)
 		case <-time.After(5 * time.Second):
 			logfmt.Warnf("[Xray] Xray core close timed out after 5s")
 		}

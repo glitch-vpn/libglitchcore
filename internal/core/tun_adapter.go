@@ -2,9 +2,16 @@ package core
 
 import (
 	"fmt"
+	"log"
 	"sync"
 	"time"
 )
+
+// logTunStep writes how long one step of the TUN layer's start or stop took,
+// so a slow connect or disconnect shows which step spent the time.
+func logTunStep(step string, started time.Time) {
+	log.Printf("[tun] %s in %dms", step, time.Since(started).Milliseconds())
+}
 
 // desktopAdapterName names the TUN the core creates on a desktop, for every
 // engine and both TUN layers. The adapter's GUID derives from the name, so

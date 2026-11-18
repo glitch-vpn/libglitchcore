@@ -34,10 +34,16 @@ type xrayTunSession struct {
 }
 
 func (s *xrayTunSession) close() {
+	started := time.Now()
 	_ = s.stack.Close()
+	logTunStep("stack closed", started)
+	started = time.Now()
 	s.handler.closeUDPFlows()
+	logTunStep("UDP flows closed", started)
 	if s.device != nil {
+		started = time.Now()
 		_ = s.device.Close()
+		logTunStep("adapter closed", started)
 	}
 	if s.releaseAdapter != nil {
 		s.releaseAdapter()
@@ -57,10 +63,12 @@ func startXrayTunStack(device tun.Tun, options tun.Options, handler *xrayTunHand
 	if err != nil {
 		return nil, err
 	}
+	started := time.Now()
 	if err := stack.Start(); err != nil {
 		_ = stack.Close()
 		return nil, err
 	}
+	logTunStep("stack started", started)
 	return &xrayTunSession{stack: stack, handler: handler}, nil
 }
 
@@ -161,7 +169,9 @@ func (x *CoreController) startXrayTunLayer(fdCopy *tunCopy, p xrayTunParams) err
 	p.tunFd = fdCopy.take()
 	var servers []netip.Addr
 	if runtime.GOOS == "windows" {
+		started := time.Now()
 		servers = serverAddresses(p.serverHosts, lookupIPv4)
+		logTunStep("server addresses resolved", started)
 	}
 	options, err := xrayTunOptions(runtime.GOOS, p, servers)
 	if err != nil {
@@ -197,14 +207,18 @@ var (
 func openXrayTun(options tun.Options) (device tun.Tun, release func(), err error) {
 	release = func() {}
 	if options.FileDescriptor == 0 {
+		started := time.Now()
 		if release, err = desktopAdapterGate.claim(desktopAdapterWait); err != nil {
 			return nil, nil, err
 		}
+		logTunStep("adapter gate waited", started)
 	}
+	started := time.Now()
 	if device, err = newTunDevice(options); err != nil {
 		release()
 		return nil, nil, err
 	}
+	logTunStep("adapter created and configured", started)
 	return device, release, nil
 }
 
