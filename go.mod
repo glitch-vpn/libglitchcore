@@ -27,7 +27,7 @@ require (
 
 replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.6
 
-replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.7
+replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.8
 
 // golang.zx2c4.com/wintun is linked by xray-core's TUN, WireGuard and masque packages;
 // the stub keeps the binding out of the main variant.
