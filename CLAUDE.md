@@ -146,7 +146,9 @@ gone. Proxy mode is the session's own flag, always "down".
 - The hotspot's interface is the one Wi-Fi Direct virtual adapter that is up, found by the driver's
   component id in the network class's registry key (administrators write it), never by a name or by
   ICS's private index. With two up, or the adapters unlisted, nothing is shared or stopped on a guess and
-  forwarding is turned off on every adapter that might be it. A Windows without the sharing exports
+  forwarding is turned off on every adapter that might be it, and on the last known one at every failed
+  listing. With sharing on and none up the event is quiet and `blocked` for 10 s, then carries an error
+  (the plugin stops the hotspot). A Windows without the sharing exports
   shares nothing, so forwarding stays off and `restartOn` is not asked for (nothing could confirm the
   restart).
 - ICS shares the physical connection, not the tunnel's adapter, while the tunnel is down: sharing the
@@ -156,7 +158,8 @@ gone. Proxy mode is the session's own flag, always "down".
   periodic check puts it back when ICS resumes by itself. The check runs while sharing is on.
 - `SetHotspotSharing` stores the state and returns; the worker applies it and answers with event 600, so
   a command never waits behind a reconcile.
-- `on:false` stops a pair this order shared; a pair it did not share is stopped only where its private
+- `on:false` stops the pair this order last shared by the indices it shared, even when the adapter is
+  already gone (the plugin sends it once the hotspot is down); a pair it did not share is stopped only where its private
   side is the hotspot's adapter and its public side is the tunnel's adapter or a gone one. A pair on a
   physical connection is the user's own hotspot.
 - Never restart `SharedAccess` while a hotspot's adapter is up: it turns the hotspot off. `PrepareHotspot`

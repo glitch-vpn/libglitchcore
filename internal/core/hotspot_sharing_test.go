@@ -39,7 +39,8 @@ type fakeHotspotOS struct {
 	pairErr    error
 	hotspot    uint32 // the hotspot's adapter
 	hotspotUp  bool
-	otherWFD   []uint32 // other Wi-Fi Direct adapters that are up
+	otherWFD   []uint32        // other Wi-Fi Direct adapters that are up
+	down       map[uint32]bool // interfaces that exist and are down
 	hotspotErr error
 	forwarding map[uint32]bool
 	clients    []netip.Addr
@@ -110,6 +111,7 @@ func (f *fakeHotspotOS) Share(public, private uint32) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("share %d %d", public, private)
+	f.checkLeak("entering share")
 	if f.shareFails > 0 {
 		f.shareFails--
 		return errors.New("refused")
@@ -157,6 +159,12 @@ func (f *fakeHotspotOS) IsPhysical(index uint32) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.present[index] && index != f.tunnel
+}
+
+func (f *fakeHotspotOS) IsUp(index uint32) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.present[index] && !f.down[index]
 }
 
 func (f *fakeHotspotOS) PhysicalIndex() (uint32, bool) {
@@ -612,7 +620,7 @@ func TestHotspotSharingNeedsNoReadablePair(t *testing.T) {
 func TestHotspotSharingRefusedShareKeepsForwardingOff(t *testing.T) {
 	f := newHotspotFixture(t)
 	f.os.shareErr = errors.New("denied")
-	f.allow()
+	f.allow(testWiFi)
 	f.set(true, false)
 	if event := f.last(); event.RestartOn != hotspotSharedWiFi || event.Error == "" || !event.Blocked {
 		t.Errorf("event = %+v, want blocked, restartOn wifi with an error", event)
@@ -657,8 +665,8 @@ func TestHotspotSharingWaitsForTheHotspotsInterface(t *testing.T) {
 	f.allow()
 	f.set(true, true)
 	f.engineEvent(EngineConnected)
-	if event := f.last(); event.Shared != hotspotSharedNone || event.Blocked || event.Error != "" {
-		t.Errorf("event = %+v, want none, not blocked and no error", event)
+	if event := f.last(); event.Shared != hotspotSharedNone || !event.Blocked || event.Error != "" {
+		t.Errorf("event = %+v, want none, blocked (nothing forwards) and no error", event)
 	}
 	if f.os.callsMatching("share") != 0 || f.os.callsMatching("forwarding") != 0 {
 		t.Errorf("acted without a hotspot: %v", f.os.calls)
@@ -937,4 +945,161 @@ func TestTunnelPhaseOf(t *testing.T) {
 			t.Errorf("code %d changes the tunnel's phase", code)
 		}
 	}
+}
+
+// A listing that fails twice in a row still turns forwarding off the second
+// time, on the adapter the order knew: ICS may have turned it on in between.
+func TestHotspotSharingKeepsTurningForwardingOffWhileTheListingFails(t *testing.T) {
+	f := newHotspotFixtureAt(t, tunnelUp)
+	f.os.tunnel = testTunnel
+	f.os.present[testTunnel] = true
+	f.allow(testTunnel)
+	f.set(true, true)
+	f.wantState(hotspotSharedTunnel, false, testTunnel, true)
+
+	f.os.hotspotErr = errors.New("cannot list adapters")
+	f.allow()
+	for attempt := 1; attempt <= 3; attempt++ {
+		f.os.forwarding[testHotspot] = true // ICS turned it on again
+		f.sharing.reconcile()
+		if f.os.forwarding[testHotspot] {
+			t.Fatalf("forwarding stayed on after failed listing %d", attempt)
+		}
+		if event := f.last(); !event.Blocked || event.Error == "" {
+			t.Errorf("listing %d: event = %+v, want blocked with an error", attempt, event)
+		}
+	}
+}
+
+// A hotspot that should run and has no adapter up is quiet for the grace
+// period and an error after it, and the grace starts again when the adapter
+// goes away.
+func TestHotspotSharingReportsAMissingAdapterAfterTheGracePeriod(t *testing.T) {
+	f := newHotspotFixture(t)
+	now := time.Unix(1_000_000, 0)
+	f.sharing.now = func() time.Time { return now }
+	f.os.hotspotUp = false
+	f.allow()
+	f.set(true, true)
+	if event := f.last(); event.Error != "" || !event.Blocked || event.Shared != hotspotSharedNone {
+		t.Fatalf("event = %+v, want quiet, blocked, none", event)
+	}
+
+	now = now.Add(hotspotAdapterGrace - time.Second)
+	f.sharing.reconcile()
+	if event := f.last(); event.Error != "" {
+		t.Errorf("event = %+v: an error before the grace period ended", event)
+	}
+	now = now.Add(time.Second)
+	f.sharing.reconcile()
+	if event := f.last(); event.Error == "" || event.Blocked == false {
+		t.Errorf("event = %+v, want blocked with an error once the grace period ended", event)
+	}
+
+	f.os.hotspotUp = true
+	f.sharing.reconcile()
+	if event := f.last(); event.Error != "" {
+		t.Errorf("event = %+v: an error with the adapter up", event)
+	}
+	f.os.hotspotUp = false
+	now = now.Add(hotspotAdapterGrace - time.Second)
+	f.sharing.reconcile()
+	f.sharing.reconcile()
+	if event := f.last(); event.Error != "" {
+		t.Errorf("event = %+v: the grace period did not start again with the adapter gone", event)
+	}
+}
+
+// An off arrives after the hotspot is down: the pair this order shared is
+// stopped by the indices it shared, and forwarding is given back only on an
+// adapter that is there.
+func TestHotspotSharingOffStopsItsOwnPairAfterTheAdapterWentAway(t *testing.T) {
+	for name, returnsAs := range map[string]uint32{"gone": 0, "back at another index": 11} {
+		t.Run(name, func(t *testing.T) {
+			f := newHotspotFixtureAt(t, tunnelUp)
+			f.os.tunnel = testTunnel
+			f.os.present[testTunnel] = true
+			f.allow(testTunnel)
+			f.set(true, true)
+			f.wantState(hotspotSharedTunnel, false, testTunnel, true)
+
+			f.os.hotspotUp = false
+			f.sharing.reconcile()
+			if returnsAs != 0 {
+				f.os.hotspot, f.os.hotspotUp = returnsAs, true
+				f.os.present[returnsAs] = true
+			}
+			f.os.allowed = nil
+			f.set(false, true)
+
+			if got := f.os.callsMatching("unshare 7 9"); got != 1 {
+				t.Errorf("the pair this order shared was stopped %d times: %v", got, f.os.calls)
+			}
+			if validInterfaceIndex(f.os.public) || validInterfaceIndex(f.os.private) {
+				t.Errorf("a pair is left: %d, %d", f.os.public, f.os.private)
+			}
+			if returnsAs != 0 && touches(f.os.calls, returnsAs) {
+				t.Errorf("acted on the adapter that came back with another index: %v", f.os.calls)
+			}
+		})
+	}
+}
+
+// A second off while the worker is ending after the first is still answered.
+func TestHotspotSharingSecondOffInARowIsAnswered(t *testing.T) {
+	gated := &gatedHotspotOS{fakeHotspotOS: newFakeHotspotOS(), entered: make(chan struct{}), release: make(chan struct{})}
+	var mu sync.Mutex
+	published := 0
+	sharing := newHotspotSharing(gated, func(string) {
+		mu.Lock()
+		published++
+		mu.Unlock()
+	}, tunnelDown)
+	sharing.useWorker(0)
+	t.Cleanup(sharing.close)
+
+	off := hotspotSharingRequest{On: false}
+	if err := sharing.set(off); err != nil {
+		t.Fatal(err)
+	}
+	<-gated.entered // the worker is applying the first off
+	if err := sharing.set(off); err != nil {
+		t.Fatal(err)
+	}
+	close(gated.release)
+
+	deadline := time.After(5 * time.Second)
+	for {
+		mu.Lock()
+		count := published
+		mu.Unlock()
+		if count >= 2 {
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("the second off was not answered: %d events", count)
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+}
+
+// A remembered connection that is down is not shared before one that is up.
+func TestHotspotSharingPrefersARememberedConnectionThatIsUp(t *testing.T) {
+	f := newHotspotFixture(t)
+	f.allow(testWiFi)
+	f.set(true, false)
+	f.allow(testTunnel)
+	f.engineEvent(EngineConnected)
+	f.allow()
+	f.engineEvent(EngineDisconnecting)
+
+	f.os.down = map[uint32]bool{testWiFi: true}
+	f.os.physical = testLAN
+	f.allow(testLAN)
+	f.engineEvent(EngineDisconnected)
+	if got := f.os.callsMatching("share 4 9"); got != 1 {
+		t.Errorf("shared the Wi-Fi that is down: %v", f.os.calls)
+	}
+	f.wantPair(testLAN, true)
 }

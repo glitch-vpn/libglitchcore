@@ -4,6 +4,7 @@ package core
 
 import (
 	"net/netip"
+	"regexp"
 	"strings"
 	"testing"
 	"unsafe"
@@ -106,37 +107,76 @@ func TestAdapterGUIDIsFixedByTheName(t *testing.T) {
 	}
 }
 
+// wifiDirectDescription is the English description the driver gives the adapters
+// themselves; the filter interfaces layered on them carry it with a suffix.
+var wifiDirectDescription = regexp.MustCompile(`^Microsoft Wi-Fi Direct Virtual Adapter( #\d+)?$`)
+
 // The hotspot's adapters are named by the driver's component, from a key only
-// an administrator can change, and each is an interface that exists.
+// an administrator can change. The driver's own description, which this test
+// reads as an oracle and the code never does, says which adapters those are on
+// this machine; a machine with none skips.
 func TestWifiDirectAdaptersAreFoundByTheirDriversComponent(t *testing.T) {
-	guids, err := wifiDirectAdapterGUIDs()
-	if err != nil {
-		t.Fatalf("the network class's key is not readable: %v", err)
-	}
 	adapters, err := allAdapters()
 	if err != nil {
 		t.Fatal(err)
 	}
-	for guid := range guids {
-		found := false
-		for _, adapter := range adapters {
-			if strings.EqualFold(adapter.AdapterName(), guid) {
-				found = true
-				if adapter.IfType != winipcfg.IfTypeIEEE80211 {
-					t.Errorf("%s is of type %d, not Wi-Fi", guid, adapter.IfType)
-				}
+	wantGUIDs := map[string]bool{}
+	wantUp := map[uint32]bool{}
+	for _, adapter := range adapters {
+		if wifiDirectDescription.MatchString(adapter.Description()) {
+			wantGUIDs[strings.ToUpper(adapter.AdapterName())] = true
+			if adapter.OperStatus == winipcfg.IfOperStatusUp {
+				wantUp[adapter.IfIndex] = true
 			}
 		}
-		if !found {
-			t.Errorf("%s is a Wi-Fi Direct adapter in the registry and no interface", guid)
+	}
+	if len(wantGUIDs) == 0 {
+		t.Skip("no Wi-Fi Direct virtual adapter is installed on this machine")
+	}
+
+	guids, err := wifiDirectAdapterGUIDs()
+	if err != nil {
+		t.Fatalf("the network class's key is not readable: %v", err)
+	}
+	for guid := range wantGUIDs {
+		if !guids[guid] {
+			t.Errorf("%s is a Wi-Fi Direct adapter and was not found by its component id", guid)
 		}
 	}
+	for guid := range guids {
+		if !wantGUIDs[guid] {
+			t.Errorf("%s was found by its component id and is no Wi-Fi Direct adapter", guid)
+		}
+	}
+
 	up, err := (&windowsHotspotOS{}).HotspotAdapters()
 	if err != nil {
 		t.Fatalf("HotspotAdapters: %v", err)
 	}
-	if len(up) > 0 && len(guids) == 0 {
-		t.Error("a hotspot adapter was found with no Wi-Fi Direct adapter installed")
+	if len(up) != len(wantUp) {
+		t.Errorf("HotspotAdapters = %v, want the %d that are up", up, len(wantUp))
+	}
+	for _, index := range up {
+		if !wantUp[index] {
+			t.Errorf("interface %d is listed as up and is not", index)
+		}
+	}
+}
+
+// IsUp is the interface's operational state.
+func TestIsUpIsTheOperationalState(t *testing.T) {
+	adapters, err := allAdapters()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os := &windowsHotspotOS{}
+	for _, adapter := range adapters {
+		if adapter.IfIndex == 0 {
+			continue
+		}
+		if got, want := os.IsUp(adapter.IfIndex), adapter.OperStatus == winipcfg.IfOperStatusUp; got != want {
+			t.Errorf("IsUp(%d, %s) = %t, want %t", adapter.IfIndex, adapter.AdapterName(), got, want)
+		}
 	}
 }
 

@@ -197,6 +197,11 @@ func (o *windowsHotspotOS) IsPhysical(index uint32) bool {
 	return ok && adapter.IfType != winipcfg.IfTypeSoftwareLoopback && !strings.EqualFold(adapter.AdapterName(), tunnel)
 }
 
+func (o *windowsHotspotOS) IsUp(index uint32) bool {
+	adapter, ok := findAdapter(func(adapter *winipcfg.IPAdapterAddresses) bool { return adapter.IfIndex == index })
+	return ok && adapter.OperStatus == winipcfg.IfOperStatusUp
+}
+
 // PhysicalIndex is the interface of the IPv4 default route with the lowest
 // route-plus-interface metric, which is how Windows ranks them, among the
 // interfaces that are physical.
