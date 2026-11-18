@@ -19,10 +19,11 @@ import (
 // forward layer that blocks what is forwarded to a client's address, in a
 // session whose filters go with it: when the process ends, so do they.
 //
-// ICS translates a client's packets at that same layer, so a condition on the
-// client as the source never matches; the replies its NAT turns back carry the
-// client as the destination, and dropping them cuts every connection the client
-// opens while it stays on the hotspot (measured on Windows 11 23H2).
+// A condition on the client as the source never matches there: the client's
+// packets reach that layer already translated by ICS. The replies the NAT turns
+// back carry the client as the destination, and dropping them leaves it on the
+// hotspot without a connection that needs an answer; what it sends needing none
+// still leaves (measured on Windows 11 23H2 with the tunnel down).
 
 var (
 	fwpuclnt                   = windows.NewLazySystemDLL("fwpuclnt.dll")

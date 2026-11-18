@@ -92,7 +92,7 @@ type hotspotOS interface {
 	PhysicalIndex() (uint32, bool)
 	Forwarding(index uint32) (bool, error)
 	SetForwarding(index uint32, on bool) error
-	// BlockClients makes exactly these addresses unable to be forwarded.
+	// BlockClients drops what is forwarded to exactly these addresses.
 	BlockClients(addresses []netip.Addr) error
 }
 

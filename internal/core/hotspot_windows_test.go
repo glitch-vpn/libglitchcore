@@ -12,6 +12,17 @@ import (
 	"golang.zx2c4.com/wireguard/windows/tunnel/winipcfg"
 )
 
+func TestWFPKeysMatchTheHeaders(t *testing.T) {
+	for name, got := range map[string][2]string{
+		"FWPM_LAYER_IPFORWARD_V4":               {layerIPForwardV4.String(), "{A82ACC24-4EE1-4EE1-B465-FD1D25CB10A4}"},
+		"FWPM_CONDITION_IP_DESTINATION_ADDRESS": {conditionIPDestinationAddr.String(), "{2D79133B-B390-45C6-8699-ACACEAAFED33}"},
+	} {
+		if got[0] != got[1] {
+			t.Errorf("%s = %s, fwpmu.h says %s", name, got[0], got[1])
+		}
+	}
+}
+
 func TestWFPStructSizesMatchTheHeaders(t *testing.T) {
 	for name, got := range map[string][2]uintptr{
 		"FWPM_SESSION0":          {unsafe.Sizeof(fwpmSession{}), 72},
