@@ -463,9 +463,13 @@ func (h *hotspotSharing) apply(request hotspotSharingRequest, clients []net.Hard
 	hotspot, found, problem := h.findHotspot(true)
 	if problem != nil {
 		problems = append(problems, problem)
+		// While the adapters cannot be listed, the block is held on the
+		// hotspot's adapter as last known; with none known it waits.
+		if h.hotspot != 0 {
+			problems = append(problems, h.settleBlock(h.hotspot, clients)...)
+		}
 	} else {
-		// Where the hotspot's adapter is unknown, the block stays as it was;
-		// where none is up there are no clients to block.
+		// Where none is up there are no clients to block.
 		problems = append(problems, h.settleBlock(hotspot, clients)...)
 	}
 	if !found {

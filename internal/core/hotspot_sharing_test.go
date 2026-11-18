@@ -839,6 +839,17 @@ func TestHotspotSharingBlocksOnTheHotspotsAdapter(t *testing.T) {
 	}
 }
 
+func TestHotspotSharingHoldsANewBlockOnTheLastAdapterWhileTheListFails(t *testing.T) {
+	f := newHotspotFixture(t)
+	f.allow()
+	f.set(true, true)
+	f.os.hotspotErr = errors.New("cannot list adapters")
+	f.set(true, true, "02:00:00:00:00:30")
+	if len(f.os.clients) != 1 || f.os.clientsOn != testHotspot {
+		t.Errorf("block = %v on %d, want one on %d", f.os.clients, f.os.clientsOn, testHotspot)
+	}
+}
+
 func TestParseBlockedClientsCapsAndDeduplicates(t *testing.T) {
 	var eight []string
 	for i := 1; i <= maxBlockedClients; i++ {
