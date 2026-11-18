@@ -170,6 +170,14 @@ func (s *glitchService) Execute(args []string, r <-chan svc.ChangeRequest, chang
 	defer cancel()
 
 	Initialize()
+	KeepDesktopAdapter()
+	defer func() {
+		// The adapter goes after the session on it, not from under it.
+		if engineID := ActiveEngineID(); engineID != "" {
+			stopRunningEngine(engineID)
+		}
+		CloseDesktopAdapter()
+	}()
 	setStatusSink(func(code int32, message string) {
 		evt := serviceStatusEvent{
 			Type:      "status",

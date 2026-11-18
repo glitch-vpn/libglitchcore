@@ -206,6 +206,21 @@ func TestIsUpIsTheOperationalState(t *testing.T) {
 	}
 }
 
+// A kept adapter between sessions is disconnected and no tunnel; one a session
+// runs on is up.
+func TestAnIdleKeptAdapterIsNotATunnel(t *testing.T) {
+	for status, want := range map[winipcfg.IfOperStatus]bool{
+		winipcfg.IfOperStatusUp:             true,
+		winipcfg.IfOperStatusDown:           false,
+		winipcfg.IfOperStatusNotPresent:     false,
+		winipcfg.IfOperStatusLowerLayerDown: false,
+	} {
+		if got := carriesSession(&winipcfg.IPAdapterAddresses{OperStatus: status}); got != want {
+			t.Errorf("carriesSession(status %d) = %t, want %t", status, got, want)
+		}
+	}
+}
+
 // IsPhysical says that an interface exists and is neither the tunnel's nor a
 // loopback; whether it is up is not its question.
 func TestIsPhysicalIsExistsAndNotTheTunnelOrALoopback(t *testing.T) {

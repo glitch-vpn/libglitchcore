@@ -392,7 +392,7 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 		bridge.adoptDirectBlocks(cfg, prof)
 	}
 	if inbound.Tun != nil && inbound.Tun.Device != "" {
-		release, err := desktopAdapterGate.claim(desktopAdapterWait)
+		release, err := claimDesktopAdapter()
 		if err != nil {
 			stopMihomoLogBridge()
 			return fmt.Errorf("[mihomo] %w", err)

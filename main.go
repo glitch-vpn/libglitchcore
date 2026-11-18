@@ -184,6 +184,7 @@ func ActiveEngine() *C.char {
 //export InitializeController
 func InitializeController() {
 	core.Initialize()
+	core.KeepDesktopAdapter()
 }
 
 //export SetStatusVerbosity

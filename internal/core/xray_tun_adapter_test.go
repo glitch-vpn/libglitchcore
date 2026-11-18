@@ -137,11 +137,11 @@ func TestXrayTunLayer_LogsTheDurationOfEachStep(t *testing.T) {
 	out := logged.String()
 	for _, step := range []string{
 		"[tun] adapter gate waited in ",
-		"[tun] adapter created and configured in ",
+		"[tun] adapter opened and configured in ",
 		"[tun] stack started in ",
 		"[tun] stack closed in ",
 		"[tun] UDP flows closed in ",
-		"[tun] adapter closed in ",
+		"[tun] device closed in ",
 	} {
 		if !strings.Contains(out, step) {
 			t.Errorf("log lacks %q:\n%s", step, out)

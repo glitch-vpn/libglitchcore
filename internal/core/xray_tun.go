@@ -43,7 +43,7 @@ func (s *xrayTunSession) close() {
 	if s.device != nil {
 		started = time.Now()
 		_ = s.device.Close()
-		logTunStep("adapter closed", started)
+		logTunStep("device closed", started)
 	}
 	if s.releaseAdapter != nil {
 		s.releaseAdapter()
@@ -201,14 +201,14 @@ var (
 	tunLayerStopWait = 5 * time.Second
 )
 
-// openXrayTun creates the device. A named adapter (no fd) waits on
-// desktopAdapterGate for the previous adapter's Close; release frees the gate
-// and is a no-op for an fd.
+// openXrayTun opens the device on the desktop adapter. A named adapter (no fd)
+// waits on desktopAdapterGate for the previous session's Close, or for the
+// keeper's create; release frees the gate and is a no-op for an fd.
 func openXrayTun(options tun.Options) (device tun.Tun, release func(), err error) {
 	release = func() {}
 	if options.FileDescriptor == 0 {
 		started := time.Now()
-		if release, err = desktopAdapterGate.claim(desktopAdapterWait); err != nil {
+		if release, err = claimDesktopAdapter(); err != nil {
 			return nil, nil, err
 		}
 		logTunStep("adapter gate waited", started)
@@ -218,7 +218,7 @@ func openXrayTun(options tun.Options) (device tun.Tun, release func(), err error
 		release()
 		return nil, nil, err
 	}
-	logTunStep("adapter created and configured", started)
+	logTunStep("adapter opened and configured", started)
 	return device, release, nil
 }
 

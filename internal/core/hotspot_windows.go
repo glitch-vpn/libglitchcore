@@ -103,15 +103,25 @@ func (o *windowsHotspotOS) Unshare(public, private uint32) error {
 	return hresultError("HNetCfgStopSharing", result)
 }
 
-// TunnelIndex finds the tunnel's adapter by its GUID, which its name fixes.
+// TunnelIndex finds the tunnel's adapter by its GUID, which its name fixes,
+// while a session runs on it. The kept adapter outlives its sessions, and
+// Wintun reports it disconnected between them, so an adapter that is not up is
+// no tunnel.
 func (o *windowsHotspotOS) TunnelIndex() (uint32, bool) {
 	adapter, ok := findAdapter(func(adapter *winipcfg.IPAdapterAddresses) bool {
-		return strings.EqualFold(adapter.AdapterName(), adapterGUID(desktopAdapterName).String())
+		return strings.EqualFold(adapter.AdapterName(), adapterGUID(desktopAdapterName).String()) && carriesSession(adapter)
 	})
 	if !ok {
 		return 0, false
 	}
 	return adapter.IfIndex, true
+}
+
+// carriesSession is whether a session runs on the tunnel's adapter: Wintun
+// connects its adapter when a session registers its rings and disconnects it
+// when the session ends.
+func carriesSession(adapter *winipcfg.IPAdapterAddresses) bool {
+	return adapter.OperStatus == winipcfg.IfOperStatusUp
 }
 
 // allAdapters lists every interface that exists, whether it is up or has an

@@ -23,16 +23,17 @@ const desktopAdapterName = "GlitchVPN"
 // and the label of the firewall filters sing-tun installs for it.
 const desktopTunnelType = "Glitch VPN"
 
-// desktopAdapterGate serialises the desktop adapter's lifetimes. Every engine
-// and both TUN layers use one name and so one GUID: a start that created the
-// adapter while the last one's Close was still running would open the one
-// being torn down, or have its own removed by that late Close. A stop gives up
-// waiting for its Close after a few seconds and the Close carries on, so the
-// gate is released by the Close returning, not by the stop returning.
+// desktopAdapterGate serialises the desktop adapter's lifetimes: the keeper's
+// create, and each session's use. Every engine and both TUN layers use one
+// name and so one GUID: a session started while the last one's Close was still
+// running would share the adapter with it, and a create while another's Close
+// was removing it would find the name half gone. A stop gives up waiting for
+// its Close after a few seconds and the Close carries on, so the gate is
+// released by the Close returning, not by the stop returning.
 var desktopAdapterGate adapterGate
 
 // desktopAdapterWait bounds how long a start waits for the previous
-// adapter's Close.
+// session's Close or the keeper's create.
 var desktopAdapterWait = 30 * time.Second
 
 type adapterGate struct {
@@ -67,7 +68,7 @@ func (g *adapterGate) claim(wait time.Duration) (release func(), err error) {
 		select {
 		case <-previous:
 		case <-timeout.C:
-			return nil, fmt.Errorf("the previous %s adapter is still closing", desktopAdapterName)
+			return nil, fmt.Errorf("the %s adapter is still in use: the previous session is closing or it is being created", desktopAdapterName)
 		}
 	}
 }

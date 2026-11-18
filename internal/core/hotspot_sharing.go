@@ -79,7 +79,9 @@ type hotspotOS interface {
 	SharedPair() (public, private uint32, err error)
 	Share(public, private uint32) error
 	Unshare(public, private uint32) error
-	// TunnelIndex is the interface of the tunnel's adapter, found by its GUID.
+	// TunnelIndex is the interface of the tunnel's adapter, found by its GUID,
+	// while a session runs on it: the adapter the core keeps outlives its
+	// sessions, and one with none is no tunnel.
 	TunnelIndex() (uint32, bool)
 	// HotspotAdapters are the interfaces of the Wi-Fi Direct virtual adapters
 	// that are up, found by the driver's identity; the Mobile hotspot runs on
@@ -451,7 +453,7 @@ func (h *hotspotSharing) wishFor(request hotspotSharingRequest, phase tunnelPhas
 		}
 		return wishHold
 	case tunnelPresent:
-		// The engine says it is down and its adapter has not gone yet.
+		// The engine says it is down and a session still runs on its adapter.
 		return wishHold
 	case request.BlockWhileTunnelDown:
 		return wishHold
