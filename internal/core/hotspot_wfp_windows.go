@@ -16,18 +16,23 @@ import (
 )
 
 // A per-client block is a Windows Filtering Platform filter at the IPv4
-// forward layer that blocks a client's address as the source, in a session
-// whose filters go with it: when the process ends, so do they.
+// forward layer that blocks what is forwarded to a client's address, in a
+// session whose filters go with it: when the process ends, so do they.
+//
+// ICS translates a client's packets at that same layer, so a condition on the
+// client as the source never matches; the replies its NAT turns back carry the
+// client as the destination, and dropping them cuts every connection the client
+// opens while it stays on the hotspot (measured on Windows 11 23H2).
 
 var (
-	fwpuclnt               = windows.NewLazySystemDLL("fwpuclnt.dll")
-	procFwpmEngineOpen     = fwpuclnt.NewProc("FwpmEngineOpen0")
-	procFwpmEngineClose    = fwpuclnt.NewProc("FwpmEngineClose0")
-	procFwpmSubLayerAdd    = fwpuclnt.NewProc("FwpmSubLayerAdd0")
-	procFwpmFilterAdd      = fwpuclnt.NewProc("FwpmFilterAdd0")
-	procFwpmFilterDeleteBy = fwpuclnt.NewProc("FwpmFilterDeleteById0")
-	layerIPForwardV4       = windows.GUID{Data1: 0xa82acc24, Data2: 0x4ee1, Data3: 0x4ee1, Data4: [8]byte{0xb4, 0x65, 0xfd, 0x1d, 0x25, 0xcb, 0x10, 0xa4}}
-	conditionIPSourceAddr  = windows.GUID{Data1: 0xae96897e, Data2: 0x2e94, Data3: 0x4bc9, Data4: [8]byte{0xb3, 0x13, 0xb2, 0x7e, 0xe8, 0x0e, 0x57, 0x4d}}
+	fwpuclnt                   = windows.NewLazySystemDLL("fwpuclnt.dll")
+	procFwpmEngineOpen         = fwpuclnt.NewProc("FwpmEngineOpen0")
+	procFwpmEngineClose        = fwpuclnt.NewProc("FwpmEngineClose0")
+	procFwpmSubLayerAdd        = fwpuclnt.NewProc("FwpmSubLayerAdd0")
+	procFwpmFilterAdd          = fwpuclnt.NewProc("FwpmFilterAdd0")
+	procFwpmFilterDeleteBy     = fwpuclnt.NewProc("FwpmFilterDeleteById0")
+	layerIPForwardV4           = windows.GUID{Data1: 0xa82acc24, Data2: 0x4ee1, Data3: 0x4ee1, Data4: [8]byte{0xb4, 0x65, 0xfd, 0x1d, 0x25, 0xcb, 0x10, 0xa4}}
+	conditionIPDestinationAddr = windows.GUID{Data1: 0x2d79133b, Data2: 0xb390, Data3: 0x45c6, Data4: [8]byte{0x86, 0x99, 0xac, 0xac, 0xea, 0xaf, 0xed, 0x33}}
 )
 
 // The layouts are those of fwpmtypes.h and fwptypes.h on a 64-bit Windows;
@@ -207,7 +212,7 @@ func (b *clientBlocker) add(address netip.Addr) (uint64, error) {
 	octets := address.As4()
 	match := &fwpV4AddrAndMask{Address: binary.BigEndian.Uint32(octets[:]), Mask: 0xFFFFFFFF}
 	condition := &fwpmFilterCondition{
-		FieldKey:  conditionIPSourceAddr,
+		FieldKey:  conditionIPDestinationAddr,
 		MatchType: fwpMatchEqual,
 		ValueType: fwpV4AddrMask,
 		Value:     uint64(uintptr(unsafe.Pointer(match))),
