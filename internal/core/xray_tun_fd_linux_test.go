@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"runtime"
 	"testing"
 	"time"
 
@@ -49,10 +50,34 @@ func openFiles(t *testing.T) (all, eventfds int) {
 	return all, eventfds
 }
 
+// waitForOpenFilesToSettle returns once the process holds no more files than
+// before, or after a few seconds. A flow that crossed the stack leaves its
+// outbound sockets to xray's teardown and a pipe of the runtime's splice pool to
+// the next garbage collection, so their closing would land inside the next
+// test's own count of open files.
+func waitForOpenFilesToSettle(t *testing.T, before int) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		runtime.GC()
+		all, _ := openFiles(t)
+		if all <= before {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Logf("%d files are open after the test, %d before it", all, before)
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // The platform's fd carries a flow end to end, through the stack and the
 // dispatcher, on the path Android takes: sing-tun makes no route of its own
 // and closes only the copy it was handed.
 func TestXrayTunLayer_CarriesTCPOverThePlatformsFd(t *testing.T) {
+	filesBefore, _ := openFiles(t)
+	t.Cleanup(func() { waitForOpenFilesToSettle(t, filesBefore) })
 	prof := routing.Profile{Mode: routing.ModeDirectAll}
 	inst := startTunInstance(t, prof, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, 0, tcpEcho(t))
 	x := &CoreController{}
@@ -77,7 +102,10 @@ func TestXrayTunLayer_CarriesTCPOverThePlatformsFd(t *testing.T) {
 		t.Fatal(err)
 	}
 	apps.SetRouteTable([]tcpip.Route{{Destination: header.IPv4EmptySubnet, NIC: 1}})
-	t.Cleanup(apps.Close)
+	t.Cleanup(func() {
+		apps.Destroy()
+		_ = unix.Close(appEnd)
+	})
 
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
