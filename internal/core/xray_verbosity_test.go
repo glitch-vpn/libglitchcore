@@ -41,8 +41,7 @@ func TestXrayInstance_SeverityFollowsVerbosityAcrossSessions(t *testing.T) {
 				t.Errorf("session %d, verbosity %d: severity = %v, want %v", session, verbosity, got, want)
 			}
 		}
-		_ = inst.Close()
-		x.endXrayLife()
-		registerCoreLogHandler()
+		x.xrayCoreInstance = inst
+		x.xrayRollback()
 	}
 }
