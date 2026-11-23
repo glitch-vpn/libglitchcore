@@ -72,6 +72,26 @@ func waitForOpenFilesToSettle(t *testing.T, before int) {
 	}
 }
 
+// settledOpenFiles is the process's open files once two counts in a row agree.
+// A finalizer closing another test's socket moves the number down until it stops.
+func settledOpenFiles(t *testing.T) (all, eventfds int) {
+	t.Helper()
+	all, eventfds = openFiles(t)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		runtime.GC()
+		nextAll, nextEventfds := openFiles(t)
+		if nextAll == all && nextEventfds == eventfds {
+			return nextAll, nextEventfds
+		}
+		all, eventfds = nextAll, nextEventfds
+		if time.Now().After(deadline) {
+			return all, eventfds
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 // The platform's fd carries a flow end to end, through the stack and the
 // dispatcher, on the path Android takes: sing-tun makes no route of its own
 // and closes only the copy it was handed.
@@ -132,17 +152,17 @@ func TestXrayTunLayer_LeavesNoEventfdsOrFdsAcrossSessions(t *testing.T) {
 		x.stopXrayTunLayer()
 	}
 	session() // the first session warms what the runtime opens once
-	allBefore, eventfdsBefore := openFiles(t)
+	allBefore, eventfdsBefore := settledOpenFiles(t)
 	const rounds = 25
 	for i := 0; i < rounds; i++ {
 		session()
 	}
-	allAfter, eventfdsAfter := openFiles(t)
+	allAfter, eventfdsAfter := settledOpenFiles(t)
 	t.Logf("eventfds %d -> %d, open fds %d -> %d over %d sessions", eventfdsBefore, eventfdsAfter, allBefore, allAfter, rounds)
-	if eventfdsAfter != eventfdsBefore {
-		t.Errorf("eventfds went from %d to %d over %d sessions", eventfdsBefore, eventfdsAfter, rounds)
+	if eventfdsAfter > eventfdsBefore {
+		t.Errorf("eventfds grew from %d to %d over %d sessions", eventfdsBefore, eventfdsAfter, rounds)
 	}
-	if allAfter != allBefore {
-		t.Errorf("open fds went from %d to %d over %d sessions", allBefore, allAfter, rounds)
+	if allAfter > allBefore {
+		t.Errorf("open fds grew from %d to %d over %d sessions", allBefore, allAfter, rounds)
 	}
 }
