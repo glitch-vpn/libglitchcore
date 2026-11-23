@@ -243,6 +243,9 @@ func TestRelayAnswersAFailedDialWithoutTheEnginesText(t *testing.T) {
 func TestRelayCloseEndsLiveConnectionsAndReleasesTheLinkOnce(t *testing.T) {
 	link := openFake(t, Request{}, dialTo(echoServer(t)))
 	conn := link.connectTo(t, "named.example", 80)
+	registryMu.Lock()
+	closedRelay := relays[link.info.ID]
+	registryMu.Unlock()
 
 	var closing sync.WaitGroup
 	for range 3 {
@@ -263,8 +266,11 @@ func TestRelayCloseEndsLiveConnectionsAndReleasesTheLinkOnce(t *testing.T) {
 	if err == nil || (errors.As(err, &timeout) && timeout.Timeout()) {
 		t.Errorf("the connection survived the relay: %v", err)
 	}
-	if _, err := net.DialTimeout("tcp", link.address(), time.Second); err == nil {
-		t.Error("the listener still accepts")
+	// A dial proves nothing: WSL's mirrored-mode loopback completes a connect to a
+	// port with no listener behind it. The listener says whether it is closed.
+	_ = closedRelay.listener.(*net.TCPListener).SetDeadline(time.Now().Add(time.Second))
+	if _, err := closedRelay.listener.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("the listener still accepts: Accept returned %v", err)
 	}
 	if n := link.released.Load(); n != 1 {
 		t.Errorf("the link was released %d times, want 1", n)
