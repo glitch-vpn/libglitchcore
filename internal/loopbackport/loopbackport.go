@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 )
 
 // Address is where every port Pick returns was found free.
@@ -51,6 +52,35 @@ func Pick() (int, error) {
 		}
 	}
 	return 0, errors.New("no loopback port free on both TCP and UDP")
+}
+
+// Retry calls use with a port Pick returned, and with another while use fails
+// because its listener lost the bind to another process: Pick holds nothing.
+// Any other error, and the last lost bind, is returned with the port it was for.
+func Retry(use func(port int) error) (port int, err error) {
+	const tries = 8
+	for range tries {
+		port, err = Pick()
+		if err != nil {
+			return 0, err
+		}
+		err = use(port)
+		if !AddressInUse(err) {
+			return port, err
+		}
+	}
+	return port, err
+}
+
+// windowsAddressInUse is WSAEADDRINUSE. On Windows syscall.EADDRINUSE is a
+// placeholder no bind fails with, and the system's message is in the system's
+// language, so a bind lost there is known by this number.
+const windowsAddressInUse = syscall.Errno(10048)
+
+// AddressInUse reports whether err is a bind refused because another socket
+// holds the address.
+func AddressInUse(err error) bool {
+	return errors.Is(err, syscall.EADDRINUSE) || errors.Is(err, windowsAddressInUse)
 }
 
 func fromPortZero() (int, bool) {

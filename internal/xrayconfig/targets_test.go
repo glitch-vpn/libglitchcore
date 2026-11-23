@@ -257,12 +257,16 @@ func TestNamedTargets_Refusals(t *testing.T) {
 // the world leave from source.
 func startExitServer(t *testing.T, source string) (port int, stop func()) {
 	t.Helper()
-	port, err := loopbackport.Pick()
-	if err != nil {
-		t.Fatal(err)
-	}
-	conf := fmt.Sprintf(`{"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","settings":{"method":"chacha20-ietf-poly1305","password":"pw","network":"tcp"}}],"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow"}]},"sendThrough":%q}]}`, port, source)
-	server, err := xrayCore.StartInstance("json", []byte(conf))
+	var server *xrayCore.Instance
+	port, err := loopbackport.Retry(func(port int) error {
+		conf := fmt.Sprintf(`{"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","settings":{"method":"chacha20-ietf-poly1305","password":"pw","network":"tcp"}}],"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow"}]},"sendThrough":%q}]}`, port, source)
+		var startErr error
+		server, startErr = xrayCore.StartInstance("json", []byte(conf))
+		if startErr != nil && server != nil {
+			_ = server.Close()
+		}
+		return startErr
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
