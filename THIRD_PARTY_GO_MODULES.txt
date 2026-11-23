@@ -6582,7 +6582,7 @@ OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
 OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 ==============================================================================
-Module:  github.com/metacubex/sing v0.5.8
+Module:  github.com/metacubex/sing v0.5.9
 Licence: GPL-3.0-or-later
 
 --- LICENSE ---
@@ -6688,7 +6688,7 @@ along with this program. If not, see <http://www.gnu.org/licenses/>.
 
 ==============================================================================
 Module:  github.com/metacubex/sing-tun v0.4.28
-Replaced by: github.com/glitch-vpn/sing-tun v0.4.28-glitch.9
+Replaced by: github.com/glitch-vpn/sing-tun v0.4.29-glitch.1
 Licence: GPL-3.0-or-later
 
 --- LICENSE ---

@@ -9,7 +9,7 @@ require (
 	github.com/metacubex/amneziawg-go v0.0.0-20260908071407-0c1c6f40ecd7
 	github.com/metacubex/gvisor v0.0.0-20260922041103-e2cbcd6e7400
 	github.com/metacubex/mihomo v1.19.33
-	github.com/metacubex/sing v0.5.8
+	github.com/metacubex/sing v0.5.9
 	github.com/metacubex/sing-tun v0.4.28
 	github.com/miekg/dns v1.1.73
 	github.com/xjasonlyu/tun2socks/v2 v2.7.0
@@ -27,7 +27,7 @@ require (
 
 replace github.com/xjasonlyu/tun2socks/v2 => github.com/glitch-vpn/tun2socks/v2 v2.7.6
 
-replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.28-glitch.9
+replace github.com/metacubex/sing-tun => github.com/glitch-vpn/sing-tun v0.4.29-glitch.1
 
 // golang.zx2c4.com/wintun is linked by xray-core's TUN, WireGuard and masque packages;
 // the stub keeps the binding out of the main variant.
