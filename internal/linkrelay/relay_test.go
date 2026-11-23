@@ -292,6 +292,21 @@ func waitReleased(link *fakeLink) bool {
 	return link.released.Load() > 0
 }
 
+// The link is released, then the relay is dropped from the registry.
+func waitUnlisted(id string) bool {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		registryMu.Lock()
+		_, listed := relays[id]
+		registryMu.Unlock()
+		if !listed {
+			return true
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return false
+}
+
 func TestRelayClosesItselfAfterItsLastConnectionEnds(t *testing.T) {
 	shortTimers(t)
 	link := openFake(t, Request{IdleSec: 10}, dialTo(echoServer(t)))
@@ -306,10 +321,7 @@ func TestRelayClosesItselfAfterItsLastConnectionEnds(t *testing.T) {
 	if !waitReleased(link) {
 		t.Fatal("the relay stayed open after its last connection ended")
 	}
-	registryMu.Lock()
-	_, listed := relays[link.info.ID]
-	registryMu.Unlock()
-	if listed {
+	if !waitUnlisted(link.info.ID) {
 		t.Error("the closed relay is still listed")
 	}
 }
