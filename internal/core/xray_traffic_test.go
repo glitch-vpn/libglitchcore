@@ -90,7 +90,7 @@ func TestXrayTraffic_ReadsRaceASessionEnding(t *testing.T) {
 // The plugin asks which engine runs from the UI thread, during a connect too.
 func TestXrayRunning_AnswersWhileAStartHoldsTheCore(t *testing.T) {
 	x := &CoreController{}
-	x.xraySession.startsInFlight.Add(1)
+	x.xraySession.startRequested(0)
 	x.coreMutex.Lock()
 	defer x.coreMutex.Unlock()
 

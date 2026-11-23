@@ -53,6 +53,12 @@ func TestMihomoStop_TakenWhileALaterStartWaits(t *testing.T) {
 	queuedStopScenario(t, x, "mihomo", &x.mihomoSession, x.HandleMihomoStart, x.HandleMihomoStop, req)
 }
 
+func TestMihomoStop_ReportsDisconnectedOnceTheStartItEndedReturned(t *testing.T) {
+	x := newMihomoSessionController(t)
+	req, _ := mihomoProxyStart(t, mihomoSessionHome(t))
+	stopDuringStartScenario(t, &x.mihomoSession, "mihomo", x.HandleMihomoStart, x.HandleMihomoStop, x.HandleMihomoIsRunning, req)
+}
+
 func TestMihomoStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	x := newMihomoSessionController(t)

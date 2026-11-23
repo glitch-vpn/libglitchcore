@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -18,13 +19,21 @@ import (
 //   - a start reports "already running" only for an instance of the current
 //     session, and replaces, under coreMutex, one an earlier session left;
 //   - a stop leaves an instance started under a generation as new as its own:
-//     a start queued behind it brought that one up.
+//     a start queued behind it brought that one up;
+//   - a stop reports Disconnected only once the starts it ended have returned,
+//     since until then the engine still counts as running.
 type engineSession struct {
-	running        atomic.Bool
-	startsInFlight atomic.Int32
+	running atomic.Bool
 	// The session generation the running instance was started under; written
 	// under coreMutex.
 	instanceGen atomic.Int64
+
+	// The starts between their request and the return of their goroutine, by
+	// the generation each began under. A leaf lock, never held across a call.
+	startsMu       sync.Mutex
+	startsInFlight map[int64]int
+	// Closed and dropped when a start returns, to wake a stop waiting for it.
+	startReturned chan struct{}
 }
 
 // errStopSuperseded: the instance running was started after the stop was
@@ -34,7 +43,63 @@ var errStopSuperseded = errors.New("a later start owns the engine")
 // engaged: running or starting, read without coreMutex, which a start or a
 // stop holds for its whole run; callers reach it from a UI thread.
 func (s *engineSession) engaged() bool {
-	return s.running.Load() || s.startsInFlight.Load() > 0
+	return s.running.Load() || s.startsInFlightCount() > 0
+}
+
+func (s *engineSession) startsInFlightCount() (n int) {
+	s.startsMu.Lock()
+	defer s.startsMu.Unlock()
+	for _, count := range s.startsInFlight {
+		n += count
+	}
+	return n
+}
+
+func (s *engineSession) startRequested(mark int64) {
+	s.startsMu.Lock()
+	defer s.startsMu.Unlock()
+	if s.startsInFlight == nil {
+		s.startsInFlight = map[int64]int{}
+	}
+	s.startsInFlight[mark]++
+}
+
+func (s *engineSession) startReturnedAt(mark int64) {
+	s.startsMu.Lock()
+	defer s.startsMu.Unlock()
+	if s.startsInFlight[mark]--; s.startsInFlight[mark] == 0 {
+		delete(s.startsInFlight, mark)
+	}
+	if s.startReturned != nil {
+		close(s.startReturned)
+		s.startReturned = nil
+	}
+}
+
+// awaitStartsBefore returns once every start that began under a generation
+// before stopGen has returned. Such a start ended with the generation and
+// gives up as soon as it gets coreMutex.
+func (s *engineSession) awaitStartsBefore(stopGen int64) {
+	for {
+		s.startsMu.Lock()
+		pending := false
+		for mark := range s.startsInFlight {
+			if mark < stopGen {
+				pending = true
+				break
+			}
+		}
+		if !pending {
+			s.startsMu.Unlock()
+			return
+		}
+		if s.startReturned == nil {
+			s.startReturned = make(chan struct{})
+		}
+		returned := s.startReturned
+		s.startsMu.Unlock()
+		<-returned
+	}
 }
 
 func (s *engineSession) runsSession(gen int64) bool {
@@ -62,10 +127,10 @@ func (x *CoreController) beginStart(s *engineSession, tunFd int) (mark int64, tu
 		return 0, nil, nil, err
 	}
 	mark = x.sessionGen.Load()
-	s.startsInFlight.Add(1)
+	s.startRequested(mark)
 	return mark, tun, func() {
 		tun.release()
-		s.startsInFlight.Add(-1)
+		s.startReturnedAt(mark)
 	}, nil
 }
 
@@ -198,6 +263,7 @@ func (x *CoreController) stopEngineSession(s *engineSession, label string, stop 
 			x.emitStatus(EngineError, fmt.Sprintf("[%s] Failed to stop: %v", label, err))
 			return
 		}
+		s.awaitStartsBefore(stopGen)
 		x.emitStatus(EngineDisconnected, fmt.Sprintf("[%s] Disconnected", label))
 	}()
 	return glitchCoreResultSuccess

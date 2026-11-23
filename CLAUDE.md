@@ -190,7 +190,8 @@ the adapter (the kept adapter outlives its sessions and is not up between them).
   rules: a start counts as running from its request, so a stop then is taken;
   "already running" only for the current session's instance, and an earlier
   session's instance is replaced under `coreMutex`; a stop leaves an instance
-  started as late as itself. Engines go through its helpers
+  started as late as itself, and reports Disconnected only after the starts it
+  ended have returned, as they count as running until then. Engines go through its helpers
   (`beginStart`/`prepareStartLocked`/`finishStart`, `stopEngineSession`/
   `stopEngineInstance`) rather than their own copies.
 

@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -174,6 +175,48 @@ func queuedStopScenario(t *testing.T, x *CoreController, engine string, s *engin
 	}
 }
 
+// stopDuringStartScenario: a disconnect lands while the start still waits for
+// the core, takes it first and closes nothing; the start then gives up.
+// Disconnected waits for that start to return, as the engine counts as running
+// until then.
+func stopDuringStartScenario(t *testing.T, s *engineSession, engine string, start func(EngineStartRequest) int32, stop, isRunning func() int32, req EngineStartRequest) {
+	t.Helper()
+	disconnected := make(chan struct{})
+	var once sync.Once
+	var runningAtDisconnect atomic.Int32
+	setStatusSink(func(code int32, _ string) {
+		if code == EngineDisconnected {
+			runningAtDisconnect.Store(isRunning())
+			once.Do(func() { close(disconnected) })
+		}
+	})
+	t.Cleanup(func() { setStatusSink(nil) })
+	release := holdStarts(t, engine)
+
+	if res := start(req); res != glitchCoreResultSuccess {
+		t.Fatalf("start = %d", res)
+	}
+	if res := stop(); res != glitchCoreResultSuccess {
+		t.Fatalf("stop during the start = %d", res)
+	}
+	select {
+	case <-disconnected:
+		t.Fatalf("disconnected reported while the start it ended is in flight (running = %v)", isRunning() == glitchCoreResultSuccess)
+	case <-time.After(300 * time.Millisecond):
+	}
+
+	release(0)
+	select {
+	case <-disconnected:
+	case <-time.After(10 * time.Second):
+		t.Fatal("no disconnected after the start returned")
+	}
+	if runningAtDisconnect.Load() == glitchCoreResultSuccess {
+		t.Fatal("the engine reads as running when disconnected is reported")
+	}
+	waitStartsInFlight(t, s, 0)
+}
+
 // replaceScenario: connect A comes up, disconnect S is queued behind connect
 // B, and B takes the lock first. B replaces A's instance instead of reporting
 // connected on it, and S then leaves B's alone: B's runs, connected twice (A,
@@ -311,11 +354,11 @@ func (c *tunCopies) snapshot() (dups map[int]int, closed []int) {
 	return dups, append([]int(nil), c.closed...)
 }
 
-func waitStartsInFlight(t *testing.T, s *engineSession, want int32) {
+func waitStartsInFlight(t *testing.T, s *engineSession, want int) {
 	t.Helper()
-	for deadline := time.Now().Add(5 * time.Second); s.startsInFlight.Load() != want; time.Sleep(5 * time.Millisecond) {
+	for deadline := time.Now().Add(5 * time.Second); s.startsInFlightCount() != want; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
-			t.Fatalf("starts in flight = %d, want %d", s.startsInFlight.Load(), want)
+			t.Fatalf("starts in flight = %d, want %d", s.startsInFlightCount(), want)
 		}
 	}
 }

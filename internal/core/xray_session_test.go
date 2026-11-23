@@ -25,6 +25,12 @@ func TestXrayStop_TakenWhileALaterStartWaits(t *testing.T) {
 		EngineStartRequest{Config: xraySessionTestLink})
 }
 
+func TestXrayStop_ReportsDisconnectedOnceTheStartItEndedReturned(t *testing.T) {
+	x := &CoreController{}
+	stopDuringStartScenario(t, &x.xraySession, "xray", x.HandleXrayStart, x.HandleXrayStop, x.HandleXrayIsRunning,
+		EngineStartRequest{Config: xraySessionTestLink})
+}
+
 func TestXrayStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	x := &CoreController{}
 	t.Cleanup(func() {
