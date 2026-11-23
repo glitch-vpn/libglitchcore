@@ -3,6 +3,7 @@
 package smoke
 
 import (
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -17,6 +18,12 @@ import (
 // a file that lacks it with a downloaded one.
 func writeGeoFixtures(t *testing.T, dir string) {
 	t.Helper()
+	if err := installGeoFixtures(dir); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func installGeoFixtures(dir string) error {
 	site, err := proto.Marshal(&geoSiteList{Entry: []*geoSite{
 		siteWithCode("GLITCH-TEST",
 			&geoDomain{Type: geoRootDomain, Value: "glitch.test"},
@@ -25,19 +32,17 @@ func writeGeoFixtures(t *testing.T, dir string) {
 		siteWithCode("CN", &geoDomain{Type: geoRootDomain, Value: "cn.glitch.test"}),
 	}})
 	if err != nil {
-		t.Fatal(err)
+		return fmt.Errorf("geosite fixture: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "geosite.dat"), site, 0o644); err != nil {
-		t.Fatal(err)
+		return err
 	}
 	ip, err := proto.Marshal(&geoIPList{Entry: []*geoIP{
 		ipWithCode("GLITCH-TEST", &geoCIDR{Ip: net.ParseIP("198.51.100.0").To4(), Prefix: 24}),
 		ipWithCode("CN", &geoCIDR{Ip: net.ParseIP("203.0.113.0").To4(), Prefix: 24}),
 	}})
 	if err != nil {
-		t.Fatal(err)
+		return fmt.Errorf("geoip fixture: %w", err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "geoip.dat"), ip, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	return os.WriteFile(filepath.Join(dir, "geoip.dat"), ip, 0o644)
 }

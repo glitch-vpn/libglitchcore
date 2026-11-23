@@ -65,6 +65,12 @@ func runWithAssetHome(m *testing.M) int {
 	smokeAssetDir = dir
 	// Best effort: mihomo can hold cache.db open on Windows after the run.
 	defer func() { _ = os.RemoveAll(dir) }()
+	// xray reloads the process's geo matchers from this folder on a later start.
+	// A geo test's lists have to be here, or that start fails to open geoip.dat.
+	if err := installGeoFixtures(dir); err != nil {
+		fmt.Fprintln(os.Stderr, "smoke asset home:", err)
+		return 1
+	}
 	return m.Run()
 }
 
