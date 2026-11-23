@@ -59,6 +59,34 @@ func TestXrayStop_DoesNotWaitForAStartBegunAfterIt(t *testing.T) {
 	stopNotWaitingForLaterStartScenario(t, &x.xraySession, "xray", x.HandleXrayStart, x.HandleXrayStop, reqA, reqB)
 }
 
+// A sink registered while a start waits for the core replays the session: the
+// engine is not up, and no Connected may be reported for it.
+func TestReplaySession_ReportsConnectedOnlyForAnEngineThatIsUp(t *testing.T) {
+	x := newXraySessionController(t)
+	life := recordLifecycle(t)
+	release := holdStarts(t, "xray")
+	req, _ := xrayProxyStart(t)
+	if res := x.HandleXrayStart(req); res != glitchCoreResultSuccess {
+		t.Fatalf("start = %d", res)
+	}
+
+	if !x.replaySession() {
+		t.Fatal("the replay did not see the engine that is starting")
+	}
+	if n := life.count(EngineConnected); n != 0 {
+		t.Fatalf("lifecycle %v: connected reported for a start that has not come up", life.snapshot())
+	}
+
+	x.xraySession.up(x.sessionGen.Load())
+	if !x.replaySession() || life.count(EngineConnected) != 1 {
+		t.Fatalf("lifecycle %v: want connected for the engine that is up", life.snapshot())
+	}
+	x.xraySession.running.Store(false)
+	x.HandleXrayStop()
+	release(0)
+	waitStartsInFlight(t, &x.xraySession, 0)
+}
+
 func TestXrayStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	x := &CoreController{}
 	t.Cleanup(func() {

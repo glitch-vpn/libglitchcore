@@ -183,7 +183,9 @@ the adapter (the kept adapter outlives its sessions and is not up between them).
 - Session state (`serverSelJSON`, `ipStateJSON`) is cached on the controller,
   cleared via `clearSessionState` on stop and failed starts, and replayed by
   `replaySession` — on already-running starts, on status-port registration,
-  and via the `replay_session` IPC command. `clearSessionState` bumps
+  and via the `replay_session` IPC command; it reports Connected only for an
+  engine whose instance is up, as a start still in flight reports for itself.
+  `clearSessionState` bumps
   `sessionGen`, which is how a start that raced a stop tears down what it
   armed too late (`abortStaleEngineSession`).
 - Each engine keeps an `engineSession` (`engine_session.go`) with one set of
