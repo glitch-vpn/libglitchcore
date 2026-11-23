@@ -188,6 +188,8 @@ run-tests:
 	esac
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=1 CC=gcc CGO_CFLAGS="-I$$DART_SDK/include" \
 	  go test -tags="with_gvisor $$NO_TAGS" -count=1 -timeout 120s ./...
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 \
+	  go test -tags="integration with_gvisor $$NO_TAGS" -count=1 -timeout 3m ./internal/smoke/
 	echo "[OK] Tests passed"
 
 # ---------------------------------------------------------------------------
