@@ -31,6 +31,34 @@ func TestXrayStop_ReportsDisconnectedOnceTheStartItEndedReturned(t *testing.T) {
 		EngineStartRequest{Config: xraySessionTestLink})
 }
 
+func newXraySessionController(t *testing.T) *CoreController {
+	t.Helper()
+	x := &CoreController{}
+	t.Cleanup(func() {
+		x.stopStats()
+		x.coreMutex.Lock()
+		defer x.coreMutex.Unlock()
+		x.endSessionLoops()
+		x.xrayStopLocked()
+	})
+	return x
+}
+
+func TestXrayStop_LeavesDisconnectedToALaterStartThatComesUpFirst(t *testing.T) {
+	x := newXraySessionController(t)
+	reqA, _ := xrayProxyStart(t)
+	reqB, _ := xrayProxyStart(t)
+	laterStartScenario(t, &x.xraySession, "xray", x.HandleXrayStart, x.HandleXrayStop, x.HandleXrayStart,
+		func() bool { return x.xraySession.runsSession(1) }, reqA, reqB)
+}
+
+func TestXrayStop_DoesNotWaitForAStartBegunAfterIt(t *testing.T) {
+	x := newXraySessionController(t)
+	reqA, _ := xrayProxyStart(t)
+	reqB, _ := xrayProxyStart(t)
+	stopNotWaitingForLaterStartScenario(t, &x.xraySession, "xray", x.HandleXrayStart, x.HandleXrayStop, reqA, reqB)
+}
+
 func TestXrayStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	x := &CoreController{}
 	t.Cleanup(func() {

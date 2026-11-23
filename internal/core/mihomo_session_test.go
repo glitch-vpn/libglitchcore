@@ -59,6 +59,25 @@ func TestMihomoStop_ReportsDisconnectedOnceTheStartItEndedReturned(t *testing.T)
 	stopDuringStartScenario(t, &x.mihomoSession, "mihomo", x.HandleMihomoStart, x.HandleMihomoStop, x.HandleMihomoIsRunning, req)
 }
 
+func TestMihomoStop_LeavesDisconnectedToALaterStartThatComesUpFirst(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	x := newMihomoSessionController(t)
+	home := mihomoSessionHome(t)
+	reqA, _ := mihomoProxyStart(t, home)
+	reqB, _ := mihomoProxyStart(t, home)
+	laterStartScenario(t, &x.mihomoSession, "mihomo", x.HandleMihomoStart, x.HandleMihomoStop, x.HandleMihomoStart,
+		func() bool { return x.mihomoSession.runsSession(1) }, reqA, reqB)
+}
+
+func TestMihomoStop_DoesNotWaitForAStartBegunAfterIt(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	x := newMihomoSessionController(t)
+	home := mihomoSessionHome(t)
+	reqA, _ := mihomoProxyStart(t, home)
+	reqB, _ := mihomoProxyStart(t, home)
+	stopNotWaitingForLaterStartScenario(t, &x.mihomoSession, "mihomo", x.HandleMihomoStart, x.HandleMihomoStop, reqA, reqB)
+}
+
 func TestMihomoStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	x := newMihomoSessionController(t)

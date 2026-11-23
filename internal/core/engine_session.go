@@ -21,7 +21,8 @@ import (
 //   - a stop leaves an instance started under a generation as new as its own:
 //     a start queued behind it brought that one up;
 //   - a stop reports Disconnected only once the starts it ended have returned,
-//     since until then the engine still counts as running.
+//     since until then the engine still counts as running, and not at all when
+//     a later start owns an engine by then: that start reports for it.
 type engineSession struct {
 	running atomic.Bool
 	// The session generation the running instance was started under; written
@@ -76,9 +77,21 @@ func (s *engineSession) startReturnedAt(mark int64) {
 	}
 }
 
+// startsInFlightFrom: a start that began under stopGen or later is in flight.
+func (s *engineSession) startsInFlightFrom(stopGen int64) bool {
+	s.startsMu.Lock()
+	defer s.startsMu.Unlock()
+	for mark := range s.startsInFlight {
+		if mark >= stopGen {
+			return true
+		}
+	}
+	return false
+}
+
 // awaitStartsBefore returns once every start that began under a generation
 // before stopGen has returned. Such a start ended with the generation and
-// gives up as soon as it gets coreMutex.
+// gives up as soon as it gets coreMutex, which a later start may hold first.
 func (s *engineSession) awaitStartsBefore(stopGen int64) {
 	for {
 		s.startsMu.Lock()
@@ -264,9 +277,24 @@ func (x *CoreController) stopEngineSession(s *engineSession, label string, stop 
 			return
 		}
 		s.awaitStartsBefore(stopGen)
-		x.emitStatus(EngineDisconnected, fmt.Sprintf("[%s] Disconnected", label))
+		x.reportDisconnected(label, stopGen)
 	}()
 	return glitchCoreResultSuccess
+}
+
+// reportDisconnected emits Disconnected unless a start after the stop owns an
+// engine, which is then to report for it. The event goes out under coreMutex,
+// so that start's Connected cannot get in front of it.
+func (x *CoreController) reportDisconnected(label string, stopGen int64) {
+	x.coreMutex.Lock()
+	defer x.coreMutex.Unlock()
+	for _, other := range []*engineSession{&x.xraySession, &x.mihomoSession} {
+		if other.supersedes(stopGen) || other.startsInFlightFrom(stopGen) {
+			log.Printf("[%s] a start after this stop owns an engine; not reporting disconnected", label)
+			return
+		}
+	}
+	x.emitStatus(EngineDisconnected, fmt.Sprintf("[%s] Disconnected", label))
 }
 
 // stopEngineInstance stops, under coreMutex, the instance a start before

@@ -2,6 +2,7 @@ package core
 
 import (
 	"context"
+	"log"
 	"net"
 	"strconv"
 	"strings"
@@ -361,4 +362,131 @@ func waitStartsInFlight(t *testing.T, s *engineSession, want int) {
 			t.Fatalf("starts in flight = %d, want %d", s.startsInFlightCount(), want)
 		}
 	}
+}
+
+// logLines collects the standard logger's lines for the test.
+type logLines struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *logLines) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.lines = append(l.lines, string(p))
+	return len(p), nil
+}
+
+func (l *logLines) has(substr string) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for _, line := range l.lines {
+		if strings.Contains(line, substr) {
+			return true
+		}
+	}
+	return false
+}
+
+func captureLogLines(t *testing.T) *logLines {
+	t.Helper()
+	l := &logLines{}
+	prevOut := log.Writer()
+	log.SetOutput(l)
+	t.Cleanup(func() { log.SetOutput(prevOut) })
+	return l
+}
+
+// waitStopWaiting waits until a stop that took the core has reached its wait
+// for the starts it ended.
+func waitStopWaiting(t *testing.T, s *engineSession) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		s.startsMu.Lock()
+		waiting := s.startReturned != nil
+		s.startsMu.Unlock()
+		if waiting {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the stop never reached its wait for the starts it ended")
+		}
+	}
+}
+
+const stopYieldedLog = "not reporting disconnected"
+
+// waitStopYielded waits until the stop either reported Disconnected or left
+// it to a later start, and says which.
+func waitStopYielded(t *testing.T, logs *logLines, life *lifecycleLog) (reported bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(time.Millisecond) {
+		if logs.has(stopYieldedLog) {
+			return false
+		}
+		if life.count(EngineDisconnected) > 0 {
+			return true
+		}
+	}
+	t.Fatal("the stop neither reported Disconnected nor left it to a later start")
+	return false
+}
+
+// laterStartScenario: connect A waits for the core, disconnect S takes it and
+// waits for A, and connect B, requested after S on the same or the other
+// engine, comes up first. Disconnected is then B's to be spared: it would
+// land after B's Connected and read as B's session ending.
+func laterStartScenario(t *testing.T, stopped *engineSession, engine string, startA func(EngineStartRequest) int32, stop func() int32, startB func(EngineStartRequest) int32, bRuns func() bool, reqA, reqB EngineStartRequest) {
+	t.Helper()
+	life := recordLifecycle(t)
+	logs := captureLogLines(t)
+	release := holdStarts(t, engine)
+
+	if res := startA(reqA); res != glitchCoreResultSuccess {
+		t.Fatalf("start A = %d", res)
+	}
+	if res := stop(); res != glitchCoreResultSuccess {
+		t.Fatalf("stop S = %d", res)
+	}
+	waitStopWaiting(t, stopped)
+	if res := startB(reqB); res != glitchCoreResultSuccess {
+		t.Fatalf("start B = %d", res)
+	}
+	release(1)
+	life.waitFor(t, EngineConnected, 1)
+	release(0)
+	if waitStopYielded(t, logs, life) {
+		t.Fatalf("lifecycle %v: Disconnected after B's Connected while B runs = %v", life.snapshot(), bRuns())
+	}
+	waitStartsInFlight(t, stopped, 0)
+	if !bRuns() {
+		t.Fatal("B's engine does not run")
+	}
+}
+
+// stopNotWaitingForLaterStartScenario: the stop waits for the starts it ended
+// and for no other. B, requested after it, stays parked at its gate while the
+// stop settles.
+func stopNotWaitingForLaterStartScenario(t *testing.T, s *engineSession, engine string, start func(EngineStartRequest) int32, stop func() int32, reqA, reqB EngineStartRequest) {
+	t.Helper()
+	life := recordLifecycle(t)
+	logs := captureLogLines(t)
+	release := holdStarts(t, engine)
+
+	if res := start(reqA); res != glitchCoreResultSuccess {
+		t.Fatalf("start A = %d", res)
+	}
+	if res := stop(); res != glitchCoreResultSuccess {
+		t.Fatalf("stop S = %d", res)
+	}
+	waitStopWaiting(t, s)
+	if res := start(reqB); res != glitchCoreResultSuccess {
+		t.Fatalf("start B = %d", res)
+	}
+	release(0)
+	if waitStopYielded(t, logs, life) {
+		t.Fatalf("lifecycle %v: Disconnected while B, begun after the stop, is in flight", life.snapshot())
+	}
+	release(1)
+	waitStartsInFlight(t, s, 0)
 }
