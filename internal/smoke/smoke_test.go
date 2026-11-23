@@ -117,6 +117,9 @@ func echoBodyOn(t *testing.T, addr, body string) *httptest.Server {
 type eventLog struct {
 	mu     sync.Mutex
 	byCode map[int32][]string
+	// ended is set when the test is over: the core delivers an event from its own
+	// goroutine, and a t.Logf after the test panics.
+	ended bool
 }
 
 func captureEvents(t *testing.T) *eventLog {
@@ -124,11 +127,18 @@ func captureEvents(t *testing.T) *eventLog {
 	ev := &eventLog{byCode: map[int32][]string{}}
 	core.SetStatusSink(func(code int32, msg string) {
 		ev.mu.Lock()
+		defer ev.mu.Unlock()
 		ev.byCode[code] = append(ev.byCode[code], msg)
-		ev.mu.Unlock()
-		t.Logf("event %d: %s", code, msg)
+		if !ev.ended {
+			t.Logf("event %d: %s", code, msg)
+		}
 	})
-	t.Cleanup(func() { core.SetStatusSink(nil) })
+	t.Cleanup(func() {
+		core.SetStatusSink(nil)
+		ev.mu.Lock()
+		ev.ended = true
+		ev.mu.Unlock()
+	})
 	return ev
 }
 
