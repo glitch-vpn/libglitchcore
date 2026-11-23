@@ -78,6 +78,15 @@ func TestMihomoStop_DoesNotWaitForAStartBegunAfterIt(t *testing.T) {
 	stopNotWaitingForLaterStartScenario(t, &x.mihomoSession, "mihomo", x.HandleMihomoStart, x.HandleMihomoStop, reqA, reqB)
 }
 
+func TestMihomoStart_IsCountedBeforeItAnnouncesConnecting(t *testing.T) {
+	skipWhereMihomoRaces(t)
+	x := newMihomoSessionController(t)
+	home := mihomoSessionHome(t)
+	reqA, _ := mihomoProxyStart(t, home)
+	reqB, _ := mihomoProxyStart(t, home)
+	connectingAnnouncedAfterTheStartIsCountedScenario(t, &x.mihomoSession, "mihomo", x.HandleMihomoStart, x.HandleMihomoStop, reqA, reqB)
+}
+
 func TestMihomoStart_ReplacesTheInstanceOfAStoppedSession(t *testing.T) {
 	skipWhereMihomoRaces(t)
 	x := newMihomoSessionController(t)

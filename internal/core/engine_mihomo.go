@@ -282,12 +282,12 @@ func (x *CoreController) HandleMihomoStart(req EngineStartRequest) int32 {
 		return glitchCoreResultError
 	}
 
-	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
 	mark, tun, done, err := x.beginStart(&x.mihomoSession, req.TunFD)
 	if err != nil {
 		x.emitStatus(EngineError, fmt.Sprintf("[mihomo] Failed to start: %v", err))
 		return glitchCoreResultError
 	}
+	x.emitStatus(EngineConnecting, "[mihomo] Connecting")
 	go func() {
 		defer done()
 		x.finishStart(&x.mihomoSession, "mihomo", mark, x.mihomoStart(links, tun, o, mark))

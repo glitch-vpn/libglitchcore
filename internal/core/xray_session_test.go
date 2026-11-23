@@ -59,6 +59,13 @@ func TestXrayStop_DoesNotWaitForAStartBegunAfterIt(t *testing.T) {
 	stopNotWaitingForLaterStartScenario(t, &x.xraySession, "xray", x.HandleXrayStart, x.HandleXrayStop, reqA, reqB)
 }
 
+func TestXrayStart_IsCountedBeforeItAnnouncesConnecting(t *testing.T) {
+	x := newXraySessionController(t)
+	reqA, _ := xrayProxyStart(t)
+	reqB, _ := xrayProxyStart(t)
+	connectingAnnouncedAfterTheStartIsCountedScenario(t, &x.xraySession, "xray", x.HandleXrayStart, x.HandleXrayStop, reqA, reqB)
+}
+
 // A sink registered while a start waits for the core replays the session: the
 // engine is not up, and no Connected may be reported for it.
 func TestReplaySession_ReportsConnectedOnlyForAnEngineThatIsUp(t *testing.T) {

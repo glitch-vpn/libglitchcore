@@ -69,13 +69,12 @@ func (x *CoreController) HandleXrayStart(req EngineStartRequest) int32 {
 		return glitchCoreResultError
 	}
 
-	x.emitStatus(EngineConnecting, "[Xray] Connecting")
-
 	mark, tun, done, err := x.beginStart(&x.xraySession, req.TunFD)
 	if err != nil {
 		x.emitStatus(EngineError, fmt.Sprintf("[Xray] Failed to start: %v", err))
 		return glitchCoreResultError
 	}
+	x.emitStatus(EngineConnecting, "[Xray] Connecting")
 	go func() {
 		defer done()
 		x.finishStart(&x.xraySession, "Xray", mark, x.xrayStart(req.Config, tun, req.DNS, req.LogLevel, o, mark))

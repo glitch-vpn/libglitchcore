@@ -84,6 +84,9 @@ func holdStops(t *testing.T, engine string) (release func()) {
 type lifecycleLog struct {
 	mu    sync.Mutex
 	codes []int32
+	// Called after each lifecycle event is recorded, outside the lock; set
+	// before the first event.
+	onEvent func(code int32)
 }
 
 func recordLifecycle(t *testing.T) *lifecycleLog {
@@ -94,6 +97,9 @@ func recordLifecycle(t *testing.T) *lifecycleLog {
 			l.mu.Lock()
 			l.codes = append(l.codes, code)
 			l.mu.Unlock()
+			if l.onEvent != nil {
+				l.onEvent(code)
+			}
 		}
 	})
 	t.Cleanup(func() { setStatusSink(nil) })
@@ -489,4 +495,39 @@ func stopNotWaitingForLaterStartScenario(t *testing.T, s *engineSession, engine 
 	}
 	release(1)
 	waitStartsInFlight(t, s, 0)
+}
+
+// connectingAnnouncedAfterTheStartIsCountedScenario: connect A waits for the
+// core, disconnect S waits for A, and connect B announces Connecting while A
+// returns. The stop settles in that moment, and it has to find B counted:
+// otherwise it reports Disconnected, then B reports Connected.
+func connectingAnnouncedAfterTheStartIsCountedScenario(t *testing.T, s *engineSession, engine string, start func(EngineStartRequest) int32, stop func() int32, reqA, reqB EngineStartRequest) {
+	t.Helper()
+	life := recordLifecycle(t)
+	logs := captureLogLines(t)
+	release := holdStarts(t, engine)
+
+	if res := start(reqA); res != glitchCoreResultSuccess {
+		t.Fatalf("start A = %d", res)
+	}
+	if res := stop(); res != glitchCoreResultSuccess {
+		t.Fatalf("stop S = %d", res)
+	}
+	waitStopWaiting(t, s)
+
+	life.onEvent = func(code int32) {
+		if code == EngineConnecting {
+			release(0)
+			waitStopYielded(t, logs, life)
+		}
+	}
+	if res := start(reqB); res != glitchCoreResultSuccess {
+		t.Fatalf("start B = %d", res)
+	}
+	release(1)
+	life.waitFor(t, EngineConnected, 1)
+	waitStartsInFlight(t, s, 0)
+	if life.count(EngineDisconnected) != 0 {
+		t.Fatalf("lifecycle %v: Disconnected over B's session", life.snapshot())
+	}
 }
