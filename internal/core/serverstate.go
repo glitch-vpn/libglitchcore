@@ -35,21 +35,29 @@ func (x *CoreController) setServerSelection(sel *serverinfo.Selection) {
 // replaySession re-emits the live session's full view (connected, server/IP
 // state) and (re)starts stats - a fresh client restores without connect().
 // False when no engine runs or starts in this process. An engine still
-// starting has nothing to restore: its own start reports Connected.
+// starting has nothing to restore: its own start reports Connected. The engine
+// whose instance is up is the session; a start of an earlier session still in
+// flight on the other engine does not hide it.
 func (x *CoreController) replaySession() bool {
 	x.replayHotspot()
-	id := x.localRunningEngineID()
+	id := x.upEngineID()
 	if id == "" {
-		return false
-	}
-	// Traffic answers only for an engine whose instance exists.
-	if _, _, up := engineRegistry[id].Traffic(x); !up {
-		return true
+		return x.anyLocalEngineRunning()
 	}
 	x.emitStatus(EngineConnected, fmt.Sprintf("[%s] Connected (already running)", engineDisplayName(id)))
 	x.reemitSessionState()
 	x.startStats(time.Second)
 	return true
+}
+
+// upEngineID is the engine whose instance exists; Traffic answers only then.
+func (x *CoreController) upEngineID() string {
+	for id, e := range engineRegistry {
+		if _, _, up := e.Traffic(x); up {
+			return id
+		}
+	}
+	return ""
 }
 
 // For clients attaching to an already-running engine.
