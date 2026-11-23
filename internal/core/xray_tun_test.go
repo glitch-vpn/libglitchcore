@@ -194,6 +194,13 @@ type tunRig struct {
 // a pipe, with the app's stack at its far end.
 func startTunRig(t *testing.T, inst tunInstance, prof routing.Profile, mtu uint32, processName func(string, netip.AddrPort) (string, error)) *tunRig {
 	t.Helper()
+	return startTunRigWithUDPTimeout(t, inst, prof, mtu, processName, 0)
+}
+
+// startTunRigWithUDPTimeout replaces the handler's idle timeout, when udpTimeout
+// is set, before the stack starts, so nothing reads it while it is written.
+func startTunRigWithUDPTimeout(t *testing.T, inst tunInstance, prof routing.Profile, mtu uint32, processName func(string, netip.AddrPort) (string, error), udpTimeout time.Duration) *tunRig {
+	t.Helper()
 	x := &CoreController{}
 	sniffing, err := xrayconfig.AppSniffing(true, prof.LocalNetworks)
 	if err != nil {
@@ -204,6 +211,9 @@ func startTunRig(t *testing.T, inst tunInstance, prof routing.Profile, mtu uint3
 		t.Fatal(err)
 	}
 	h.split.processName = processName
+	if udpTimeout > 0 {
+		h.udpTimeout = udpTimeout
+	}
 	coreSide, appSide := pipe.New("", "", mtu)
 	session, err := startXrayTunStack(&pipeTun{ep: coreSide}, tunTestOptions(mtu), h)
 	if err != nil {
@@ -394,17 +404,22 @@ func TestXrayTun_FindsTheProcessBehindASourcePortByDefault(t *testing.T) {
 	}
 }
 
-// A UDP flow ends once it has been idle for the session's UDP timeout, which
-// is the one the user set.
-func TestXrayTun_EndsIdleUDPFlows(t *testing.T) {
+// The handler idles its UDP flows for the session's UDP timeout, which is the
+// one the user set.
+func TestXrayTun_TakesTheSessionsUDPTimeout(t *testing.T) {
 	t.Setenv("GLITCH_TUN2SOCKS_UDP_TIMEOUT_SEC", "45")
-	server := udpEcho(t)
 	prof := routing.Profile{Mode: routing.ModeDirectAll}
-	rig := startTunRig(t, startTunInstance(t, prof, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, 0, server), prof, tunTestMTU, nil)
+	rig := startTunRig(t, startTunInstance(t, prof, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, 0, udpEcho(t)), prof, tunTestMTU, nil)
 	if rig.handler.udpTimeout != 45*time.Second {
 		t.Fatalf("the handler's UDP timeout is %s, want the configured 45s", rig.handler.udpTimeout)
 	}
-	rig.handler.udpTimeout = 300 * time.Millisecond
+}
+
+// A UDP flow ends once it has been idle for the handler's UDP timeout.
+func TestXrayTun_EndsIdleUDPFlows(t *testing.T) {
+	server := udpEcho(t)
+	prof := routing.Profile{Mode: routing.ModeDirectAll}
+	rig := startTunRigWithUDPTimeout(t, startTunInstance(t, prof, dnsconfig.Config{Servers: []string{"1.1.1.1"}}, 0, server), prof, tunTestMTU, nil, time.Second)
 	pc := rig.dialUDP(t, netip.AddrPortFrom(tunTestDest, portOf(server)))
 	_, _ = pc.Write([]byte("x"))
 	_ = pc.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -414,9 +429,12 @@ func TestXrayTun_EndsIdleUDPFlows(t *testing.T) {
 	if flows := rig.udpFlowCount(); flows != 1 {
 		t.Fatalf("%d flows while one is live, want 1", flows)
 	}
-	time.Sleep(time.Second)
+	deadline := time.Now().Add(10 * time.Second)
+	for rig.udpFlowCount() != 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
 	if flows := rig.udpFlowCount(); flows != 0 {
-		t.Fatalf("%d flows after the UDP timeout, want 0", flows)
+		t.Fatalf("%d flows long after the UDP timeout, want 0", flows)
 	}
 }
 
