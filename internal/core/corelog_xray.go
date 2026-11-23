@@ -88,10 +88,11 @@ func handleXrayAccess(m *xrayCommonLog.AccessMessage, masked xrayCommonLog.Messa
 		return
 	}
 	a, ok := logfmt.ParseAccess(m.String())
-	if !ok || globalController == nil {
+	ctl := globalController.Load()
+	if !ok || ctl == nil {
 		return
 	}
-	globalController.emitConn(conninspect.Record{
+	ctl.emitConn(conninspect.Record{
 		Engine:   "xray",
 		Src:      a.Src,
 		Status:   a.Status,

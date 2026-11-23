@@ -311,7 +311,8 @@ func (s *glitchService) stopSessionOfAnotherUser() {
 }
 
 var stopRunningEngine = func(engineID string) {
-	if globalController.engineIsRunning(engineID) != glitchCoreResultSuccess {
+	ctl := globalController.Load()
+	if ctl == nil || ctl.engineIsRunning(engineID) != glitchCoreResultSuccess {
 		return
 	}
 	if resp := stopEngine(engineID); !resp.OK {
@@ -646,8 +647,12 @@ func handleCommandConnection(ctx context.Context, conn net.Conn, access *pipeAcc
 }
 
 func stopEngine(engineID string) pipeResponse {
+	ctl := globalController.Load()
+	if ctl == nil {
+		return pipeResponse{OK: false, Error: "controller not initialized"}
+	}
 	result := runFFICall(func() int32 {
-		return globalController.engineStop(engineID)
+		return ctl.engineStop(engineID)
 	})
 	if result != glitchCoreResultSuccess {
 		return pipeResponse{OK: false, Error: fmt.Sprintf("engine %q stop failed: code %d", engineID, result)}
@@ -677,7 +682,8 @@ func turnsTrafficOn(cmd pipeCommand) bool {
 // change of served user waits for: every case returns promptly and never waits
 // on another command.
 func dispatchCommand(cmd pipeCommand) pipeResponse {
-	if globalController == nil {
+	ctl := globalController.Load()
+	if ctl == nil {
 		return pipeResponse{OK: false, Error: "controller not initialized"}
 	}
 
@@ -709,7 +715,7 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		// In the service build useServiceIPC is false, so engineStart runs
 		// locally and dispatches to the engine's own Handle*Start.
 		result := runFFICall(func() int32 {
-			return globalController.engineStart(payload.EngineID, req)
+			return ctl.engineStart(payload.EngineID, req)
 		})
 		if result != glitchCoreResultSuccess {
 			return pipeResponse{OK: false, Error: fmt.Sprintf("engine %q start failed: code %d", payload.EngineID, result)}
@@ -730,7 +736,7 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		if err := json.Unmarshal(cmd.Payload, &payload); err != nil {
 			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid payload: %v", err)}
 		}
-		running := globalController.engineIsRunning(payload.EngineID) == glitchCoreResultSuccess
+		running := ctl.engineIsRunning(payload.EngineID) == glitchCoreResultSuccess
 		return pipeResponse{OK: true, Data: map[string]bool{"running": running}}
 	case "set_status_verbosity":
 		var payload struct {
@@ -769,13 +775,13 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		if payload.IntervalMS <= 0 {
 			return pipeResponse{OK: false, Error: "interval_ms must be > 0"}
 		}
-		globalController.startStats(time.Duration(payload.IntervalMS) * time.Millisecond)
+		ctl.startStats(time.Duration(payload.IntervalMS) * time.Millisecond)
 		return pipeResponse{OK: true}
 	case "stop_stats":
-		globalController.stopStats()
+		ctl.stopStats()
 		return pipeResponse{OK: true}
 	case "replay_session":
-		globalController.replaySession()
+		ctl.replaySession()
 		return pipeResponse{OK: true}
 	case "prepare_hotspot":
 		var payload struct {
@@ -797,7 +803,7 @@ func dispatchCommand(cmd pipeCommand) pipeResponse {
 		if err := json.Unmarshal([]byte(payload.Request), &request); err != nil {
 			return pipeResponse{OK: false, Error: fmt.Sprintf("invalid request: %v", err)}
 		}
-		result := runFFICall(func() int32 { return globalController.setHotspotSharing(request) })
+		result := runFFICall(func() int32 { return ctl.setHotspotSharing(request) })
 		return pipeResponse{OK: true, Data: map[string]int32{"result": result}}
 	default:
 		return pipeResponse{OK: false, Error: fmt.Sprintf("unknown action: %s", cmd.Action)}

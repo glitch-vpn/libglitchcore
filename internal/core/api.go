@@ -64,7 +64,7 @@ func SetStatusSink(fn func(code int32, message string)) {
 	// A fresh isolate over a live tunnel (hot restart, app relaunch) restores
 	// its session view without a connect() round-trip. Deferred: the sink is
 	// registered inside a leaf FFI call.
-	x := globalController
+	x := globalController.Load()
 	if x == nil {
 		return
 	}
@@ -83,7 +83,7 @@ func SetStatusSink(fn func(code int32, message string)) {
 }
 
 func Initialize() {
-	if globalController != nil {
+	if globalController.Load() != nil {
 		return
 	}
 	maybeStartPprof() // no-op unless GLITCH_PPROF_ADDR is set
@@ -95,71 +95,77 @@ func Initialize() {
 	log.SetFlags(0)
 	log.SetOutput(sinkWriter{})
 	registerCoreLogHandler()
-	controller := &CoreController{}
-	globalController = controller
+	globalController.Store(&CoreController{})
 }
 
 // OnDartApiInit drops delivery state on hot restart until the new isolate re-registers.
 func OnDartApiInit() {
 	setStatusSink(nil)
-	if globalController != nil {
-		globalController.stopStats()
+	if x := globalController.Load(); x != nil {
+		x.stopStats()
 	}
 }
 
 func EngineStart(engineID string, req EngineStartRequest) int32 {
-	if globalController == nil {
+	x := globalController.Load()
+	if x == nil {
 		return ResultError
 	}
 	return runFFICall(func() int32 {
-		return globalController.engineStart(engineID, req)
+		return x.engineStart(engineID, req)
 	})
 }
 
 func EngineStop(engineID string) int32 {
-	if globalController == nil {
+	x := globalController.Load()
+	if x == nil {
 		return ResultError
 	}
 	return runFFICall(func() int32 {
-		return globalController.engineStop(engineID)
+		return x.engineStop(engineID)
 	})
 }
 
 func EngineIsRunning(engineID string) int32 {
-	if globalController == nil {
+	x := globalController.Load()
+	if x == nil {
 		return ResultError
 	}
-	return globalController.engineIsRunning(engineID)
+	return x.engineIsRunning(engineID)
 }
 
 func ActiveEngineID() string {
-	if globalController == nil {
+	x := globalController.Load()
+	if x == nil {
 		return ""
 	}
-	return globalController.activeEngineID()
+	return x.activeEngineID()
 }
 
 // EngineTraffic for the Android notification JNI (no Dart isolate required).
 func EngineTraffic() (rx, tx uint64, running bool) {
-	if globalController == nil {
+	x := globalController.Load()
+	if x == nil {
 		return 0, 0, false
 	}
-	return globalController.readEngineTraffic()
+	return x.readEngineTraffic()
 }
 
 func StartStats(interval time.Duration) int32 {
-	if globalController == nil || interval <= 0 {
+	x := globalController.Load()
+	if x == nil || interval <= 0 {
 		return ResultError
 	}
-	globalController.startStats(interval)
+	x.startStats(interval)
 	return ResultSuccess
 }
 
 func StopStats() int32 {
-	if globalController == nil {
+	x := globalController.Load()
+	if x == nil {
 		return ResultError
 	}
-	globalController.stopStats()
+	x.stopStats()
 	return ResultSuccess
 }
 

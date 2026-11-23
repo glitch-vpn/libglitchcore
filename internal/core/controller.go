@@ -12,7 +12,8 @@ import (
 	"github.com/glitch-vpn/libglitchcore/internal/logfmt"
 )
 
-var globalController *CoreController
+// Loaded from engine log goroutines while Initialize and tests store another.
+var globalController atomic.Pointer[CoreController]
 
 // statusVerbosity is the master log gate (FFI stream + stdout + every engine's
 // own logger). Default -1 is silent everywhere, not even stdout.

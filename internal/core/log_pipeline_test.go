@@ -3,6 +3,7 @@ package core
 import (
 	"encoding/json"
 	"log"
+	"os"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -20,6 +21,13 @@ type capturedLog struct {
 	Message   string `json:"message"`
 }
 
+func replaceController(t *testing.T, next *CoreController) {
+	t.Helper()
+	previous := globalController.Load()
+	globalController.Store(next)
+	t.Cleanup(func() { globalController.Store(previous) })
+}
+
 // collectEvents keeps one code and drops it; a log line needs both codes and
 // which one it travelled as.
 //
@@ -28,9 +36,7 @@ type capturedLog struct {
 // applyStatusVerbosity would take the service-IPC branch on Windows.
 func captureLogs(t *testing.T, verbosity int32) func() []capturedLog {
 	t.Helper()
-	prevCtl := globalController
-	globalController = &CoreController{}
-	t.Cleanup(func() { globalController = prevCtl })
+	replaceController(t, &CoreController{})
 
 	var mu sync.Mutex
 	var got []capturedLog
@@ -204,16 +210,15 @@ func TestLogPipeline_ScrubsBeforeThePayload(t *testing.T) {
 
 	var lifecycle []string
 	setStatusSink(func(code int32, message string) { lifecycle = append(lifecycle, message) })
-	globalController.emitStatus(EngineError, `[Xray] Failed to start: parse "`+link+`": invalid port`)
+	globalController.Load().emitStatus(EngineError, `[Xray] Failed to start: parse "`+link+`": invalid port`)
 	if len(lifecycle) != 1 || lifecycle[0] != `[Xray] Failed to start: parse "vless://[redacted]": invalid port` {
 		t.Fatalf("EngineError text = %q", lifecycle)
 	}
 }
 
 func TestEmitStatus_DefersInOrderDuringFFICall(t *testing.T) {
-	prevCtl := globalController
-	globalController = &CoreController{}
-	t.Cleanup(func() { globalController = prevCtl })
+	controller := &CoreController{}
+	replaceController(t, controller)
 	prevV := atomic.LoadInt32(&statusVerbosity)
 	atomic.StoreInt32(&statusVerbosity, 2)
 	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, prevV) })
@@ -235,14 +240,14 @@ func TestEmitStatus_DefersInOrderDuringFFICall(t *testing.T) {
 	t.Cleanup(func() { setStatusSink(nil) })
 
 	runFFICall(func() int32 {
-		globalController.emitStatus(EngineConnecting, "[Xray] Connecting")
+		controller.emitStatus(EngineConnecting, "[Xray] Connecting")
 		for i := 0; i < 50; i++ {
 			emitLog(logfmt.Info, "Xray", "starting")
-			globalController.emitConn(conninspect.Record{Engine: "xray", Host: "example.com", Port: "443"})
+			controller.emitConn(conninspect.Record{Engine: "xray", Host: "example.com", Port: "443"})
 		}
 		return 0
 	})
-	globalController.emitStatus(EngineConnected, "[Xray] Connected")
+	controller.emitStatus(EngineConnected, "[Xray] Connected")
 
 	select {
 	case <-done:
@@ -300,6 +305,52 @@ func (s *stalledSink) delivered(t *testing.T, last int32) []int32 {
 	}
 	t.Fatalf("event %d never arrived", last)
 	return nil
+}
+
+// Replacing the controller while an engine goroutine is in emitLog is what a
+// test's cleanup does during another engine's line. The race detector is the
+// assertion.
+func TestEmitLog_ReplacingTheControllerDoesNotRace(t *testing.T) {
+	previous := globalController.Load()
+	t.Cleanup(func() { globalController.Store(previous) })
+	verbosity := atomic.LoadInt32(&statusVerbosity)
+	atomic.StoreInt32(&statusVerbosity, 2)
+	t.Cleanup(func() { atomic.StoreInt32(&statusVerbosity, verbosity) })
+	setStatusSink(func(int32, string) {})
+	t.Cleanup(func() { setStatusSink(nil) })
+
+	waitForMirrorIdle()
+	discard, err := os.OpenFile(os.DevNull, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	previousOut := os.Stdout
+	os.Stdout = discard
+	t.Cleanup(func() {
+		waitForMirrorIdle()
+		os.Stdout = previousOut
+		_ = discard.Close()
+	})
+
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				emitLog(logfmt.Info, "core", "line")
+			}
+		}
+	}()
+	for range 1000 {
+		globalController.Store(&CoreController{})
+	}
+	close(stop)
+	wg.Wait()
 }
 
 // A sink that stalls behind a burst sheds the oldest log and connection

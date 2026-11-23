@@ -104,9 +104,7 @@ func TestSetHotspotSharingRejectsABadRequest(t *testing.T) {
 	if !hotspotSupported {
 		t.Skip("answers unsupported before it reads the request")
 	}
-	previous := globalController
-	globalController = &CoreController{}
-	t.Cleanup(func() { globalController = previous })
+	replaceController(t, &CoreController{})
 	for _, request := range []string{`{`, `{"on":true,"blockedClients":["192.168.137.20"]}`} {
 		if got := SetHotspotSharing(request); got != hotspotResultBadRequest {
 			t.Errorf("SetHotspotSharing(%s) = %d, want %d", request, got, hotspotResultBadRequest)

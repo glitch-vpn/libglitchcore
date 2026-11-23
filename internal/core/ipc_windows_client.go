@@ -90,8 +90,8 @@ func runServiceEventLoop(dial func() (net.Conn, error), retryDelay time.Duration
 			}
 			continue
 		}
-		if subscribedBefore && globalController != nil {
-			globalController.emitStatus(ServiceReattached, "[service] Reattached")
+		if ctl := globalController.Load(); subscribedBefore && ctl != nil {
+			ctl.emitStatus(ServiceReattached, "[service] Reattached")
 		}
 		subscribedBefore = true
 		scanner := bufio.NewScanner(conn)
@@ -103,8 +103,8 @@ func runServiceEventLoop(dial func() (net.Conn, error), retryDelay time.Duration
 				logfmt.Warnf("[IPC] parse event failed: %v", err)
 				continue
 			}
-			if globalController != nil && relayedLogPasses(evt.Code, evt.Message) {
-				globalController.emitStatus(evt.Code, evt.Message)
+			if ctl := globalController.Load(); ctl != nil && relayedLogPasses(evt.Code, evt.Message) {
+				ctl.emitStatus(evt.Code, evt.Message)
 			}
 		}
 		if err := scanner.Err(); err != nil {

@@ -88,14 +88,15 @@ func emitLog(level logfmt.Level, component, message string) {
 	}
 	line := logfmt.BuildJSON(level, logfmt.Scrub(component), logfmt.Scrub(message))
 	stdoutMirror.write(line)
-	if globalController == nil {
+	ctl := globalController.Load()
+	if ctl == nil {
 		return
 	}
 	code := int32(LogEvent)
 	if level.IsError() {
 		code = LogError
 	}
-	globalController.emitStatus(code, line)
+	ctl.emitStatus(code, line)
 }
 
 // relayedLogPasses holds a log line relayed from the service to this

@@ -102,7 +102,8 @@ func SetHotspotSharing(requestJSON string) int32 {
 	if !hotspotSupported {
 		return hotspotResultUnsupported
 	}
-	if globalController == nil {
+	ctl := globalController.Load()
+	if ctl == nil {
 		return ResultError
 	}
 	var request hotspotSharingRequest
@@ -120,7 +121,7 @@ func SetHotspotSharing(requestJSON string) int32 {
 		}
 		return code
 	}
-	return runFFICall(func() int32 { return globalController.setHotspotSharing(request) })
+	return runFFICall(func() int32 { return ctl.setHotspotSharing(request) })
 }
 
 // hotspotOSFactory makes the operating-system side of a hotspot order; a test

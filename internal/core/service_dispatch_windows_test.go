@@ -30,7 +30,7 @@ func TestServiceDispatch_SetConnInspector(t *testing.T) {
 // with administrator rights never stops a hotspot that runs on the machine.
 func TestServiceDispatch_SetHotspotSharingOff(t *testing.T) {
 	Initialize()
-	os := useFakeHotspotOS(t, globalController)
+	os := useFakeHotspotOS(t, globalController.Load())
 	events := captureHotspotEvents(t)
 
 	payload, _ := json.Marshal(map[string]string{"request": `{"on":false,"blockWhileTunnelDown":true,"blockedClients":[]}`})

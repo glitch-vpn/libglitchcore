@@ -257,7 +257,7 @@ func TestServiceDispatch_EngineStart_RefusesAProxyPortWithoutCredentials(t *test
 		if resp.OK || resp.Error != proxyWithoutCredentialsReply {
 			t.Fatalf("%s: got %+v", name, resp)
 		}
-		if globalController.engineIsRunning("xray") == glitchCoreResultSuccess {
+		if globalController.Load().engineIsRunning("xray") == glitchCoreResultSuccess {
 			t.Fatalf("%s: the engine runs", name)
 		}
 	}

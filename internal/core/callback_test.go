@@ -178,9 +178,7 @@ func TestEmitStatus_DeferredDuringFFICall(t *testing.T) {
 // Hot restart: a line written while no isolate is registered goes nowhere,
 // and the next registration receives lines again.
 func TestEmitLog_FollowsSinkRegistration(t *testing.T) {
-	prevCtl := globalController
-	globalController = newTestController()
-	t.Cleanup(func() { globalController = prevCtl })
+	replaceController(t, newTestController())
 
 	prevV := atomic.LoadInt32(&statusVerbosity)
 	atomic.StoreInt32(&statusVerbosity, 2)

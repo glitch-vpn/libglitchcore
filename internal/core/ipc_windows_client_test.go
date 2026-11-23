@@ -148,9 +148,7 @@ func TestServiceProcessIDIsReadableWithQueryStatusAccess(t *testing.T) {
 // A subscription to the service's events says ServiceReattached once when it
 // follows an earlier one, and says nothing the first time or when a dial fails.
 func TestServiceEventLoopSaysReattachedOncePerResubscription(t *testing.T) {
-	previous := globalController
-	globalController = &CoreController{}
-	t.Cleanup(func() { globalController = previous })
+	replaceController(t, &CoreController{})
 
 	var mu sync.Mutex
 	var reattached []string

@@ -104,7 +104,7 @@ func startOverDispatch(t *testing.T, engine, callerDir string) {
 		stopPayload, _ := json.Marshal(map[string]string{"engineId": engine})
 		dispatchCommand(pipeCommand{Action: "engine_stop", Payload: stopPayload})
 		deadline := time.Now().Add(10 * time.Second)
-		for globalController.engineIsRunning(engine) == glitchCoreResultSuccess && time.Now().Before(deadline) {
+		for globalController.Load().engineIsRunning(engine) == glitchCoreResultSuccess && time.Now().Before(deadline) {
 			time.Sleep(100 * time.Millisecond)
 		}
 		// The teardown goroutine keeps logging after the running flag drops,

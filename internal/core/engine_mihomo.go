@@ -74,9 +74,10 @@ func startMihomoLogBridge() {
 	go func(s observable.Subscription[mihomoLog.Event]) {
 		for ev := range s {
 			emitLog(mihomoEventLevel(ev.LogLevel), "mihomo", ev.Payload)
-			if ev.LogLevel == mihomoLog.INFO && connInspectEnabled.Load() && globalController != nil {
+			ctl := globalController.Load()
+			if ev.LogLevel == mihomoLog.INFO && connInspectEnabled.Load() && ctl != nil {
 				if rec, ok := mihomoRejectRecord(ev.Payload); ok {
-					globalController.emitConn(rec)
+					ctl.emitConn(rec)
 				}
 			}
 		}
@@ -130,8 +131,8 @@ func startMihomoConnInspector() {
 						return true
 					}
 					seen[id] = struct{}{}
-					if emit && globalController != nil && !mihomoRejected(info.Chain) {
-						globalController.emitConn(mihomoConnRecord(info))
+					if ctl := globalController.Load(); emit && ctl != nil && !mihomoRejected(info.Chain) {
+						ctl.emitConn(mihomoConnRecord(info))
 					}
 					return true
 				})

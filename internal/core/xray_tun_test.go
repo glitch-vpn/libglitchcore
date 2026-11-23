@@ -595,9 +595,7 @@ func TestXrayTun_FeedsTheInspectorAndTheStats(t *testing.T) {
 		}
 	})
 	t.Cleanup(func() { setStatusSink(nil) })
-	prevController := globalController
-	globalController = &CoreController{}
-	t.Cleanup(func() { globalController = prevController })
+	replaceController(t, &CoreController{})
 
 	seen := make(chan string, 8)
 	socksPort := socksRecorder(t, seen)
