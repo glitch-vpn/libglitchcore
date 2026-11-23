@@ -431,11 +431,6 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 
 	x.mihomoSession.up(mark)
 	startMihomoConnInspector()
-	x.startLiveness(livenessParams{
-		engine:   "mihomo",
-		interval: livenessInterval(o.livenessSec),
-		probe:    tunnelProber(x.mihomoProbeDial(links, inbound, mark), o.probeURL),
-	})
 	x.initMihomoServerState(links, o)
 	x.configureIPResolve(ipResolveConfig{
 		enabled:             o.resolveIP,
@@ -444,6 +439,11 @@ func (x *CoreController) mihomoStart(links []string, tun *tunCopy, o engineOpts,
 		skipV6:              o.dns.DisableIPv6,
 		dial:                x.mihomoTunnelDial(mihomoconfig.Target(links), mark),
 		localNetworksDirect: o.routing.LocalNetworks,
+	})
+	x.startLiveness(livenessParams{
+		engine:   "mihomo",
+		interval: livenessInterval(o.livenessSec),
+		probe:    tunnelProber(x.mihomoProbeDial(links, inbound, mark), o.probeURL),
 	})
 	log.Println("[mihomo] started")
 	return nil

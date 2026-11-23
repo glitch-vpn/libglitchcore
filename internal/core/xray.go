@@ -232,11 +232,6 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 			return fmt.Errorf("[Xray] proxy SOCKS not ready at %s", endpoint)
 		}
 		_ = stats.Start()
-		x.startLiveness(livenessParams{
-			engine:   "xray",
-			interval: livenessInterval(o.livenessSec),
-			probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark), o.probeURL),
-		})
 		x.initXrayServerState(res, links, o, stats)
 		x.configureIPResolve(ipResolveConfig{
 			enabled:             o.resolveIP,
@@ -245,6 +240,11 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 			skipV6:              o.dns.DisableIPv6,
 			dial:                x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
 			localNetworksDirect: o.routing.LocalNetworks,
+		})
+		x.startLiveness(livenessParams{
+			engine:   "xray",
+			interval: livenessInterval(o.livenessSec),
+			probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark), o.probeURL),
 		})
 		log.Printf("[Xray] Proxy mode: SOCKS5 at %s (no TUN)", endpoint)
 		return nil
@@ -295,14 +295,6 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 
 	log.Println("[Xray] Started successfully, running")
 
-	// Probe inside xray, pinned to the proxy like the exit echo: a tier that
-	// rejects the probe host must not read as link-down. Dialing in-process
-	// also works on Android, where our own sockets bypass the VPN.
-	x.startLiveness(livenessParams{
-		engine:   "xray",
-		interval: livenessInterval(o.livenessSec),
-		probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark), o.probeURL),
-	})
 	x.initXrayServerState(res, links, o, stats)
 	x.configureIPResolve(ipResolveConfig{
 		enabled:             o.resolveIP,
@@ -311,6 +303,14 @@ func (x *CoreController) xrayStart(rawconfig string, tun *tunCopy, dnsServer str
 		skipV6:              o.dns.DisableIPv6,
 		dial:                x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark),
 		localNetworksDirect: o.routing.LocalNetworks,
+	})
+	// Probe inside xray, pinned to the proxy like the exit echo: a tier that
+	// rejects the probe host must not read as link-down. Dialing in-process
+	// also works on Android, where our own sockets bypass the VPN.
+	x.startLiveness(livenessParams{
+		engine:   "xray",
+		interval: livenessInterval(o.livenessSec),
+		probe:    tunnelProber(x.xrayTunnelDial(x.xrayCoreInstance, xrayconfig.ExitEchoTag, mark), o.probeURL),
 	})
 
 	return nil

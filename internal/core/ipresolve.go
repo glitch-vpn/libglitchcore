@@ -61,7 +61,9 @@ type externalIPState struct {
 	IPv6Error string `json:"ipv6Error,omitempty"`
 }
 
-// Arms only - fetches are kicked by triggerIPResolve on link-up.
+// Arms only - fetches are kicked by triggerIPResolve on link-up. An engine arms
+// before it starts liveness: a link-up that comes first finds nothing armed and
+// is dropped, and the session never gets an IPEvent.
 func (x *CoreController) configureIPResolve(cfg ipResolveConfig) {
 	setSingTunAdmission(x.admitTCPFlow)
 	if cfg.urlV4 == "" {
