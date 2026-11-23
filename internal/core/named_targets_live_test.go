@@ -3,7 +3,9 @@
 package core
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -11,6 +13,7 @@ import (
 	"os/exec"
 	"slices"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -25,43 +28,85 @@ import (
 // instance in the same process would replace.
 const exitServerEnv = "GLITCH_TEST_EXIT_SERVER_CONF"
 
+// The child prints exitServerReady once its inbound is bound, and exits with
+// exitServerAddressInUse when another process holds the port, which the parent
+// answers with another port.
+const (
+	exitServerReady        = "GLITCH_TEST_EXIT_SERVER_READY"
+	exitServerAddressInUse = 3
+)
+
 func TestExitServerProcess(t *testing.T) {
 	conf := os.Getenv(exitServerEnv)
 	if conf == "" {
 		t.Skip("runs only as a child of a test that starts an exit server")
 	}
 	server, err := xrayCore.StartInstance("json", []byte(conf))
+	if loopbackport.AddressInUse(err) {
+		os.Exit(exitServerAddressInUse)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer server.Close()
+	fmt.Println(exitServerReady)
 	select {}
+}
+
+// readyLine closes ready when the child's output carries the ready line.
+type readyLine struct {
+	once  sync.Once
+	ready chan struct{}
+}
+
+func (r *readyLine) Write(p []byte) (int, error) {
+	if bytes.Contains(p, []byte(exitServerReady)) {
+		r.once.Do(func() { close(r.ready) })
+	}
+	return len(p), nil
 }
 
 // startExitServer runs a shadowsocks server whose own connections to the world
 // leave from source, so an echo can tell which server a flow exited from. Its
 // freedom outbound resolves the names in hosts, and the server runs in a
-// process of its own so that nothing else in the test can.
+// process of its own so that nothing else in the test can. A listener on its
+// port proves nothing, since the process that took the port may be another
+// test's, so the child says when it is bound.
 func startExitServer(t *testing.T, source string, hosts map[string]string) (port int, stop func()) {
 	t.Helper()
-	port, err := loopbackport.Pick()
+	hostsJSON, _ := json.Marshal(hosts)
+	port, err := loopbackport.Retry(func(port int) error {
+		conf := fmt.Sprintf(`{"dns":{"hosts":%s,"servers":["udp://127.0.0.1:1"]},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","settings":{"method":"chacha20-ietf-poly1305","password":"pw","network":"tcp"}}],"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow"}]},"streamSettings":{"sockopt":{"domainStrategy":"UseIP"}},"sendThrough":%q}]}`, hostsJSON, port, source)
+		cmd := exec.Command(os.Args[0], "-test.run=^TestExitServerProcess$")
+		cmd.Env = append(os.Environ(), exitServerEnv+"="+conf)
+		output := &readyLine{ready: make(chan struct{})}
+		cmd.Stdout = output
+		if err := cmd.Start(); err != nil {
+			return err
+		}
+		done := make(chan struct{})
+		var waitErr error
+		go func() { waitErr = cmd.Wait(); close(done) }()
+		select {
+		case <-output.ready:
+			stop = func() { _ = cmd.Process.Kill(); <-done }
+			return nil
+		case <-done:
+			var exit *exec.ExitError
+			if errors.As(waitErr, &exit) && exit.ExitCode() == exitServerAddressInUse {
+				return fmt.Errorf("exit server on port %d: %w", port, syscall.EADDRINUSE)
+			}
+			return fmt.Errorf("exit server exited before it listened: %v", waitErr)
+		case <-time.After(20 * time.Second):
+			_ = cmd.Process.Kill()
+			<-done
+			return errors.New("exit server did not start")
+		}
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	hostsJSON, _ := json.Marshal(hosts)
-	conf := fmt.Sprintf(`{"dns":{"hosts":%s,"servers":["udp://127.0.0.1:1"]},"inbounds":[{"listen":"127.0.0.1","port":%d,"protocol":"shadowsocks","settings":{"method":"chacha20-ietf-poly1305","password":"pw","network":"tcp"}}],"outbounds":[{"protocol":"freedom","settings":{"finalRules":[{"action":"allow"}]},"streamSettings":{"sockopt":{"domainStrategy":"UseIP"}},"sendThrough":%q}]}`, hostsJSON, port, source)
-	cmd := exec.Command(os.Args[0], "-test.run=^TestExitServerProcess$")
-	cmd.Env = append(os.Environ(), exitServerEnv+"="+conf)
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	stop = func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }
 	t.Cleanup(stop)
-	for deadline := time.Now().Add(20 * time.Second); !listens(fmt.Sprintf("127.0.0.1:%d", port)); time.Sleep(50 * time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("exit server did not start")
-		}
-	}
 	return port, stop
 }
 
