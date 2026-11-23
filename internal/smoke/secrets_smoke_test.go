@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -37,67 +38,75 @@ func TestSmoke_NoSecretLeavesInEvents(t *testing.T) {
 	t.Cleanup(func() { core.ApplyStatusVerbosity(-1) })
 	t.Setenv("GLITCH_SOCKS_READY_TIMEOUT_SEC", "20")
 
-	upstream := startVlessServer(t)
 	echo := echoBody(t, "198.51.100.43")
 	echoURL, _ := url.Parse(echo.URL)
 	echoPort, _ := strconv.Atoi(echoURL.Port())
 
-	good := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#Good", testUUID, upstream)
-	proxyPort := startProxyEngineDNS(t, good, map[string]string{
-		"probeUrl":          echo.URL,
-		"resolveExternalIp": "0",
-	}, nil)
-	ev.waitFor(t, core.EngineConnected, 30*time.Second)
-	if _, err := socksConnect(proxyPort, "127.0.0.1", uint16(echoPort)); err != nil {
-		t.Logf("socks through xray: %v", err)
-	}
-	stopEngine(t, "xray")
-	ev.waitFor(t, core.EngineDisconnected, 15*time.Second)
+	if slices.Contains(smokeEngines, "xray") {
+		upstream := startVlessServer(t)
+		good := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#Good", testUUID, upstream)
+		proxyPort := startEngineInProxyMode(t, "xray", good, map[string]string{
+			"probeUrl":          echo.URL,
+			"resolveExternalIp": "0",
+		}, nil)
+		ev.waitFor(t, core.EngineConnected, 30*time.Second)
+		if _, err := socksConnect(proxyPort, "127.0.0.1", uint16(echoPort)); err != nil {
+			t.Logf("socks through xray: %v", err)
+		}
+		stopEngine(t, "xray")
+		ev.waitFor(t, core.EngineDisconnected, 15*time.Second)
 
-	rejected := fmt.Sprintf("vless://%s@127.0.0.1:notaport?security=reality&pbk=%s&sid=%s&type=tcp#Bad",
-		testUUID, smokeRealityKey, smokeShortID)
-	startExpectingError(t, ev, "xray", rejected)
-
-	dead := freePort(t)
-	trojan := fmt.Sprintf("trojan://%s@127.0.0.1:%d?security=none&type=tcp#Dead", smokeTrojanPass, dead)
-	seenConnected := len(ev.all(core.EngineConnected))
-	mixedPort := startEngineInProxyMode(t, "mihomo", trojan, map[string]string{
-		"resolveExternalIp": "0",
-	}, nil)
-	if !ev.waitForNew(t, core.EngineConnected, seenConnected, 30*time.Second) {
-		lastError, _ := ev.last(core.EngineError)
-		t.Fatalf("mihomo did not reach EngineConnected: %s", lastError)
+		rejected := fmt.Sprintf("vless://%s@127.0.0.1:notaport?security=reality&pbk=%s&sid=%s&type=tcp#Bad",
+			testUUID, smokeRealityKey, smokeShortID)
+		startExpectingError(t, ev, "xray", rejected)
 	}
-	if _, err := socksConnect(mixedPort, "127.0.0.1", uint16(echoPort)); err == nil {
-		t.Log("socks through a dead trojan upstream unexpectedly answered")
-	}
-	if ev.waitForLog(t, func(msg string) bool { return strings.Contains(msg, "127.0.0.1:"+strconv.Itoa(dead)) }, 5*time.Second) == "" {
-		t.Fatal("mihomo never logged the failed dial to the trojan upstream")
-	}
-	stopEngine(t, "mihomo")
 
-	hy2 := fmt.Sprintf("hysteria2://%s@127.0.0.1:notaport?obfs=salamander&obfs-password=%s#BadHy2", smokeHy2Pass, smokeObfsPass)
-	startExpectingError(t, ev, "mihomo", hy2)
+	if slices.Contains(smokeEngines, "mihomo") {
+		dead := freePort(t)
+		trojan := fmt.Sprintf("trojan://%s@127.0.0.1:%d?security=none&type=tcp#Dead", smokeTrojanPass, dead)
+		seenConnected := len(ev.all(core.EngineConnected))
+		mixedPort := startEngineInProxyMode(t, "mihomo", trojan, map[string]string{
+			"resolveExternalIp": "0",
+		}, nil)
+		if !ev.waitForNew(t, core.EngineConnected, seenConnected, 30*time.Second) {
+			lastError, _ := ev.last(core.EngineError)
+			t.Fatalf("mihomo did not reach EngineConnected: %s", lastError)
+		}
+		if _, err := socksConnect(mixedPort, "127.0.0.1", uint16(echoPort)); err == nil {
+			t.Log("socks through a dead trojan upstream unexpectedly answered")
+		}
+		if ev.waitForLog(t, func(msg string) bool { return strings.Contains(msg, "127.0.0.1:"+strconv.Itoa(dead)) }, 5*time.Second) == "" {
+			t.Fatal("mihomo never logged the failed dial to the trojan upstream")
+		}
+		stopEngine(t, "mihomo")
 
-	// A proxy that is not there, on both engines, then the links each refuses.
+		hy2 := fmt.Sprintf("hysteria2://%s@127.0.0.1:notaport?obfs=salamander&obfs-password=%s#BadHy2", smokeHy2Pass, smokeObfsPass)
+		startExpectingError(t, ev, "mihomo", hy2)
+	}
+
+	// Unreachable proxies exercise the dial error on each engine.
 	proxyLogin := base64.StdEncoding.EncodeToString([]byte("alice:" + smokeProxyPass))
 	deadProxies := map[string]string{
 		"xray":   fmt.Sprintf("http://%s@127.0.0.1:%d#DeadHTTP", proxyLogin, freePort(t)),
 		"mihomo": fmt.Sprintf("socks5://alice:%s@127.0.0.1:%d#DeadSocks", smokeProxyPass, freePort(t)),
 	}
-	for engine, link := range deadProxies {
+	for _, engine := range smokeEngines {
 		seenConnected := len(ev.all(core.EngineConnected))
-		port := startEngineInProxyMode(t, engine, link, map[string]string{"resolveExternalIp": "0"}, nil)
+		port := startEngineInProxyMode(t, engine, deadProxies[engine], map[string]string{"resolveExternalIp": "0"}, nil)
 		if !ev.waitForNew(t, core.EngineConnected, seenConnected, 30*time.Second) {
 			t.Fatalf("%s did not reach EngineConnected", engine)
 		}
 		_, _ = socksConnect(port, "127.0.0.1", uint16(echoPort))
 		stopEngine(t, engine)
 	}
-	startExpectingError(t, ev, "xray", fmt.Sprintf("https://alice:%s@127.0.0.1:443?insecure=1#Insecure", smokeProxyPass))
-	startExpectingError(t, ev, "xray", fmt.Sprintf("socks5://alice:%s@127.0.0.1#NoPort", smokeProxyPass))
-	startExpectingError(t, ev, "mihomo", fmt.Sprintf("http://%s@127.0.0.1:8080#OnMihomo", proxyLogin))
-	startExpectingError(t, ev, "mihomo", fmt.Sprintf("wireguard://%s@127.0.0.1:51820?publickey=short#BadWG", url.QueryEscape(smokeWGKey)))
+	if slices.Contains(smokeEngines, "xray") {
+		startExpectingError(t, ev, "xray", fmt.Sprintf("https://alice:%s@127.0.0.1:443?insecure=1#Insecure", smokeProxyPass))
+		startExpectingError(t, ev, "xray", fmt.Sprintf("socks5://alice:%s@127.0.0.1#NoPort", smokeProxyPass))
+	}
+	if slices.Contains(smokeEngines, "mihomo") {
+		startExpectingError(t, ev, "mihomo", fmt.Sprintf("http://%s@127.0.0.1:8080#OnMihomo", proxyLogin))
+		startExpectingError(t, ev, "mihomo", fmt.Sprintf("wireguard://%s@127.0.0.1:51820?publickey=short#BadWG", url.QueryEscape(smokeWGKey)))
+	}
 
 	secrets := []string{testUUID, smokeRealityKey, smokeShortID, smokeTrojanPass, smokeHy2Pass, smokeObfsPass,
 		smokeProxyPass, proxyLogin, smokeWGKey, url.QueryEscape(smokeWGKey)}

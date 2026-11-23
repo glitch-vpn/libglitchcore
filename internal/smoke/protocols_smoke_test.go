@@ -1,15 +1,83 @@
-//go:build integration
+//go:build integration && !no_mihomo
 
 package smoke
 
 import (
+	"io"
+	"net"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/listener/inbound"
 )
+
+// directTunnel takes what a mihomo server inbound accepts straight to its
+// destination - the role mihomo's own inbound tests give their TestTunnel -
+// and counts the destination ports, so a test can tell its flow reached the
+// server. The server shares nothing with the mihomo the engine runs.
+type directTunnel struct {
+	mu       sync.Mutex
+	dests    map[uint16]int
+	redirect string
+}
+
+func (d *directTunnel) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
+	defer conn.Close()
+	d.mu.Lock()
+	d.dests[metadata.DstPort]++
+	d.mu.Unlock()
+	upstream, err := net.DialTimeout("tcp", d.destination(metadata.RemoteAddress()), 5*time.Second)
+	if err != nil {
+		return
+	}
+	defer upstream.Close()
+	done := make(chan struct{}, 2)
+	go func() { _, _ = io.Copy(upstream, conn); done <- struct{}{} }()
+	go func() { _, _ = io.Copy(conn, upstream); done <- struct{}{} }()
+	<-done
+}
+
+func (d *directTunnel) destination(addr string) string {
+	if d.redirect != "" {
+		return d.redirect
+	}
+	return addr
+}
+
+func (d *directTunnel) HandleUDPPacket(packet C.UDPPacket, metadata *C.Metadata) {
+	dst := metadata.UDPAddr()
+	go func() {
+		defer packet.Drop()
+		if dst == nil {
+			return
+		}
+		conn, err := net.DialTimeout("udp", d.destination(dst.String()), time.Second)
+		if err != nil {
+			return
+		}
+		defer conn.Close()
+		_ = conn.SetDeadline(time.Now().Add(time.Second))
+		if _, err := conn.Write(packet.Data()); err != nil {
+			return
+		}
+		var buf [2048]byte
+		if n, err := conn.Read(buf[:]); err == nil {
+			_, _ = packet.WriteBack(buf[:n], dst)
+		}
+	}()
+}
+
+func (*directTunnel) NatTable() C.NatTable { return nil }
+
+func (d *directTunnel) reached(port int) int {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.dests[uint16(port)]
+}
 
 const testProtocolPassword = "smoke-password"
 
@@ -26,7 +94,12 @@ func testCertificate(t *testing.T) (cert, key, pin string) {
 
 func listenInbound(t *testing.T, in C.InboundListener) *directTunnel {
 	t.Helper()
-	tunnel := &directTunnel{dests: map[uint16]int{}}
+	return listenInboundTo(t, in, "")
+}
+
+func listenInboundTo(t *testing.T, in C.InboundListener, redirect string) *directTunnel {
+	t.Helper()
+	tunnel := &directTunnel{dests: map[uint16]int{}, redirect: redirect}
 	if err := in.Listen(tunnel); err != nil {
 		t.Fatalf("%s server: %v", in.Name(), err)
 	}
@@ -82,7 +155,7 @@ func TestSmoke_Mihomo_TUIC(t *testing.T) {
 	}
 	assertSessionThrough(t, protocolSession{
 		engine: "mihomo", link: link(testProtocolPassword), protocol: "tuic", port: port, name: "TUIC Smoke",
-		wrongCredentialLink: link("wrong"), pingEngine: "mihomo", server: server,
+		wrongCredentialLink: link("wrong"), pingEngine: "mihomo", reached: server.reached,
 	})
 }
 
@@ -94,6 +167,6 @@ func TestSmoke_Mihomo_AnyTLS(t *testing.T) {
 	}
 	assertSessionThrough(t, protocolSession{
 		engine: "mihomo", link: link(testProtocolPassword), protocol: "anytls", port: port, name: "AnyTLS Smoke",
-		wrongCredentialLink: link("wrong"), pingEngine: "mihomo", server: server,
+		wrongCredentialLink: link("wrong"), pingEngine: "mihomo", reached: server.reached,
 	})
 }

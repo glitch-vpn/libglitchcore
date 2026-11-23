@@ -1,4 +1,4 @@
-//go:build integration
+//go:build integration && !no_mihomo
 
 package smoke
 

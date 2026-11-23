@@ -134,7 +134,7 @@ func TestSmoke_StoppedProxySessionLeavesNothingBehind(t *testing.T) {
 	link := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#Leak", testUUID, upstream)
 
 	const cycles = 8
-	for _, engine := range []string{"xray", "mihomo"} {
+	for _, engine := range smokeEngines {
 		t.Run(engine, func(t *testing.T) {
 			ev := captureEvents(t)
 			session := func() {

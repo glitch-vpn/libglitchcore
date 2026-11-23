@@ -20,7 +20,7 @@ import (
 // relay at all.
 func TestSmoke_ProxyModeCredentialsCoverEverythingItCarries(t *testing.T) {
 	core.Initialize()
-	for _, engine := range []string{"xray", "mihomo"} {
+	for _, engine := range smokeEngines {
 		t.Run(engine, func(t *testing.T) {
 			ev := captureEvents(t)
 			upstream := startVlessServer(t)

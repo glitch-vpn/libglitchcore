@@ -58,7 +58,7 @@ func TestSmoke_VLESSEncryption(t *testing.T) {
 		{"mlkem_random_0rtt", true, "random", "600s", "0rtt"},
 		{"mlkem_native_1rtt", true, "native", "600s", "1rtt"},
 	}
-	for _, engine := range []string{"xray", "mihomo"} {
+	for _, engine := range smokeEngines {
 		for _, tc := range cases {
 			t.Run(engine+"/"+tc.name, func(t *testing.T) {
 				core.Initialize()

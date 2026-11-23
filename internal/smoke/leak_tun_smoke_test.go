@@ -18,7 +18,6 @@ import (
 	"golang.org/x/sys/unix"
 
 	"github.com/glitch-vpn/libglitchcore/internal/core"
-	xrayCore "github.com/xtls/xray-core/core"
 )
 
 const (
@@ -90,18 +89,7 @@ func TestSmoke_TunUpstreamHelper(t *testing.T) {
 		}
 	}()
 
-	port := freePort(t)
-	cfg := fmt.Sprintf(`{
-		"log": {"loglevel": "none"},
-		"inbounds": [{"listen": "127.0.0.1", "port": %d, "protocol": "vless",
-			"settings": {"clients": [{"id": %q}], "decryption": "none"}}],
-		"outbounds": [{"protocol": "freedom", "settings": {"redirect": "127.0.0.1:%d", "finalRules": [{"action": "allow"}]}}]
-	}`, port, testUUID, echoPort)
-	inst, err := xrayCore.StartInstance("json", []byte(cfg))
-	if err != nil {
-		t.Fatalf("vless server: %v", err)
-	}
-	defer inst.Close()
+	port := startVlessServerTo(t, "", l.Addr().String())
 	fmt.Println("upstream", port)
 	_, _ = io.Copy(io.Discard, os.Stdin)
 }
@@ -174,7 +162,7 @@ func TestSmoke_TunSessionsLeaveNothingBehind(t *testing.T) {
 	link := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#TunLeak", testUUID, upstream)
 
 	const cycles = 10
-	for _, engine := range []string{"xray", "mihomo"} {
+	for _, engine := range smokeEngines {
 		t.Run(engine, func(t *testing.T) {
 			ev := captureEvents(t)
 			session := func() {

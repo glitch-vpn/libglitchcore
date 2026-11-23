@@ -60,9 +60,10 @@ func TestSmoke_HotspotSharingOnBesideProxySession(t *testing.T) {
 	upstream := startVlessServer(t)
 	echo := echoBody(t, "198.51.100.77")
 	link := fmt.Sprintf("vless://%s@127.0.0.1:%d?security=none&type=tcp#Hotspot", testUUID, upstream)
-	startProxyEngine(t, link, map[string]string{"probeUrl": echo.URL, "ipv4EchoUrl": echo.URL, "disableIPv6": "1"})
+	engine := smokeEngines[0]
+	startEngineInProxyMode(t, engine, link, map[string]string{"probeUrl": echo.URL, "ipv4EchoUrl": echo.URL, "disableIPv6": "1"}, nil)
 	ev.waitFor(t, core.EngineConnected, 30*time.Second)
-	stopEngine(t, "xray")
+	stopEngine(t, engine)
 	ev.waitFor(t, core.EngineDisconnected, 15*time.Second)
 	time.Sleep(2 * time.Second) // the worker's checks
 	if events := ev.all(core.HotspotSharingEvent); len(events) != 1 {

@@ -19,7 +19,7 @@ const echoAddr = "127.0.0.2"
 // still reach it through the proxy. The probe stays allowed so the link comes
 // up and arms the echo.
 func TestSmoke_IPEchoBypassesRoutingTiers(t *testing.T) {
-	for _, engine := range []string{"xray", "mihomo"} {
+	for _, engine := range smokeEngines {
 		t.Run(engine, func(t *testing.T) {
 			core.Initialize()
 			ev := captureEvents(t)
@@ -53,7 +53,7 @@ func TestSmoke_IPEchoBypassesRoutingTiers(t *testing.T) {
 // The routing tiers reject the liveness probe's host; the link must still come
 // up, which the exit echo's arrival shows.
 func TestSmoke_LivenessProbeBypassesRoutingTiers(t *testing.T) {
-	for _, engine := range []string{"xray", "mihomo"} {
+	for _, engine := range smokeEngines {
 		t.Run(engine, func(t *testing.T) {
 			core.Initialize()
 			ev := captureEvents(t)
