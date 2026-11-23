@@ -294,10 +294,22 @@ func TestSetServerSelection_TheFirstServerAGroupNamesAsksIPv6Again(t *testing.T)
 	waitFor(t, "the first IPv6 answer", func() bool { return s.x.exitIPv6.Load() == exitIPv6Absent })
 	waitFor(t, "the IPEvent", func() bool { return len(s.events()) == 1 })
 
+	// The echo for the named server starts inside setServerSelection, so it can
+	// answer before the state is read. Hold that dial until the read.
+	release := make(chan struct{})
+	var once sync.Once
+	releaseEcho := func() { once.Do(func() { close(release) }) }
+	t.Cleanup(releaseEcho)
+	s.beforeV6Fails = func(call int32) {
+		if call >= 2 {
+			<-release
+		}
+	}
 	s.x.setServerSelection(selectionOn("url-test", 2, 0))
 	if got := s.x.exitIPv6.Load(); got != exitIPv6Pending {
 		t.Fatalf("state right after the group named its server = %d, want pending", got)
 	}
+	releaseEcho()
 	waitFor(t, "the named server's IPv6 echo", func() bool { return s.v6Dials.Load() == 2 })
 	waitFor(t, "the named server's answer", func() bool { return s.x.exitIPv6.Load() == exitIPv6Absent })
 	time.Sleep(200 * time.Millisecond)
